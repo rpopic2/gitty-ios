@@ -7,7 +7,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - Opens one hard-coded file (`gitty/App/Sources.swift`) and shows it the way Safari shows raw text: Courier 13pt, wrapped lines, Safari's margins, light and dark mode.
 - **Downloaded files never expire.** They are kept in Application Support, which iOS never clears, and shown with no network access. The file is downloaded again **only** when you pull to refresh. That refresh is a conditional request, so an unchanged file costs only an HTTP 304.
 - A Safari-style bottom bar shows the file name. It collapses as you scroll down and shows a thin loading line only while something is downloading. It looks like Safari on iOS 26+ (Liquid Glass) and on iOS 18.
-- The text is shown in a native TextKit 2 `UITextView`, which lays out only what's on screen.
+- The text is shown in a native TextKit 2 `UITextView`. The first screen appears right away; the rest is laid out in small slices between frames, so the scroll indicator is exact and never jumps.
 
 ## Project setup
 

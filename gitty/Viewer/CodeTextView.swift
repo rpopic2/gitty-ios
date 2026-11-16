@@ -4,7 +4,9 @@ import UIKit
 /// Read-only, selectable raw text in a TextKit 2 `UITextView`.
 ///
 /// For smooth scrolling:
-/// - TextKit 2 lays out only what is on screen, so file size barely matters.
+/// - TextKit 2 shows the first screen right away. The rest of the file is then laid out in small
+///   slices between frames, so the scroll indicator and content height are exact (as in Safari)
+///   instead of estimates that jump the first time you reach new text.
 /// - `textView.layoutManager` is never read: reading it switches the view to TextKit 1 for good.
 /// - Text is set only when `version` changes, never on other SwiftUI updates.
 /// - Scrolling reports to SwiftUI only when the bar's collapsed state flips, never per frame.
@@ -19,8 +21,8 @@ struct CodeTextView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView(usingTextLayoutManager: true)
+    func makeUIView(context: Context) -> CodeUITextView {
+        let textView = CodeUITextView(usingTextLayoutManager: true)
         textView.isEditable = false
         textView.isSelectable = true
         textView.dataDetectorTypes = []
@@ -45,11 +47,16 @@ struct CodeTextView: UIViewRepresentable {
                                  for: .valueChanged)
         textView.refreshControl = refreshControl
 
+        // Wrapped lines change with the width (rotation, iPad split view), so lay out again.
+        textView.onWidthChange = { [weak coordinator = context.coordinator] textView in
+            coordinator?.layOutWholeDocument(textView)
+        }
+
         assert(textView.textLayoutManager != nil, "UITextView fell back to TextKit 1")
         return textView
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIView(_ textView: CodeUITextView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onRefresh = onRefresh
         coordinator.onBarCollapsedChange = onBarCollapsedChange
@@ -71,7 +78,12 @@ struct CodeTextView: UIViewRepresentable {
                 let maxY = max(-inset.top, textView.contentSize.height - textView.bounds.height + inset.bottom)
                 textView.contentOffset.y = min(max(offset.y, -inset.top), maxY)
             }
+            coordinator.layOutWholeDocument(textView)
         }
+    }
+
+    static func dismantleUIView(_ textView: CodeUITextView, coordinator: Coordinator) {
+        coordinator.cancelLayout()
     }
 
     @MainActor
@@ -85,6 +97,52 @@ struct CodeTextView: UIViewRepresentable {
         private let collapseThreshold: CGFloat = 10
         private var lastOffsetY: CGFloat = 0
         private var accumulated: CGFloat = 0
+
+        /// Paragraphs (source lines) laid out per slice: a few ms each, well under one frame.
+        private let paragraphsPerSlice = 200
+        /// Above this many characters, keep TextKit 2's estimates rather than laying out everything.
+        private let fullLayoutCharacterLimit = 2_000_000
+        private var layoutTask: Task<Void, Never>?
+
+        // MARK: Full layout
+
+        /// Lays out the whole document in slices, yielding to the run loop between them so
+        /// scrolling and animations never wait. Restarts when the text or the width changes.
+        func layOutWholeDocument(_ textView: UITextView) {
+            cancelLayout()
+            guard textView.bounds.width > 0,
+                  textView.textStorage.length <= fullLayoutCharacterLimit,
+                  let layoutManager = textView.textLayoutManager
+            else { return }
+
+            let paragraphsPerSlice = paragraphsPerSlice
+            layoutTask = Task { [weak textView] in
+                var next: NSTextLocation? = layoutManager.documentRange.location
+                while let start = next, !Task.isCancelled {
+                    var count = 0
+                    var sliceEnd: NSTextLocation?
+                    layoutManager.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+                        sliceEnd = fragment.rangeInElement.endLocation
+                        count += 1
+                        return count < paragraphsPerSlice
+                    }
+                    // Fewer fragments than asked for means the end of the document was reached.
+                    next = count < paragraphsPerSlice ? nil : sliceEnd
+                    if next != nil {
+                        try? await Task.sleep(for: .milliseconds(1))
+                    }
+                }
+                guard !Task.isCancelled, let textView else { return }
+                // Let the text view pick up the exact height.
+                layoutManager.textViewportLayoutController.layoutViewport()
+                textView.setNeedsLayout()
+            }
+        }
+
+        func cancelLayout() {
+            layoutTask?.cancel()
+            layoutTask = nil
+        }
 
         @objc func handleRefresh(_ control: UIRefreshControl) {
             Task {
@@ -127,6 +185,20 @@ struct CodeTextView: UIViewRepresentable {
             guard collapsed != isBarCollapsed else { return }
             isBarCollapsed = collapsed
             onBarCollapsedChange?(collapsed)
+        }
+    }
+}
+
+/// A `UITextView` that reports width changes, since wrapped text must then be laid out again.
+final class CodeUITextView: UITextView {
+    var onWidthChange: (@MainActor (CodeUITextView) -> Void)?
+    private var lastWidth: CGFloat = 0
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if bounds.width != lastWidth {
+            lastWidth = bounds.width
+            onWidthChange?(self)
         }
     }
 }
