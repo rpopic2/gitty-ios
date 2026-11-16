@@ -84,7 +84,7 @@ final class CodeDocumentModel {
     }
 
     private func show(_ document: StoredDocument) async {
-        // Decoding and styling happen off the main thread; layout is done lazily by TextKit 2.
+        // Decoding and styling happen off the main thread; the text view then lays it out.
         let rendered = await Task.detached(priority: .userInitiated) {
             RawTextStyle.render(document)
         }.value

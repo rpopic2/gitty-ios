@@ -1,13 +1,16 @@
 import SwiftUI
 import UIKit
 
-/// Read-only, selectable raw text in a TextKit 2 `UITextView`.
+/// Read-only, selectable raw text in a `UITextView` using TextKit 1 with contiguous layout.
+///
+/// Why TextKit 1: TextKit 2 only estimates the height of text it hasn't laid out, and `UITextView`
+/// keeps correcting those estimates (and the scroll position) as you scroll, so the scroll bar
+/// and the text jump. TextKit 1 with contiguous layout knows the exact height of every line,
+/// like Safari, so nothing is ever corrected mid-scroll.
 ///
 /// For smooth scrolling:
-/// - TextKit 2 shows the first screen right away. The rest of the file is then laid out in small
-///   slices between frames, so the scroll indicator and content height are exact (as in Safari)
-///   instead of estimates that jump the first time you reach new text.
-/// - `textView.layoutManager` is never read: reading it switches the view to TextKit 1 for good.
+/// - The whole file is laid out once after it is set and again when the width changes, in slices
+///   that yield to the run loop between them. A typical source file is a single slice.
 /// - Text is set only when `version` changes, never on other SwiftUI updates.
 /// - Scrolling reports to SwiftUI only when the bar's collapsed state flips, never per frame.
 struct CodeTextView: UIViewRepresentable {
@@ -22,7 +25,7 @@ struct CodeTextView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> CodeUITextView {
-        let textView = CodeUITextView(usingTextLayoutManager: true)
+        let textView = CodeUITextView(usingTextLayoutManager: false)
         textView.isEditable = false
         textView.isSelectable = true
         textView.dataDetectorTypes = []
@@ -30,6 +33,8 @@ struct CodeTextView: UIViewRepresentable {
         textView.backgroundColor = RawTextStyle.backgroundColor
         textView.textContainerInset = RawTextStyle.insets
         textView.textContainer.lineFragmentPadding = 0
+        // Exact heights everywhere: no estimated regions to fix up while scrolling.
+        textView.layoutManager.allowsNonContiguousLayout = false
         textView.alwaysBounceVertical = true
         textView.showsHorizontalScrollIndicator = false
         textView.contentInsetAdjustmentBehavior = .automatic
@@ -51,8 +56,6 @@ struct CodeTextView: UIViewRepresentable {
         textView.onWidthChange = { [weak coordinator = context.coordinator] textView in
             coordinator?.layOutWholeDocument(textView)
         }
-
-        assert(textView.textLayoutManager != nil, "UITextView fell back to TextKit 1")
         return textView
     }
 
@@ -98,45 +101,41 @@ struct CodeTextView: UIViewRepresentable {
         private var lastOffsetY: CGFloat = 0
         private var accumulated: CGFloat = 0
 
-        /// Paragraphs (source lines) laid out per slice: a few ms each, well under one frame.
-        private let paragraphsPerSlice = 200
-        /// Above this many characters, keep TextKit 2's estimates rather than laying out everything.
-        private let fullLayoutCharacterLimit = 2_000_000
+        /// Characters laid out per slice. Most source files fit in one slice, so they are fully
+        /// laid out before the first frame; bigger files finish over the next few frames.
+        private let charactersPerSlice = 100_000
         private var layoutTask: Task<Void, Never>?
 
         // MARK: Full layout
 
-        /// Lays out the whole document in slices, yielding to the run loop between them so
-        /// scrolling and animations never wait. Restarts when the text or the width changes.
+        /// Lays out the whole document so every line's height is exact. Restarts when the text
+        /// or the width changes.
         func layOutWholeDocument(_ textView: UITextView) {
             cancelLayout()
-            guard textView.bounds.width > 0,
-                  textView.textStorage.length <= fullLayoutCharacterLimit,
-                  let layoutManager = textView.textLayoutManager
-            else { return }
+            guard textView.bounds.width > 0 else { return }  // runs again once the width is known
 
-            let paragraphsPerSlice = paragraphsPerSlice
-            layoutTask = Task { [weak textView] in
-                var next: NSTextLocation? = layoutManager.documentRange.location
-                while let start = next, !Task.isCancelled {
-                    var count = 0
-                    var sliceEnd: NSTextLocation?
-                    layoutManager.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
-                        sliceEnd = fragment.rangeInElement.endLocation
-                        count += 1
-                        return count < paragraphsPerSlice
-                    }
-                    // Fewer fragments than asked for means the end of the document was reached.
-                    next = count < paragraphsPerSlice ? nil : sliceEnd
-                    if next != nil {
-                        try? await Task.sleep(for: .milliseconds(1))
-                    }
+            let layoutManager = textView.layoutManager
+            let length = textView.textStorage.length
+            let firstSliceEnd = layoutSlice(layoutManager, from: 0, length: length)
+            textView.setNeedsLayout()
+            guard firstSliceEnd < length else { return }
+
+            layoutTask = Task { [weak self, weak textView] in
+                var location = firstSliceEnd
+                while location < length {
+                    try? await Task.sleep(for: .milliseconds(1))
+                    guard let self, let textView, !Task.isCancelled else { return }
+                    location = self.layoutSlice(layoutManager, from: location, length: length)
+                    textView.setNeedsLayout()
                 }
-                guard !Task.isCancelled, let textView else { return }
-                // Let the text view pick up the exact height.
-                layoutManager.textViewportLayoutController.layoutViewport()
-                textView.setNeedsLayout()
             }
+        }
+
+        /// Lays out one slice and returns where the next one starts.
+        private func layoutSlice(_ layoutManager: NSLayoutManager, from location: Int, length: Int) -> Int {
+            let end = min(location + charactersPerSlice, length)
+            layoutManager.ensureLayout(forCharacterRange: NSRange(location: location, length: end - location))
+            return end
         }
 
         func cancelLayout() {

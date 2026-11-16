@@ -7,7 +7,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - Opens one hard-coded file (`gitty/App/Sources.swift`) and shows it the way Safari shows raw text: Courier 13pt, wrapped lines, Safari's margins, light and dark mode.
 - **Downloaded files never expire.** They are kept in Application Support, which iOS never clears, and shown with no network access. The file is downloaded again **only** when you pull to refresh. That refresh is a conditional request, so an unchanged file costs only an HTTP 304.
 - A Safari-style bottom bar shows the file name. It collapses as you scroll down and shows a thin loading line only while something is downloading. It looks like Safari on iOS 26+ (Liquid Glass) and on iOS 18.
-- The text is shown in a native TextKit 2 `UITextView`. The first screen appears right away; the rest is laid out in small slices between frames, so the scroll indicator is exact and never jumps.
+- The text is shown in a native `UITextView` using TextKit 1 with contiguous layout: every line's height is exact (like Safari), so the scroll bar and text never jump. TextKit 2 was tried first, but its estimated heights made both jump.
 
 ## Project setup
 
@@ -36,7 +36,7 @@ The tests are in `gittyTests/` and use Swift Testing. To run them:
 | `gitty/Core/DocumentStore.swift` | Saved copies on disk and the network fetch: never expires, conditional refresh |
 | `gitty/Core/RawTextDecoder.swift` | Bytes to text, decoded the way Safari does it (BOM, then charset, then UTF-8, then windows-1252) |
 | `gitty/Viewer/RawTextStyle.swift` | Safari's raw-text style constants, taken from WebKit's source |
-| `gitty/Viewer/CodeTextView.swift` | TextKit 2 text view, pull-to-refresh, scroll tracking for the bar |
+| `gitty/Viewer/CodeTextView.swift` | Text view (TextKit 1, full layout), pull-to-refresh, scroll tracking for the bar |
 | `gitty/Viewer/FileBar.swift` | Safari-style bottom bar and loading line, sizes in `FileBarMetrics` |
 | `gitty/Viewer/CodeDocumentModel.swift` | Screen state: loading, refresh, progress, bar |
 | `gitty/Viewer/CodeScreen.swift` | The screen |
