@@ -12,15 +12,21 @@ import UIKit
 /// - The whole file is laid out once after it is set and again when the width changes, in slices
 ///   that yield to the run loop between them. A typical source file is a single slice.
 /// - Text is set only when `version` changes, never on other SwiftUI updates.
+///
+/// The reading position is saved per file when scrolling stops and when the app goes to the
+/// background, and restored the next time the file opens.
 /// - Scrolling reports to SwiftUI only when the bar's collapsed state flips, never per frame.
 struct CodeTextView: UIViewRepresentable {
     let text: RenderedText
     let version: UUID
+    /// Identifies the file for its saved reading position.
+    let documentURL: URL
     /// Space kept free under the text for the expanded bottom bar, above the home indicator.
     let bottomBarHeight: CGFloat
     let isBarCollapsed: Bool
     let onRefresh: @MainActor () async -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
+    var positionStore: ReadingPositionStore = .standard
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -40,6 +46,7 @@ struct CodeTextView: UIViewRepresentable {
         textView.contentInsetAdjustmentBehavior = .automatic
         textView.scrollsToTop = true
         textView.delegate = context.coordinator
+        context.coordinator.textView = textView
 
         if #available(iOS 26.0, *) {
             // Soft blur under the status bar, like Safari 26.
@@ -54,7 +61,7 @@ struct CodeTextView: UIViewRepresentable {
 
         // Wrapped lines change with the width (rotation, iPad split view), so lay out again.
         textView.onWidthChange = { [weak coordinator = context.coordinator] textView in
-            coordinator?.layOutWholeDocument(textView)
+            coordinator?.widthDidChange(textView)
         }
         return textView
     }
@@ -64,6 +71,8 @@ struct CodeTextView: UIViewRepresentable {
         coordinator.onRefresh = onRefresh
         coordinator.onBarCollapsedChange = onBarCollapsedChange
         coordinator.isBarCollapsed = isBarCollapsed
+        coordinator.documentURL = documentURL
+        coordinator.positionStore = positionStore
 
         if textView.contentInset.bottom != bottomBarHeight {
             textView.contentInset.bottom = bottomBarHeight
@@ -71,27 +80,27 @@ struct CodeTextView: UIViewRepresentable {
         }
 
         if coordinator.version != version {
-            let isReplacing = coordinator.version != nil
-            let offset = textView.contentOffset
+            // After a refresh, stay where the reader is. On first show, go back to where they left off.
+            coordinator.pendingRestore = coordinator.version != nil
+                ? coordinator.currentPosition(in: textView)
+                : positionStore.position(for: documentURL)
             coordinator.version = version
             textView.attributedText = text.attributedString
-            if isReplacing {
-                // Keep the reading position after a refresh brings new text.
-                let inset = textView.adjustedContentInset
-                let maxY = max(-inset.top, textView.contentSize.height - textView.bounds.height + inset.bottom)
-                textView.contentOffset.y = min(max(offset.y, -inset.top), maxY)
-            }
             coordinator.layOutWholeDocument(textView)
         }
     }
 
     static func dismantleUIView(_ textView: CodeUITextView, coordinator: Coordinator) {
+        coordinator.saveCurrentPosition()
         coordinator.cancelLayout()
     }
 
     @MainActor
     final class Coordinator: NSObject, UITextViewDelegate {
+        weak var textView: UITextView?
         var version: UUID?
+        var documentURL: URL?
+        var positionStore: ReadingPositionStore = .standard
         var onRefresh: (@MainActor () async -> Void)?
         var onBarCollapsedChange: (@MainActor (Bool) -> Void)?
         var isBarCollapsed = false
@@ -106,6 +115,23 @@ struct CodeTextView: UIViewRepresentable {
         private let charactersPerSlice = 100_000
         private var layoutTask: Task<Void, Never>?
 
+        /// Position to scroll to once the text is fully laid out.
+        var pendingRestore: ReadingPosition?
+        /// Last known position, reused when the width changes (the old layout is gone by then).
+        private var lastPosition: ReadingPosition?
+
+        override init() {
+            super.init()
+            // Save before the app is suspended: it may be killed without another callback.
+            // Selector-based observers are removed automatically when the coordinator goes away.
+            NotificationCenter.default.addObserver(self, selector: #selector(sceneWillDeactivate),
+                                                   name: UIScene.willDeactivateNotification, object: nil)
+        }
+
+        @objc private func sceneWillDeactivate() {
+            saveCurrentPosition()
+        }
+
         // MARK: Full layout
 
         /// Lays out the whole document so every line's height is exact. Restarts when the text
@@ -118,7 +144,10 @@ struct CodeTextView: UIViewRepresentable {
             let length = textView.textStorage.length
             let firstSliceEnd = layoutSlice(layoutManager, from: 0, length: length)
             textView.setNeedsLayout()
-            guard firstSliceEnd < length else { return }
+            guard firstSliceEnd < length else {
+                restorePendingPosition(in: textView)
+                return
+            }
 
             layoutTask = Task { [weak self, weak textView] in
                 var location = firstSliceEnd
@@ -128,7 +157,14 @@ struct CodeTextView: UIViewRepresentable {
                     location = self.layoutSlice(layoutManager, from: location, length: length)
                     textView.setNeedsLayout()
                 }
+                guard let self, let textView, !Task.isCancelled else { return }
+                self.restorePendingPosition(in: textView)
             }
+        }
+
+        func widthDidChange(_ textView: UITextView) {
+            if pendingRestore == nil { pendingRestore = lastPosition }
+            layOutWholeDocument(textView)
         }
 
         /// Lays out one slice and returns where the next one starts.
@@ -143,6 +179,51 @@ struct CodeTextView: UIViewRepresentable {
             layoutTask = nil
         }
 
+        // MARK: Reading position
+
+        func saveCurrentPosition() {
+            guard pendingRestore == nil,  // not restored yet: keep what was saved
+                  let textView, let documentURL,
+                  let position = currentPosition(in: textView)
+            else { return }
+            lastPosition = position
+            positionStore.save(position, for: documentURL)
+        }
+
+        /// The line at the top of the visible area (below the status bar) and how far it is scrolled.
+        func currentPosition(in textView: UITextView) -> ReadingPosition? {
+            guard textView.textStorage.length > 0 else { return nil }
+            let y = textView.contentOffset.y + textView.adjustedContentInset.top - textView.textContainerInset.top
+            guard y > 0 else { return .top }
+            let layoutManager = textView.layoutManager
+            let glyphIndex = layoutManager.glyphIndex(for: CGPoint(x: 0, y: y), in: textView.textContainer)
+            let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            return ReadingPosition(characterIndex: layoutManager.characterIndexForGlyph(at: glyphIndex),
+                                   lineOffset: Double(y - lineRect.minY))
+        }
+
+        private func restorePendingPosition(in textView: UITextView) {
+            guard let position = pendingRestore else { return }
+            pendingRestore = nil
+            lastPosition = position
+
+            let inset = textView.adjustedContentInset
+            let length = textView.textStorage.length
+            var offsetY = -inset.top
+            if position != .top, length > 0 {
+                let layoutManager = textView.layoutManager
+                let glyphIndex = layoutManager.glyphIndexForCharacter(at: min(position.characterIndex, length - 1))
+                let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+                let y = lineRect.minY + min(CGFloat(position.lineOffset), lineRect.height)
+                offsetY = y + textView.textContainerInset.top - inset.top
+            }
+            // Clamp with the laid-out height; contentSize may not have caught up within this pass.
+            let contentHeight = textView.layoutManager.usedRect(for: textView.textContainer).height
+                + textView.textContainerInset.top + textView.textContainerInset.bottom
+            let maxY = max(-inset.top, contentHeight - textView.bounds.height + inset.bottom)
+            textView.contentOffset.y = min(max(offsetY, -inset.top), maxY)
+        }
+
         @objc func handleRefresh(_ control: UIRefreshControl) {
             Task {
                 await onRefresh?()
@@ -153,6 +234,19 @@ struct CodeTextView: UIViewRepresentable {
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             lastOffsetY = scrollView.contentOffset.y
             accumulated = 0
+            pendingRestore = nil  // the reader took over before a big file finished laying out
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { saveCurrentPosition() }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            saveCurrentPosition()
+        }
+
+        func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
+            saveCurrentPosition()
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {

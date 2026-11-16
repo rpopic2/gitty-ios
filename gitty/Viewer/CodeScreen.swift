@@ -41,6 +41,7 @@ struct CodeScreen: View {
             CodeTextView(
                 text: text,
                 version: version,
+                documentURL: model.url,
                 bottomBarHeight: FileBarMetrics.expandedHeight,
                 isBarCollapsed: model.isBarCollapsed,
                 onRefresh: { await model.refresh() },
