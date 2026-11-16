@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// One file, full screen, with a Safari-style bar at the bottom.
 struct CodeScreen: View {

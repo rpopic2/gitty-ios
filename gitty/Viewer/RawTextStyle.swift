@@ -1,3 +1,4 @@
+import Foundation
 import UIKit
 
 /// Styled text ready to hand to the text view. `NSAttributedString` is immutable, so this

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Sizes for the bottom bar. Tune them against Safari screenshots on a device.
 enum FileBarMetrics {

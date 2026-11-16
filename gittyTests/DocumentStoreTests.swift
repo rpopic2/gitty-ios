@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Gitty
+@testable import gitty
 
 /// Serialized because the stub's handler is shared.
 @Suite(.serialized)
