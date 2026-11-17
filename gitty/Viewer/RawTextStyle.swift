@@ -66,7 +66,7 @@ nonisolated enum RawTextStyle {
         }
     }
 
-    /// The menu shown for selected text: only Copy, Select All and Share.
+    /// The menu shown for selected text: only Copy, Select All, Share and Search Web.
     /// Call it from `textView(_:editMenuForTextIn:suggestedActions:)`.
     @MainActor
     static func editMenu(from suggested: [UIMenuElement]) -> UIMenu {
@@ -89,8 +89,23 @@ nonisolated enum RawTextStyle {
             if let command = element as? UICommand, keptActions.contains(command.action) {
                 return command
             }
-            return nil
+            return isSearchWeb(element) ? element : nil
         }
+    }
+
+    /// Search Web is a private item, so it's matched by name: a command like `_searchWeb:`, or an
+    /// action whose identifier contains "searchWeb", depending on the iOS version.
+    @MainActor
+    private static func isSearchWeb(_ element: UIMenuElement) -> Bool {
+        let name: String
+        if let command = element as? UICommand {
+            name = NSStringFromSelector(command.action)
+        } else if let action = element as? UIAction {
+            name = action.identifier.rawValue
+        } else {
+            return false
+        }
+        return name.range(of: "searchweb", options: .caseInsensitive) != nil
     }
 
     /// Decodes and styles a document. Safe to call off the main thread.
