@@ -90,6 +90,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView(usingTextLayoutManager: false)
         RawTextStyle.configure(textView)
+        textView.delegate = context.coordinator
         return textView
     }
 
@@ -105,7 +106,12 @@ struct ReadOnlyTextView: UIViewRepresentable {
         textView.contentOffset.y = -textView.adjustedContentInset.top
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, UITextViewDelegate {
         var textID: Int?
+
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
+                      suggestedActions: [UIMenuElement]) -> UIMenu? {
+            RawTextStyle.editMenu(from: suggestedActions)
+        }
     }
 }

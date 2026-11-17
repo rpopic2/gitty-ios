@@ -237,6 +237,11 @@ struct CodeTextView: UIViewRepresentable {
             saveCurrentPosition()
         }
 
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
+                      suggestedActions: [UIMenuElement]) -> UIMenu? {
+            RawTextStyle.editMenu(from: suggestedActions)
+        }
+
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             let inset = scrollView.adjustedContentInset
             let change = barTracker.scrolled(

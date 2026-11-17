@@ -58,9 +58,38 @@ nonisolated enum RawTextStyle {
         textView.alwaysBounceVertical = true
         textView.showsHorizontalScrollIndicator = false
         textView.contentInsetAdjustmentBehavior = .automatic
+        // Read-only code: no Apple Intelligence rewriting, and no Writing Tools item in the menu.
+        textView.writingToolsBehavior = .none
         if #available(iOS 26.0, *) {
             // Soft blur under the status bar, like Safari 26.
             textView.topEdgeEffect.style = .soft
+        }
+    }
+
+    /// The menu shown for selected text: only Copy, Select All and Share.
+    /// Call it from `textView(_:editMenuForTextIn:suggestedActions:)`.
+    @MainActor
+    static func editMenu(from suggested: [UIMenuElement]) -> UIMenu {
+        UIMenu(children: keptMenuElements(suggested))
+    }
+
+    @MainActor
+    private static func keptMenuElements(_ elements: [UIMenuElement]) -> [UIMenuElement] {
+        let keptActions: Set<Selector> = [
+            #selector(UIResponderStandardEditActions.copy(_:)),
+            #selector(UIResponderStandardEditActions.selectAll(_:)),
+            NSSelectorFromString("_share:"),  // Share is a private command on some iOS versions
+        ]
+        return elements.compactMap { element -> UIMenuElement? in
+            if let menu = element as? UIMenu {
+                if menu.identifier == .share { return menu }
+                let children = keptMenuElements(menu.children)
+                return children.isEmpty ? nil : menu.replacingChildren(children)
+            }
+            if let command = element as? UICommand, keptActions.contains(command.action) {
+                return command
+            }
+            return nil
         }
     }
 
