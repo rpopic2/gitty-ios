@@ -11,8 +11,8 @@ nonisolated enum SymbolSearch {
 
         var ranked: [Ranked] = []
         for symbol in symbols {
-            if let rank = rank(query, symbol.name) {
-                ranked.append(Ranked(symbol: symbol, rank: rank))
+            if let score = rank(query, symbol.name) {
+                ranked.append(Ranked(symbol: symbol, rank: score))
             }
         }
         ranked.sort(by: Ranked.isBetter)
@@ -21,7 +21,7 @@ nonisolated enum SymbolSearch {
 
     /// A match and how good it is. (Spelled out instead of a tuple: a chain of closures over
     /// tuples was too slow for the type checker.)
-    private struct Ranked {
+    nonisolated private struct Ranked {
         let symbol: CodeSymbol
         let rank: Int
 
