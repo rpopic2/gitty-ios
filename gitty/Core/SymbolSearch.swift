@@ -8,10 +8,28 @@ nonisolated enum SymbolSearch {
     static func matches(_ query: String, in symbols: [CodeSymbol]) -> [CodeSymbol] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return symbols }
-        return symbols
-            .compactMap { symbol in rank(query, symbol.name).map { (symbol, $0) } }
-            .sorted { $0.1 != $1.1 ? $0.1 < $1.1 : $0.0.id < $1.0.id }
-            .map(\.0)
+
+        var ranked: [Ranked] = []
+        for symbol in symbols {
+            if let rank = rank(query, symbol.name) {
+                ranked.append(Ranked(symbol: symbol, rank: rank))
+            }
+        }
+        ranked.sort(by: Ranked.isBetter)
+        return ranked.map { (match: Ranked) -> CodeSymbol in match.symbol }
+    }
+
+    /// A match and how good it is. (Spelled out instead of a tuple: a chain of closures over
+    /// tuples was too slow for the type checker.)
+    private struct Ranked {
+        let symbol: CodeSymbol
+        let rank: Int
+
+        /// Better rank first; equal ranks keep file order.
+        static func isBetter(_ lhs: Ranked, _ rhs: Ranked) -> Bool {
+            if lhs.rank != rhs.rank { return lhs.rank < rhs.rank }
+            return lhs.symbol.id < rhs.symbol.id
+        }
     }
 
     /// Lower is better; `nil` means no match.
