@@ -5,6 +5,8 @@ import UIKit
 /// Tapping a card zooms into that symbol (see `SymbolPager`).
 struct SymbolsView: View {
     let symbols: [CodeSymbol]
+    /// False while another mode covers the list (it stays alive to keep its place).
+    let isActive: Bool
     let namespace: Namespace.ID
     /// The card scrolled into view. Set it to bring a card back on screen.
     @Binding var scrolledID: Int?
@@ -33,6 +35,7 @@ struct SymbolsView: View {
         }
         .scrollPosition(id: $scrolledID, anchor: .center)
         .scrollDismissesKeyboard(.interactively)
+        .scrollDisabled(!isActive)  // hidden: stays put, and leaves status-bar taps to File
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .background(Color(uiColor: .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in
@@ -49,7 +52,7 @@ struct SymbolsView: View {
                 bottom: geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom,
                 isUserScrolling: scroll.isUserScrolling
             )
-            if let change { onBarCollapsedChange(change) }
+            if isActive, let change { onBarCollapsedChange(change) }
         }
         .onChange(of: barTapCount) {
             scroll.tracker.holdOpen()

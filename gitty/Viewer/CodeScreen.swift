@@ -109,9 +109,14 @@ struct CodeScreen: View {
                 .allowsHitTesting(mode == .file)
                 .accessibilityHidden(mode != .file)
 
-                if mode == .symbols {
-                    symbols
-                }
+                // Also kept alive while hidden, so the list keeps its exact scroll position when
+                // you come back from File or Project. (Rebuilding it and restoring the position
+                // with `scrollPosition(id:)` isn't reliable: SwiftUI often ignores the starting
+                // value on a view's first layout.)
+                symbols
+                    .opacity(mode == .symbols ? 1 : 0)
+                    .allowsHitTesting(mode == .symbols)
+                    .accessibilityHidden(mode != .symbols)
             }
         case .failed(let message):
             ContentUnavailableView {
@@ -142,6 +147,7 @@ struct CodeScreen: View {
         case .ready:
             SymbolsView(
                 symbols: shownSymbols,
+                isActive: mode == .symbols,
                 namespace: symbolNamespace,
                 scrolledID: $listSymbolID,
                 isBarCollapsed: model.isBarCollapsed,
