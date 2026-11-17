@@ -42,6 +42,28 @@ nonisolated enum RawTextStyle {
         return style
     }
 
+    /// Sets up a read-only `UITextView` for raw text: TextKit 1 with contiguous layout, so every
+    /// line's height is exact and nothing is re-estimated while scrolling.
+    /// Create the view with `usingTextLayoutManager: false`.
+    @MainActor
+    static func configure(_ textView: UITextView) {
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.dataDetectorTypes = []
+        textView.adjustsFontForContentSizeCategory = false
+        textView.backgroundColor = backgroundColor
+        textView.textContainerInset = insets
+        textView.textContainer.lineFragmentPadding = 0
+        textView.layoutManager.allowsNonContiguousLayout = false
+        textView.alwaysBounceVertical = true
+        textView.showsHorizontalScrollIndicator = false
+        textView.contentInsetAdjustmentBehavior = .automatic
+        if #available(iOS 26.0, *) {
+            // Soft blur under the status bar, like Safari 26.
+            textView.topEdgeEffect.style = .soft
+        }
+    }
+
     /// Decodes and styles a document. Safe to call off the main thread.
     static func render(_ document: StoredDocument) -> RenderedText {
         let string = RawTextDecoder.decode(document.data, contentType: document.metadata.contentType)

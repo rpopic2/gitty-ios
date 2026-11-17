@@ -17,18 +17,31 @@ enum FileBarMetrics {
     static let fieldHorizontalMargin: CGFloat = 12
     static let barVerticalPadding: CGFloat = 8
 
+    // Mode selector (Project / File / Symbols) under the bar.
+    static let selectorHeight: CGFloat = 32
+    static let selectorMaxWidth: CGFloat = 320
+    static var selectorPadding: CGFloat {
+        if #available(iOS 26.0, *) { return 4 } else { return 0 }  // glass padding around it
+    }
+    static let selectorBottomPadding: CGFloat = 8
+
     static let titleFont = Font.system(size: 17)
     static let collapsedTitleFont = Font.system(size: 12)
     static let progressHeight: CGFloat = 3
 
-    /// Height of the expanded bar above the bottom safe area. The text view keeps this much free
-    /// at the end of the file, and never changes it, so the text doesn't jump when the bar collapses.
-    static var expandedHeight: CGFloat {
+    /// Height of the expanded bar alone, above the bottom safe area.
+    static var barHeight: CGFloat {
         if #available(iOS 26.0, *) {
             return glassGapAboveCapsule + glassHeight + glassBottomPadding
         } else {
             return fieldHeight + 2 * barVerticalPadding
         }
+    }
+
+    /// Height of the expanded bar plus the mode selector, above the bottom safe area. Content keeps
+    /// this much free at its end, and never changes it, so nothing jumps when the bar collapses.
+    static var expandedHeight: CGFloat {
+        barHeight + selectorHeight + 2 * selectorPadding + selectorBottomPadding
     }
 }
 
@@ -39,7 +52,7 @@ struct FileBar: View {
     let isCollapsed: Bool
     let progressFraction: Double
     let isProgressVisible: Bool
-    let onExpand: () -> Void
+    let onExpand: @MainActor () -> Void
 
     var body: some View {
         Group {
@@ -95,7 +108,7 @@ private struct GlassFileBar: View {
     }
 }
 
-/// iOS 18: Safari 18's rounded field in a material toolbar.
+/// iOS 18: Safari 18's rounded field. The toolbar material behind it is drawn by `BottomBarStack`.
 private struct ClassicFileBar: View {
     let title: String
     let isCollapsed: Bool
@@ -120,7 +133,6 @@ private struct ClassicFileBar: View {
             .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
             .padding(.vertical, isCollapsed ? 0 : FileBarMetrics.barVerticalPadding)
             .frame(maxWidth: .infinity)
-            .background(.bar, ignoresSafeAreaEdges: .bottom)
     }
 }
 
@@ -137,5 +149,35 @@ private struct ProgressLine: View {
             .scaleEffect(x: min(max(fraction, 0), 1), y: 1, anchor: .leading)
             .opacity(isVisible ? 1 : 0)
             .allowsHitTesting(false)
+    }
+}
+
+/// The bottom of the screen: the file bar with the mode selector under it.
+/// When the bar collapses on scroll, the selector hides with it.
+struct BottomBarStack: View {
+    let title: String
+    let isCollapsed: Bool
+    let progressFraction: Double
+    let isProgressVisible: Bool
+    @Binding var mode: ViewMode
+    let onExpand: @MainActor () -> Void
+
+    var body: some View {
+        let stack = VStack(spacing: 0) {
+            FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
+                    isProgressVisible: isProgressVisible, onExpand: onExpand)
+            if !isCollapsed {
+                ModeSelector(mode: $mode)
+                    .padding(.bottom, FileBarMetrics.selectorBottomPadding)
+                    .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+
+        if #available(iOS 26.0, *) {
+            stack
+        } else {
+            stack.background(.bar, ignoresSafeAreaEdges: .bottom)
+        }
     }
 }

@@ -10,10 +10,19 @@ final class CodeDocumentModel {
         case failed(message: String)
     }
 
+    enum SymbolIndex {
+        case indexing
+        case ready([CodeSymbol])
+        case parserMissing
+        case unsupportedLanguage
+    }
+
     let url: URL
     var fileName: String { url.lastPathComponent }
 
     private(set) var phase: Phase = .loading
+    /// Top-level definitions of the text on screen, for Symbols mode.
+    private(set) var symbolIndex: SymbolIndex = .indexing
     private(set) var isBarCollapsed = false
     /// Goes up each time the reader taps the collapsed bar, so the text view can stop a fling.
     private(set) var barTapCount = 0
@@ -90,7 +99,31 @@ final class CodeDocumentModel {
         let rendered = await Task.detached(priority: .userInitiated) {
             RawTextStyle.render(document)
         }.value
-        phase = .loaded(rendered, version: UUID())
+        let version = UUID()
+        phase = .loaded(rendered, version: version)
+        await indexSymbols(of: rendered, version: version)
+    }
+
+    /// Parses the text off the main thread once per version. A few ms for a typical file.
+    private func indexSymbols(of rendered: RenderedText, version: UUID) async {
+        let fileExtension = url.pathExtension
+        let outcome = await Task.detached(priority: .utility) {
+            SymbolIndexer.index(rendered.attributedString.string, fileExtension: fileExtension)
+        }.value
+        guard case .loaded(_, let current) = phase, current == version else { return }  // newer text arrived
+        switch outcome {
+        case .symbols(let symbols): symbolIndex = .ready(symbols)
+        case .parserMissing: symbolIndex = .parserMissing
+        case .unsupportedLanguage: symbolIndex = .unsupportedLanguage
+        }
+    }
+
+    /// The text of one symbol, styled like the file.
+    func text(of symbol: CodeSymbol) -> NSAttributedString? {
+        guard case .loaded(let rendered, _) = phase else { return nil }
+        let full = rendered.attributedString
+        guard NSMaxRange(symbol.range) <= full.length else { return nil }
+        return full.attributedSubstring(from: symbol.range)
     }
 
     // MARK: - Bottom bar

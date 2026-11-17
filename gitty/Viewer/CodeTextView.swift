@@ -12,10 +12,10 @@ import UIKit
 /// - The whole file is laid out once after it is set and again when the width changes, in slices
 ///   that yield to the run loop between them. A typical source file is a single slice.
 /// - Text is set only when `version` changes, never on other SwiftUI updates.
+/// - Scrolling reports to SwiftUI only when the bar's collapsed state flips, never per frame.
 ///
 /// The reading position is saved per file when scrolling stops and when the app goes to the
 /// background, and restored the next time the file opens.
-/// - Scrolling reports to SwiftUI only when the bar's collapsed state flips, never per frame.
 struct CodeTextView: UIViewRepresentable {
     let text: RenderedText
     let version: UUID
@@ -28,32 +28,17 @@ struct CodeTextView: UIViewRepresentable {
     let barTapCount: Int
     let onRefresh: @MainActor () async -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
+    /// False while another mode (Symbols) covers the file. The view stays alive to keep its place.
+    var isActive = true
     var positionStore: ReadingPositionStore = .standard
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> CodeUITextView {
         let textView = CodeUITextView(usingTextLayoutManager: false)
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.dataDetectorTypes = []
-        textView.adjustsFontForContentSizeCategory = false
-        textView.backgroundColor = RawTextStyle.backgroundColor
-        textView.textContainerInset = RawTextStyle.insets
-        textView.textContainer.lineFragmentPadding = 0
-        // Exact heights everywhere: no estimated regions to fix up while scrolling.
-        textView.layoutManager.allowsNonContiguousLayout = false
-        textView.alwaysBounceVertical = true
-        textView.showsHorizontalScrollIndicator = false
-        textView.contentInsetAdjustmentBehavior = .automatic
-        textView.scrollsToTop = true
+        RawTextStyle.configure(textView)
         textView.delegate = context.coordinator
         context.coordinator.textView = textView
-
-        if #available(iOS 26.0, *) {
-            // Soft blur under the status bar, like Safari 26.
-            textView.topEdgeEffect.style = .soft
-        }
 
         let refreshControl = UIRefreshControl()
         refreshControl.addTarget(context.coordinator,
@@ -72,11 +57,13 @@ struct CodeTextView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.onRefresh = onRefresh
         coordinator.onBarCollapsedChange = onBarCollapsedChange
-        coordinator.isBarCollapsed = isBarCollapsed
+        coordinator.barTracker.isCollapsed = isBarCollapsed
         if coordinator.barTapCount != barTapCount {
             coordinator.barTapCount = barTapCount
-            coordinator.barWasTappedOpen()
+            coordinator.barTracker.holdOpen()
         }
+        // Only the visible scroll view may answer a tap on the status bar.
+        textView.scrollsToTop = isActive
         coordinator.documentURL = documentURL
         coordinator.positionStore = positionStore
 
@@ -109,15 +96,8 @@ struct CodeTextView: UIViewRepresentable {
         var positionStore: ReadingPositionStore = .standard
         var onRefresh: (@MainActor () async -> Void)?
         var onBarCollapsedChange: (@MainActor (Bool) -> Void)?
-        var isBarCollapsed = false
+        var barTracker = BarCollapseTracker()
         var barTapCount = 0
-        /// After the reader taps the bar open, it stays open until they start a new drag.
-        private var holdsBarOpen = false
-
-        /// How far (pt) the user must scroll in one direction before the bar changes.
-        private let collapseThreshold: CGFloat = 10
-        private var lastOffsetY: CGFloat = 0
-        private var accumulated: CGFloat = 0
 
         /// Characters laid out per slice. Most source files fit in one slice, so they are fully
         /// laid out before the first frame; bigger files finish over the next few frames.
@@ -241,17 +221,8 @@ struct CodeTextView: UIViewRepresentable {
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-            lastOffsetY = scrollView.contentOffset.y
-            accumulated = 0
+            barTracker.beginDrag(at: scrollView.contentOffset.y)
             pendingRestore = nil  // the reader took over before a big file finished laying out
-            holdsBarOpen = false
-        }
-
-        /// Like Safari: tapping the bar during a fling keeps the bar open while the fling carries on.
-        /// Without this, the remaining momentum counts as scrolling down and collapses it again.
-        func barWasTappedOpen() {
-            holdsBarOpen = true
-            accumulated = 0
         }
 
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -267,34 +238,14 @@ struct CodeTextView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            let y = scrollView.contentOffset.y
-            let delta = y - lastOffsetY
-            lastOffsetY = y
-
             let inset = scrollView.adjustedContentInset
-            let topY = -inset.top
-            let bottomY = scrollView.contentSize.height - scrollView.bounds.height + inset.bottom
-
-            // Like Safari: the bar is always expanded at the top and at the end of the page.
-            if y <= topY + 1 || y >= bottomY - 1 {
-                setCollapsed(false)
-                return
-            }
-            guard !holdsBarOpen, scrollView.isDragging || scrollView.isDecelerating, delta != 0 else { return }
-
-            if (delta > 0) != (accumulated > 0) { accumulated = 0 }  // direction changed
-            accumulated += delta
-            if accumulated > collapseThreshold {
-                setCollapsed(true)
-            } else if accumulated < -collapseThreshold {
-                setCollapsed(false)
-            }
-        }
-
-        private func setCollapsed(_ collapsed: Bool) {
-            guard collapsed != isBarCollapsed else { return }
-            isBarCollapsed = collapsed
-            onBarCollapsedChange?(collapsed)
+            let change = barTracker.scrolled(
+                to: scrollView.contentOffset.y,
+                top: -inset.top,
+                bottom: scrollView.contentSize.height - scrollView.bounds.height + inset.bottom,
+                isUserScrolling: scrollView.isDragging || scrollView.isDecelerating
+            )
+            if let change { onBarCollapsedChange?(change) }
         }
     }
 }
