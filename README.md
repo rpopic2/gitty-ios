@@ -10,6 +10,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - **Smooth, exact scrolling:** every line's height is known up front, so the scroll bar and text never jump.
 - **Safari-style bottom bar:** shows the file name, collapses while you scroll down, and shows a thin loading line only while downloading. Liquid Glass on iOS 26+, the Safari 18 style on iOS 18.
 - **Photos-style mode selector** under the bar: **Project**, **File** (the raw file) and **Symbols**.
+- **Projects:** enter, paste or share a GitHub repository link (`github.com/owner/repo`, or `…/tree/branch/folder`) to add it as a project. Browse its folders like the Files app, with code files first; a file downloads when you open it, and **Download All** saves a folder for offline reading. The file list comes from GitHub's trees API, fetched when the project is added and again only on pull to refresh. Public repositories only for now.
 - **Project:** every file you've opened or saved, recent first, with an icon on files that open offline. Tap one to open it in File mode, or swipe one to delete it and its saved copy. With no file open, the start page shows this list with the address bar ready.
 - **Symbols:** every definition as a card, like photos in Photos. For C that's top-level functions, types, macros and globals. For C# and Swift, each type (and Swift extension) is followed by its members, named `Type.Member`. Tap a card to see only that symbol, swipe left and right to move between symbols, and swipe down to zoom back to the list. Select or double-tap a name, in File or in a symbol's page, and choose **Jump to Definition** to search symbols for it, with the search field focused. In a symbol's page, tap the caption at the bottom to see it in the file. In File and Symbols mode the bar searches symbols (in File, the matches are listed above the field and open the symbol's page). The address is edited from Project, or anywhere a file has no symbols. Symbol search uses fuzzy matching like Xcode's Open Quickly ("crdr" finds `Circle.draw`) and lists the best matches first. The search stays until you clear it, and swiping in a symbol opened from the results goes through the matches only. Symbols come from [tree-sitter](https://tree-sitter.github.io/).
 
@@ -61,6 +62,7 @@ The engine is the same for every language. It keeps top-level definitions plus t
 |---|---|
 | `gitty/App/` | App entry point, and the root view that picks the start page or the open file |
 | `gitty/Core/AddressParser.swift` | What was typed → the URL to load (https only, GitHub links → raw) |
+| `gitty/Core/GitHubProject.swift` | Repository links, projects and their file lists (GitHub trees API) |
 | `gitty/Core/RecentFilesStore.swift` | Recently opened URLs (UserDefaults) |
 | `gitty/Core/SymbolSearch.swift` | Fuzzy symbol search and ranking |
 | `gitty/Core/WebPageDetector.swift` | Whether a download is a web page (served as HTML) |
@@ -77,6 +79,7 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/Viewer/CodeTextView.swift` | `UITextView` (TextKit 1, full layout), pull-to-refresh, scroll tracking for the bar |
 | `gitty/Viewer/FileBar.swift` | Bottom bar, loading line and the bar + selector stack. Sizes in `FileBarMetrics` |
 | `gitty/Viewer/ModeSelector.swift` | Project / File / Symbols selector |
+| `gitty/Viewer/ProjectFolderView.swift` | Browsing a project's folders, Download All |
 | `gitty/Viewer/ProjectView.swift` | Project mode and start page: recent and saved files |
 | `gitty/Viewer/BarCollapseTracker.swift` | When the bar collapses while scrolling (shared by File and Symbols) |
 | `gitty/Viewer/SymbolsView.swift` | The Symbols list and its cards |

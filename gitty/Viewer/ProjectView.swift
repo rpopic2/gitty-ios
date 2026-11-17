@@ -1,14 +1,16 @@
 import SwiftUI
 import UIKit
 
-/// Project mode, and the start page: every file you've opened or saved. Recent files come first,
-/// then every other saved file, newest download first. Tap one to open it; swipe to delete it from
-/// the list and the device.
+/// Project mode, and the start page: your projects (GitHub repositories, opened by entering a repo
+/// link), then every file you've opened or saved. Recent files come first, then every other saved
+/// file, newest download first; saved files that belong to a project are listed in the project
+/// instead. Tap a project to browse it, a file to open it; swipe to delete either.
 struct ProjectView: View {
     /// The file on screen, marked in the list.
     let currentURL: URL?
     let onOpen: @MainActor (URL) -> Void
 
+    @State private var projects: [ProjectInfo] = []
     @State private var recents: [URL] = []
     @State private var saved: [URL] = []
 
@@ -21,14 +23,33 @@ struct ProjectView: View {
 
     private var files: [FileEntry] {
         let savedSet = Set(saved)
+        // Project files (say, after Download All) show in their project, not here, unless recent.
+        let projectPrefixes = projects.compactMap { $0.rawURL(for: "")?.absoluteString }
+        let otherSaved = saved.filter { url in
+            !projectPrefixes.contains { url.absoluteString.hasPrefix($0) }
+        }
         var seen = Set<URL>()
-        return (recents + saved)
+        return (recents + otherSaved)
             .filter { seen.insert($0).inserted }
             .map { FileEntry(url: $0, isSaved: savedSet.contains($0)) }
     }
 
     var body: some View {
         List {
+            if !projects.isEmpty {
+                Section("Projects") {
+                    ForEach(projects) { project in
+                        NavigationLink(value: ProjectRoute(projectID: project.id, folder: nil)) {
+                            ProjectRow(project: project)
+                        }
+                        .swipeActions {
+                            Button(role: .destructive) { deleteProject(project) } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
             if !files.isEmpty {
                 Section("Files") {
                     ForEach(files) { file in
@@ -59,7 +80,14 @@ struct ProjectView: View {
 
     private func reload() async {
         recents = RecentFilesStore.standard.urls()
+        projects = await ProjectStore.shared.projects()
         saved = await DocumentStore.shared.savedDocuments().map(\.url)
+    }
+
+    /// Removes the project from the list. Its saved files stay (they show under Files again).
+    private func deleteProject(_ project: ProjectInfo) {
+        projects.removeAll { $0.id == project.id }
+        Task { await ProjectStore.shared.remove(id: project.id) }
     }
 
     /// Removes the file from the list and deletes its saved copy and reading position.
@@ -70,6 +98,27 @@ struct ProjectView: View {
         recents.removeAll { $0 == url }
         saved.removeAll { $0 == url }
         Task { await DocumentStore.shared.delete(url) }
+    }
+}
+
+/// A project: its name, then owner · branch (and folder).
+private struct ProjectRow: View {
+    let project: ProjectInfo
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.title)
+                    .lineLimit(1)
+                Text([project.link.owner, project.ref].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        } icon: {
+            Image(systemName: "shippingbox")
+                .foregroundStyle(.tint)
+        }
     }
 }
 

@@ -3,10 +3,14 @@ import UIKit
 
 /// The root: the file at the URL the reader entered, or the start page before any.
 /// The last opened URL is remembered across launches. Links shared from Safari arrive as
-/// `gitty://open?url=…` (see the gittyShare extension).
+/// `gitty://open?url=…` (see the gittyShare extension). A GitHub repository link opens as a
+/// project, whose folders are pushed onto this navigation stack.
 struct BrowserView: View {
     @AppStorage("currentURL") private var currentURLString = ""
+    @SceneStorage("viewMode") private var mode: ViewMode = .file
     @State private var isEditingAddress = false
+    /// Project folders on screen (Files-app style).
+    @State private var projectPath: [ProjectRoute] = []
     /// A shared or pasted address that isn't a URL we can open: shown in the editor with the reason.
     @State private var rejectedAddress: String?
 
@@ -15,14 +19,22 @@ struct BrowserView: View {
     }
 
     var body: some View {
-        Group {
-            if let url = currentURL {
-                CodeScreen(url: url, isEditingAddress: $isEditingAddress,
-                           rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
-                    .id(url)  // a new URL gets a fresh screen and model
-            } else {
-                StartScreen(isEditingAddress: $isEditingAddress,
-                            rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
+        NavigationStack(path: $projectPath) {
+            Group {
+                if let url = currentURL {
+                    CodeScreen(url: url, isEditingAddress: $isEditingAddress,
+                               rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
+                        .id(url)  // a new URL gets a fresh screen and model
+                } else {
+                    StartScreen(isEditingAddress: $isEditingAddress,
+                                rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
+                }
+            }
+            .navigationDestination(for: ProjectRoute.self) { route in
+                ProjectFolderView(route: route) { url in
+                    mode = .file  // opening a project file shows it
+                    open(url)
+                }
             }
         }
         .onOpenURL(perform: openShared)
@@ -54,9 +66,22 @@ struct BrowserView: View {
     }
 
     private func open(_ url: URL) {
-        RecentFilesStore.standard.add(url)
         isEditingAddress = false
+        if let repository = RepoLink(url) {
+            openProject(repository)
+            return
+        }
+        RecentFilesStore.standard.add(url)
+        projectPath.removeAll()  // back from any project folder to the file
         currentURLString = url.absoluteString  // the same URL keeps its screen: no reload
+    }
+
+    /// A repository (or folder) link: add it to Projects and show its files.
+    private func openProject(_ repository: RepoLink) {
+        Task {
+            let project = await ProjectStore.shared.add(repository)
+            projectPath = [ProjectRoute(projectID: project.id, folder: nil)]
+        }
     }
 }
 

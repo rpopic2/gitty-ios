@@ -80,6 +80,13 @@ nonisolated struct SymbolLanguage: Sendable {
 
     static let all: [SymbolLanguage] = [.c, .cSharp, .swift]
 
+    /// Every file extension that has symbols (for the project tree's code icon).
+    static let symbolFileExtensions: Set<String> = Set(all.flatMap(\.fileExtensions))
+
+    static func extensionHasSymbols(_ fileExtension: String) -> Bool {
+        symbolFileExtensions.contains(fileExtension.lowercased())
+    }
+
     static func forExtension(_ fileExtension: String) -> SymbolLanguage? {
         let ext = fileExtension.lowercased()
         return all.first { $0.fileExtensions.contains(ext) }

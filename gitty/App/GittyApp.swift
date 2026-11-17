@@ -4,9 +4,7 @@ import SwiftUI
 struct GittyApp: App {
     var body: some Scene {
         WindowGroup {
-            NavigationStack {
-                BrowserView()
-            }
+            BrowserView()  // has its own NavigationStack (project folders, symbol pages)
         }
     }
 }
