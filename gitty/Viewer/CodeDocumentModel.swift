@@ -17,7 +17,7 @@ final class CodeDocumentModel {
     }
 
     let url: URL
-    var fileName: String { url.lastPathComponent }
+    var fileName: String { url.displayFileName }
 
     private(set) var phase: Phase = .loading
     /// Top-level definitions of the text on screen, for Symbols mode.

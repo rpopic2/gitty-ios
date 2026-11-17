@@ -47,12 +47,19 @@ enum FileBarMetrics {
 
 /// Safari-style bottom bar that shows only the file name, with Safari's loading line.
 /// It looks like the Safari of the iOS version it runs on.
+/// Tapping it expands it when collapsed, and starts editing the address when expanded.
 struct FileBar: View {
+    /// Empty shows the "Enter URL" placeholder (start page).
     let title: String
     let isCollapsed: Bool
     let progressFraction: Double
     let isProgressVisible: Bool
     let onExpand: @MainActor () -> Void
+    let onEdit: @MainActor () -> Void
+
+    private func tap() {
+        if isCollapsed { onExpand() } else { onEdit() }
+    }
 
     var body: some View {
         Group {
@@ -65,12 +72,13 @@ struct FileBar: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { if isCollapsed { onExpand() } }
+        .onTapGesture { tap() }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
+        .accessibilityLabel(title.isEmpty ? Text("Enter URL") : Text(title))
         .accessibilityValue(isProgressVisible ? Text("Loading") : Text(""))
-        .accessibilityAddTraits(isCollapsed ? .isButton : [])
-        .accessibilityAction { if isCollapsed { onExpand() } }
+        .accessibilityHint(isCollapsed ? Text("Shows the bar") : Text("Edits the address"))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { tap() }
     }
 }
 
@@ -79,10 +87,10 @@ private struct BarTitle: View {
     let isCollapsed: Bool
 
     var body: some View {
-        Text(title)
+        Text(title.isEmpty ? "Enter URL" : title)
             .font(isCollapsed ? FileBarMetrics.collapsedTitleFont : FileBarMetrics.titleFont)
             .contentTransition(.interpolate)  // smooth size change between states
-            .foregroundStyle(.primary)
+            .foregroundStyle(title.isEmpty ? .secondary : .primary)
             .lineLimit(1)
             .truncationMode(.middle)
     }
@@ -159,15 +167,17 @@ struct BottomBarStack: View {
     let isCollapsed: Bool
     let progressFraction: Double
     let isProgressVisible: Bool
-    @Binding var mode: ViewMode
+    /// `nil` hides the mode selector (start page).
+    let mode: Binding<ViewMode>?
     let onExpand: @MainActor () -> Void
+    let onEdit: @MainActor () -> Void
 
     var body: some View {
         let stack = VStack(spacing: 0) {
             FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
-                    isProgressVisible: isProgressVisible, onExpand: onExpand)
-            if !isCollapsed {
-                ModeSelector(mode: $mode)
+                    isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit)
+            if !isCollapsed, let mode {
+                ModeSelector(mode: mode)
                     .padding(.bottom, FileBarMetrics.selectorBottomPadding)
                     .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))

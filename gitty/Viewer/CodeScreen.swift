@@ -4,6 +4,9 @@ import UIKit
 /// One file, full screen, with a Safari-style bar and the Photos-style mode selector at the bottom.
 struct CodeScreen: View {
     @State private var model: CodeDocumentModel
+    /// Tapping the bar edits the address; the editor covers the screen while it's open.
+    @Binding var isEditingAddress: Bool
+    let onOpen: @MainActor (URL) -> Void
     @SceneStorage("viewMode") private var mode: ViewMode = .file
 
     @Namespace private var symbolNamespace
@@ -14,21 +17,33 @@ struct CodeScreen: View {
     /// The card the Symbols list keeps in view.
     @State private var listSymbolID: Int?
 
-    init(url: URL, store: DocumentStore = .shared) {
+    init(url: URL, isEditingAddress: Binding<Bool>, onOpen: @escaping @MainActor (URL) -> Void,
+         store: DocumentStore = .shared) {
         _model = State(initialValue: CodeDocumentModel(url: url, store: store))
+        _isEditingAddress = isEditingAddress
+        self.onOpen = onOpen
     }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             content
-            BottomBarStack(
-                title: model.fileName,
-                isCollapsed: model.isBarCollapsed,
-                progressFraction: model.progressFraction,
-                isProgressVisible: model.isProgressVisible,
-                mode: $mode,
-                onExpand: { model.expandBarFromTap() }
-            )
+            if isEditingAddress {
+                AddressEditor(
+                    initialText: model.url.absoluteString,
+                    onOpen: onOpen,
+                    onCancel: { isEditingAddress = false }
+                )
+            } else {
+                BottomBarStack(
+                    title: model.fileName,
+                    isCollapsed: model.isBarCollapsed,
+                    progressFraction: model.progressFraction,
+                    isProgressVisible: model.isProgressVisible,
+                    mode: $mode,
+                    onExpand: { model.expandBarFromTap() },
+                    onEdit: { isEditingAddress = true }
+                )
+            }
         }
         .overlay(alignment: .top) { StatusBarBackdrop() }
         .toolbar(.hidden, for: .navigationBar)

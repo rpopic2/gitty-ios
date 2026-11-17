@@ -12,7 +12,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - **Photos-style mode selector** under the bar: **Project** (coming later), **File** (the raw file) and **Symbols**.
 - **Symbols:** every top-level function, type, macro and global as a card, like photos in Photos. Tap one to see only that symbol, swipe left and right to move between symbols, and swipe down to zoom back to the list. Symbols come from [tree-sitter](https://tree-sitter.github.io/) (C for now).
 
-For now the app opens one hard-coded file (`gitty/App/Sources.swift`).
+- **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source. Recently opened files are listed while you type. The last file reopens on launch.
 
 ## Project
 
@@ -45,7 +45,10 @@ The engine is the same for every language. It keeps only the outermost definitio
 
 | Path | What it does |
 |---|---|
-| `gitty/App/` | App entry point and the hard-coded source URL |
+| `gitty/App/` | App entry point, and the root view that picks the start page or the open file |
+| `gitty/Core/AddressParser.swift` | What was typed → the URL to load (https only, GitHub links → raw) |
+| `gitty/Core/RecentFilesStore.swift` | Recently opened URLs (UserDefaults) |
+| `gitty/Viewer/AddressEditor.swift` | Editing the address: URL field above the keyboard, recent files above it |
 | `gitty/Core/DocumentStore.swift` | Saved copies on disk and the network fetch: never expires, conditional refresh |
 | `gitty/Core/ReadingPositionStore.swift` | Saved reading position per file (UserDefaults) |
 | `gitty/Core/SymbolIndexer.swift` | Generic symbol engine: runs a language's query, keeps top-level definitions |
@@ -63,4 +66,4 @@ The engine is the same for every language. It keeps only the outermost definitio
 | `gitty/Viewer/SymbolPager.swift` | One symbol at a time: paging, zoom back, read-only text view |
 | `gitty/Viewer/CodeDocumentModel.swift` | Screen state: loading, refresh, progress, bar |
 | `gitty/Viewer/CodeScreen.swift` | The screen: modes, bottom stack, navigation to the pager |
-| `gittyTests/` | Decoder, document store, reading position and symbol indexer tests |
+| `gittyTests/` | Decoder, document store, reading position, symbol indexer, address and recents tests |
