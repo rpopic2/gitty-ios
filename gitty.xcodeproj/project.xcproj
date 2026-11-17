@@ -29,6 +29,12 @@
       "version": {
         "version": "0.23.5",
       },
+    }, {
+      "kind": "remote",
+      "repository": "https://github.com/alex-pinkus/tree-sitter-swift",
+      "version": {
+        "version": "0.7.4-with-generated-files",
+      },
     },
   ],
   "files": [
@@ -104,6 +110,10 @@
         }, {
           "package": "tree-sitter-c-sharp",
           "product-name": "TreeSitterCSharp",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "package": "tree-sitter-swift",
+          "product-name": "TreeSitterSwift",
           "build-phase": { "build-phase": "frameworks" },
         },
       ],
