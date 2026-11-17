@@ -87,6 +87,49 @@ struct SymbolIndexerTests {
         #expect(point.preview == "struct point {\n    int x, y;\n}")
     }
 
+    /// From main.c: top-level macro calls without `;` used to swallow the rest of the file.
+    @Test func topLevelMacroCallsDontSwallowTheFile() {
+        let source = """
+        #define LIST(x) x
+        OPT_GENERIC(i64)
+        enum inclusive {INCL, EXCL};
+
+        HASHMAP_GENERIC(symbol_t, 1024, hash_fnv_1a)
+        HASHMAP_GENERIC(type_t, 128, hash_fnv_1a)
+
+        int count = 0;
+
+        char first(const char *s)
+        {
+            if_opt(i64, value, = parse(s)) {
+                return 0;
+            }
+            return s[0];
+        }
+
+        void last(void) {}
+        """
+        guard case .symbols(let symbols) = SymbolIndexer.index(source, fileExtension: "c") else {
+            Issue.record("expected symbols")
+            return
+        }
+        #expect(symbols.map { "\($0.kind.rawValue) \($0.name)" } == [
+            "macro LIST",
+            "type enum inclusive",
+            "global count",
+            "function first",
+            "function last",
+        ])
+        #expect(symbols.first { $0.name == "first" }?.line == 10)
+    }
+
+    @Test func blankingKeepsLengthAndOnlyTouchesMacroCalls() {
+        let source = "OPT_GENERIC(i64)\nint x;\nstatic int\nfoo(int x);\nbar(a)\n{\n}\n" as NSString
+        let blanked = SymbolIndexer.blankingTopLevelMacroCalls(in: source)
+        #expect((blanked as NSString).length == source.length)
+        #expect(blanked == "                \nint x;\nstatic int\nfoo(int x);\nbar(a)\n{\n}\n")
+    }
+
     @Test func otherLanguagesAreUnsupported() {
         guard case .unsupportedLanguage = SymbolIndexer.index("fn main() {}", fileExtension: "rs") else {
             Issue.record("expected unsupportedLanguage")

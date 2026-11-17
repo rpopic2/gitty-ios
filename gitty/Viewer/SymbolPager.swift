@@ -14,30 +14,41 @@ struct SymbolPager: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 0) {
-                    ForEach(symbols) { symbol in
-                        ReadOnlyTextView(
-                            text: text(symbol) ?? NSAttributedString(),
-                            textID: symbol.id,
-                            bottomInset: SymbolCaption.reservedHeight,
-                            isCurrent: symbol.id == currentID
-                        )
-                        .containerRelativeFrame([.horizontal, .vertical])
+        // Pages sit inside a scroll view, where UIKit gives them no safe-area insets. Read the
+        // screen's safe area here and hand it to each page.
+        GeometryReader { proxy in
+            let safeArea = proxy.safeAreaInsets
+            let pageInsets = EdgeInsets(
+                top: safeArea.top,
+                leading: safeArea.leading,
+                bottom: safeArea.bottom + SymbolCaption.reservedHeight,
+                trailing: safeArea.trailing
+            )
+            ZStack(alignment: .bottom) {
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 0) {
+                        ForEach(symbols) { symbol in
+                            ReadOnlyTextView(
+                                text: text(symbol) ?? NSAttributedString(),
+                                textID: symbol.id,
+                                insets: pageInsets,
+                                isCurrent: symbol.id == currentID
+                            )
+                            .containerRelativeFrame([.horizontal, .vertical])
+                        }
                     }
+                    .scrollTargetLayout()
                 }
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.paging)
-            .scrollPosition(id: $currentID)
-            .scrollIndicators(.hidden)
-            .background(Color(uiColor: RawTextStyle.backgroundColor))
-            .ignoresSafeArea()
+                .scrollTargetBehavior(.paging)
+                .scrollPosition(id: $currentID)
+                .scrollIndicators(.hidden)
+                .background(Color(uiColor: RawTextStyle.backgroundColor))
+                .ignoresSafeArea()
 
-            if let current {
-                SymbolCaption(symbol: current)
-                    .padding(.bottom, 8)
+                if let current {
+                    SymbolCaption(symbol: current)
+                        .padding(.bottom, 8)
+                }
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -81,7 +92,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
     let text: NSAttributedString
     /// Text is replaced only when this changes.
     let textID: Int
-    let bottomInset: CGFloat
+    /// Safe area (plus room for the caption at the bottom) to keep the text clear of.
+    let insets: EdgeInsets
     /// Only the page on screen answers a tap on the status bar.
     let isCurrent: Bool
 
@@ -90,20 +102,31 @@ struct ReadOnlyTextView: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView(usingTextLayoutManager: false)
         RawTextStyle.configure(textView)
+        textView.contentInsetAdjustmentBehavior = .never  // insets come from `insets` instead
         textView.delegate = context.coordinator
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
         textView.scrollsToTop = isCurrent
-        if textView.contentInset.bottom != bottomInset {
-            textView.contentInset.bottom = bottomInset
-            textView.verticalScrollIndicatorInsets.bottom = bottomInset
+
+        let contentInset = UIEdgeInsets(top: insets.top, left: 0, bottom: insets.bottom, right: 0)
+        if textView.contentInset != contentInset {
+            textView.contentInset = contentInset
+            textView.verticalScrollIndicatorInsets = contentInset
         }
+        // Sideways, keep the text clear of the notch in landscape.
+        let base = RawTextStyle.insets
+        let containerInset = UIEdgeInsets(top: base.top, left: base.left + insets.leading,
+                                          bottom: base.bottom, right: base.right + insets.trailing)
+        if textView.textContainerInset != containerInset {
+            textView.textContainerInset = containerInset
+        }
+
         guard context.coordinator.textID != textID else { return }
         context.coordinator.textID = textID
         textView.attributedText = text
-        textView.contentOffset.y = -textView.adjustedContentInset.top
+        textView.contentOffset.y = -contentInset.top
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
