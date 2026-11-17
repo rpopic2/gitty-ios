@@ -12,7 +12,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - **Photos-style mode selector** under the bar: **Project** (coming later), **File** (the raw file) and **Symbols**.
 - **Symbols:** every top-level function, type, macro and global as a card, like photos in Photos. Tap one to see only that symbol, swipe left and right to move between symbols, and swipe down to zoom back to the list. Symbols come from [tree-sitter](https://tree-sitter.github.io/) (C for now).
 
-- **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source. Recently opened files, then every other file saved on the device, are listed while you type. Swipe one to delete it and its saved copy. The last file reopens on launch. You can also share a page from Safari to gitty.
+- **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source. Recently opened files, then every other file saved on the device, are listed while you type. Swipe one to delete it and its saved copy. The last file reopens on launch. You can also share a page from Safari to gitty, or use **Paste and Go**: long-press the bar, or pick it from the field's edit menu.
 
 ## Project
 

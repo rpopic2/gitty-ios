@@ -80,7 +80,7 @@ struct AddressEditor: View {
     }
 
     private var field: some View {
-        URLTextField(text: $text, onSubmit: submit)
+        URLTextField(text: $text, onSubmit: submit, onPasteAndGo: pasteAndGo)
             .padding(.horizontal, 14)
             .frame(height: FileBarMetrics.fieldHeight)
             .modifier(FieldBackground())
@@ -93,6 +93,12 @@ struct AddressEditor: View {
         recents = store.urls()
         saved.removeAll { $0 == url }
         Task { await DocumentStore.shared.delete(url) }
+    }
+
+    /// The field's edit menu ▸ Paste and Go: put the copied address in the field and go.
+    private func pasteAndGo(_ address: String) {
+        text = address
+        submit()
     }
 
     private func submit() {
@@ -112,8 +118,11 @@ struct AddressEditor: View {
 private struct URLTextField: UIViewRepresentable {
     @Binding var text: String
     let onSubmit: @MainActor () -> Void
+    let onPasteAndGo: @MainActor (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onSubmit: onSubmit) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit, onPasteAndGo: onPasteAndGo)
+    }
 
     func makeUIView(context: Context) -> UITextField {
         let field = UITextField()
@@ -144,16 +153,53 @@ private struct URLTextField: UIViewRepresentable {
     func updateUIView(_ field: UITextField, context: Context) {
         context.coordinator.text = $text
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onPasteAndGo = onPasteAndGo
         if field.text != text { field.text = text }
     }
 
     final class Coordinator: NSObject, UITextFieldDelegate {
         var text: Binding<String>
         var onSubmit: @MainActor () -> Void
+        var onPasteAndGo: @MainActor (String) -> Void
 
-        init(text: Binding<String>, onSubmit: @escaping @MainActor () -> Void) {
+        init(text: Binding<String>, onSubmit: @escaping @MainActor () -> Void,
+             onPasteAndGo: @escaping @MainActor (String) -> Void) {
             self.text = text
             self.onSubmit = onSubmit
+            self.onPasteAndGo = onPasteAndGo
+        }
+
+        /// Adds Paste and Go right after Paste, like Safari's address field.
+        func textField(_ textField: UITextField, editMenuForCharactersIn range: NSRange,
+                       suggestedActions: [UIMenuElement]) -> UIMenu? {
+            guard Clipboard.hasAddress else { return nil }  // nil: the standard menu
+            let pasteAndGo = UIAction(title: String(localized: "Paste and Go")) { [weak self] _ in
+                guard let address = Clipboard.address() else { return }
+                self?.onPasteAndGo(address)
+            }
+            let children = Self.inserting(pasteAndGo, afterPasteIn: suggestedActions)
+                ?? [pasteAndGo] + suggestedActions  // no Paste item found: put it first
+            return UIMenu(children: children)
+        }
+
+        /// `elements` with `action` right after the Paste command (searched in submenus too),
+        /// or `nil` if there's no Paste.
+        private static func inserting(_ action: UIAction, afterPasteIn elements: [UIMenuElement]) -> [UIMenuElement]? {
+            let paste = #selector(UIResponderStandardEditActions.paste(_:))
+            if let index = elements.firstIndex(where: { ($0 as? UICommand)?.action == paste }) {
+                var result = elements
+                result.insert(action, at: index + 1)
+                return result
+            }
+            for (index, element) in elements.enumerated() {
+                guard let menu = element as? UIMenu,
+                      let children = inserting(action, afterPasteIn: menu.children)
+                else { continue }
+                var result = elements
+                result[index] = menu.replacingChildren(children)
+                return result
+            }
+            return nil
         }
 
         @objc func textChanged(_ field: UITextField) {

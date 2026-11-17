@@ -7,8 +7,8 @@ import UIKit
 struct BrowserView: View {
     @AppStorage("currentURL") private var currentURLString = ""
     @State private var isEditingAddress = false
-    /// A shared address that isn't a URL we can open: shown in the editor so the reader sees why.
-    @State private var rejectedSharedAddress: String?
+    /// A shared or pasted address that isn't a URL we can open: shown in the editor with the reason.
+    @State private var rejectedAddress: String?
 
     private var currentURL: URL? {
         currentURLString.isEmpty ? nil : URL(string: currentURLString)
@@ -18,27 +18,37 @@ struct BrowserView: View {
         Group {
             if let url = currentURL {
                 CodeScreen(url: url, isEditingAddress: $isEditingAddress,
-                           rejectedAddress: rejectedSharedAddress, onOpen: open)
+                           rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
                     .id(url)  // a new URL gets a fresh screen and model
             } else {
                 StartScreen(isEditingAddress: $isEditingAddress,
-                            rejectedAddress: rejectedSharedAddress, onOpen: open)
+                            rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
             }
         }
         .onOpenURL(perform: openShared)
         .onChange(of: isEditingAddress) { _, isEditing in
-            if !isEditing { rejectedSharedAddress = nil }
+            if !isEditing { rejectedAddress = nil }
         }
     }
 
-    /// Same as typing the address into the bar.
     private func openShared(_ link: URL) {
         guard let address = AddressParser.sharedAddress(in: link) else { return }
+        openAddress(address)
+    }
+
+    /// Long-press on the bar ▸ Paste and Go.
+    private func pasteAndGo() {
+        guard let address = Clipboard.address() else { return }
+        openAddress(address)
+    }
+
+    /// Same as typing the address into the bar and tapping Go.
+    private func openAddress(_ address: String) {
         switch AddressParser.parse(address) {
         case .url(let url):
             open(url)
         case .invalid:
-            rejectedSharedAddress = address
+            rejectedAddress = address
             isEditingAddress = true
         }
     }
@@ -55,6 +65,7 @@ private struct StartScreen: View {
     @Binding var isEditingAddress: Bool
     let rejectedAddress: String?
     let onOpen: @MainActor (URL) -> Void
+    let onPasteAndGo: @MainActor () -> Void
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -72,7 +83,8 @@ private struct StartScreen: View {
                     isProgressVisible: false,
                     mode: nil,
                     onExpand: {},
-                    onEdit: { isEditingAddress = true }
+                    onEdit: { isEditingAddress = true },
+                    onPasteAndGo: onPasteAndGo
                 )
             }
         }

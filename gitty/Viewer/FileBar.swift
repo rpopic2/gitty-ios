@@ -56,6 +56,10 @@ struct FileBar: View {
     let isProgressVisible: Bool
     let onExpand: @MainActor () -> Void
     let onEdit: @MainActor () -> Void
+    /// Long-press menu, like Safari's: copy the current URL…
+    var copyText: String? = nil
+    /// …and Paste and Go.
+    var onPasteAndGo: (@MainActor () -> Void)? = nil
 
     private func tap() {
         if isCollapsed { onExpand() } else { onEdit() }
@@ -73,6 +77,16 @@ struct FileBar: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { tap() }
+        .contextMenu {
+            if let copyText {
+                Button("Copy", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = copyText
+                }
+            }
+            if let onPasteAndGo, Clipboard.hasAddress {
+                Button("Paste and Go", systemImage: "doc.on.clipboard") { onPasteAndGo() }
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title.isEmpty ? Text("Enter URL") : Text(title))
         .accessibilityValue(isProgressVisible ? Text("Loading") : Text(""))
@@ -171,11 +185,14 @@ struct BottomBarStack: View {
     let mode: Binding<ViewMode>?
     let onExpand: @MainActor () -> Void
     let onEdit: @MainActor () -> Void
+    var copyText: String? = nil
+    var onPasteAndGo: (@MainActor () -> Void)? = nil
 
     var body: some View {
         let stack = VStack(spacing: 0) {
             FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
-                    isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit)
+                    isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
+                    copyText: copyText, onPasteAndGo: onPasteAndGo)
             if !isCollapsed, let mode {
                 ModeSelector(mode: mode)
                     .padding(.bottom, FileBarMetrics.selectorBottomPadding)

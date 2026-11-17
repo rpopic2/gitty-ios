@@ -9,6 +9,7 @@ struct CodeScreen: View {
     /// A shared link that couldn't be opened: the editor starts with it and says why.
     let rejectedAddress: String?
     let onOpen: @MainActor (URL) -> Void
+    let onPasteAndGo: @MainActor () -> Void
     @SceneStorage("viewMode") private var mode: ViewMode = .file
 
     @Namespace private var symbolNamespace
@@ -20,11 +21,13 @@ struct CodeScreen: View {
     @State private var listSymbolID: Int?
 
     init(url: URL, isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
-         onOpen: @escaping @MainActor (URL) -> Void, store: DocumentStore = .shared) {
+         onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
+         store: DocumentStore = .shared) {
         _model = State(initialValue: CodeDocumentModel(url: url, store: store))
         _isEditingAddress = isEditingAddress
         self.rejectedAddress = rejectedAddress
         self.onOpen = onOpen
+        self.onPasteAndGo = onPasteAndGo
     }
 
     var body: some View {
@@ -46,7 +49,9 @@ struct CodeScreen: View {
                     isProgressVisible: model.isProgressVisible,
                     mode: $mode,
                     onExpand: { model.expandBarFromTap() },
-                    onEdit: { isEditingAddress = true }
+                    onEdit: { isEditingAddress = true },
+                    copyText: model.url.absoluteString,
+                    onPasteAndGo: onPasteAndGo
                 )
             }
         }
