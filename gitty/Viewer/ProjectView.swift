@@ -25,10 +25,15 @@ struct ProjectView: View {
             if !files.isEmpty {
                 Section("Files") {
                     ForEach(files) { file in
-                        FileRow(file: file, isCurrent: file.url == currentURL)
+                        let isCurrent = file.url == currentURL
+                        FileRow(file: file, isCurrent: isCurrent)
                             .contentShape(Rectangle())
                             .onTapGesture { onOpen(file.url) }
-                            .accessibilityAddTraits(.isButton)
+                            // The open file looks selected, like a sidebar row in Files or Mail.
+                            .listRowBackground(isCurrent
+                                ? Color.accentColor
+                                : Color(uiColor: .secondarySystemGroupedBackground))
+                            .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
                             .swipeActions {
                                 Button(role: .destructive) { delete(file.url) } label: {
                                     Label("Delete", systemImage: "trash")
@@ -67,33 +72,31 @@ private struct FileEntry: Identifiable {
     var id: URL { url }
 }
 
-/// Name and location, a mark on the open file, and an icon on files that open offline.
+/// Name and location, and an icon on files that open offline. The open file's row is drawn
+/// selected: white text on the accent color (the background is set by the list).
 private struct FileRow: View {
     let file: FileEntry
     let isCurrent: Bool
+
+    private var primary: Color { isCurrent ? .white : .primary }
+    private var secondary: Color { isCurrent ? .white.opacity(0.8) : .secondary }
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(file.url.displayFileName)
-                    .fontWeight(isCurrent ? .semibold : .regular)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(primary)
                     .lineLimit(1)
                 Text(file.url.displayLocation)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             Spacer(minLength: 0)
-            if isCurrent {
-                Image(systemName: "eye")
-                    .foregroundStyle(.tint)
-                    .accessibilityLabel("Open now")
-            }
             if file.isSaved {
                 Image(systemName: "arrow.down.circle.fill")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondary)
                     .accessibilityLabel("Saved on this device")
             }
         }
