@@ -141,12 +141,19 @@ nonisolated enum SymbolSearch {
     /// (`Circle.draw` for `draw`, `struct point` for `point`, `Pi, Tau` for `Tau`). Surrounding
     /// punctuation is ignored; text with spaces or no letters isn't a name.
     static func definition(named selection: String, in symbols: [CodeSymbol]) -> CodeSymbol? {
+        guard let name = searchTerm(fromSelection: selection) else { return nil }
+        if let exact = symbols.first(where: { $0.name == name }) { return exact }
+        return symbols.first { definedNames(in: $0.name).contains(name) }
+    }
+
+    /// The name in a text selection, for Jump to Definition: punctuation around it trimmed
+    /// (`read_regable(` → `read_regable`). `nil` when it isn't a single name (spaces, no letters).
+    static func searchTerm(fromSelection selection: String) -> String? {
         let name = selection.trimmingCharacters(in: CharacterSet.alphanumerics.union(["_"]).inverted)
         guard !name.isEmpty, !name.contains(where: \.isWhitespace),
               name.contains(where: { $0.isLetter || $0 == "_" })
         else { return nil }
-        if let exact = symbols.first(where: { $0.name == name }) { return exact }
-        return symbols.first { definedNames(in: $0.name).contains(name) }
+        return name
     }
 
     /// The names a symbol defines: the part after the last dot, split at ", ", each without a

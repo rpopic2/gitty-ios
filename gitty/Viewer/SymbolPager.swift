@@ -15,6 +15,9 @@ struct SymbolPager: View {
     let onWillClose: @MainActor (Int) -> Void
     /// Tapping the caption: close the pager and show the symbol in File.
     let onShowInFile: @MainActor (CodeSymbol) -> Void
+    /// Jump to Definition in a page's text menu: close the pager and search symbols.
+    let symbolSearchTerm: @MainActor (String) -> String?
+    let onSearchSymbols: @MainActor (String) -> Void
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
@@ -24,13 +27,17 @@ struct SymbolPager: View {
     init(symbols: [CodeSymbol], initialID: Int, currentID: Binding<Int?>,
          text: @escaping @MainActor (CodeSymbol) -> NSAttributedString?,
          onWillClose: @escaping @MainActor (Int) -> Void,
-         onShowInFile: @escaping @MainActor (CodeSymbol) -> Void) {
+         onShowInFile: @escaping @MainActor (CodeSymbol) -> Void,
+         symbolSearchTerm: @escaping @MainActor (String) -> String?,
+         onSearchSymbols: @escaping @MainActor (String) -> Void) {
         self.symbols = symbols
         self.initialID = initialID
         _currentID = currentID
         self.text = text
         self.onWillClose = onWillClose
         self.onShowInFile = onShowInFile
+        self.symbolSearchTerm = symbolSearchTerm
+        self.onSearchSymbols = onSearchSymbols
     }
 
     private var visibleID: Int { scrolledID ?? initialID }
@@ -59,7 +66,9 @@ struct SymbolPager: View {
                                     text: text(symbol) ?? NSAttributedString(),
                                     textID: symbol.id,
                                     insets: pageInsets,
-                                    isCurrent: symbol.id == visibleID
+                                    isCurrent: symbol.id == visibleID,
+                                    symbolSearchTerm: symbolSearchTerm,
+                                    onSearchSymbols: onSearchSymbols
                                 )
                                 .containerRelativeFrame([.horizontal, .vertical])
                             }
@@ -173,6 +182,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
     let insets: EdgeInsets
     /// Only the page on screen answers a tap on the status bar.
     let isCurrent: Bool
+    /// Jump to Definition in the text menu (see `CodeTextView`).
+    var symbolSearchTerm: (@MainActor (String) -> String?)? = nil
+    var onSearchSymbols: (@MainActor (String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -186,6 +198,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
     func updateUIView(_ textView: UITextView, context: Context) {
         textView.scrollsToTop = isCurrent
+        context.coordinator.symbolSearchTerm = symbolSearchTerm
+        context.coordinator.onSearchSymbols = onSearchSymbols
 
         let contentInset = UIEdgeInsets(top: insets.top, left: 0, bottom: insets.bottom, right: 0)
         if textView.contentInset != contentInset {
@@ -208,10 +222,15 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var textID: Int?
+        var symbolSearchTerm: (@MainActor (String) -> String?)?
+        var onSearchSymbols: (@MainActor (String) -> Void)?
 
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
-            RawTextStyle.editMenu(from: suggestedActions)
+            let extra = RawTextStyle.jumpToDefinitionItems(for: range, in: textView,
+                                                           searchTerm: symbolSearchTerm,
+                                                           onSearch: onSearchSymbols)
+            return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
         }
     }
 }

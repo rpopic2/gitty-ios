@@ -73,6 +73,22 @@ nonisolated enum RawTextStyle {
         UIMenu(children: extra + keptMenuElements(suggested))
     }
 
+    /// "Jump to Definition" for a selected name: searches symbols for it. Empty when the selection
+    /// isn't a name or finds nothing (`searchTerm` decides).
+    @MainActor
+    static func jumpToDefinitionItems(
+        for range: NSRange, in textView: UITextView,
+        searchTerm: (@MainActor (String) -> String?)?, onSearch: (@MainActor (String) -> Void)?
+    ) -> [UIMenuElement] {
+        guard let searchTerm, let onSearch, range.length > 0, range.length <= 200,
+              NSMaxRange(range) <= textView.textStorage.length,
+              let term = searchTerm(textView.textStorage.attributedSubstring(from: range).string)
+        else { return [] }
+        let action = UIAction(title: String(localized: "Jump to Definition"),
+                              image: UIImage(systemName: "magnifyingglass")) { _ in onSearch(term) }
+        return [action]
+    }
+
     @MainActor
     private static func keptMenuElements(_ elements: [UIMenuElement]) -> [UIMenuElement] {
         let keptActions: Set<Selector> = [

@@ -65,7 +65,9 @@ struct CodeScreen: View {
                 text: model.text(of:),
                 // Not on tap: center the card only when heading back, so it zooms back into view.
                 onWillClose: { listSymbolID = $0 },
-                onShowInFile: { showInFile($0) }
+                onShowInFile: { showInFile($0) },
+                symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
+                onSearchSymbols: { searchSymbols(for: $0) }
             )
             .navigationTransition(.zoom(sourceID: pagerSymbolID ?? -1, in: symbolNamespace))
         }
@@ -112,8 +114,8 @@ struct CodeScreen: View {
                     onRefresh: { await model.refresh() },
                     onBarCollapsedChange: { model.setBarCollapsed($0) },
                     isActive: mode == .file,
-                    findDefinition: { SymbolSearch.definition(named: $0, in: indexedSymbols) },
-                    onJumpToDefinition: { jumpToDefinition($0) },
+                    symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
+                    onSearchSymbols: { searchSymbols(for: $0) },
                     scrollRequest: fileScrollRequest
                 )
                 .ignoresSafeArea()
@@ -299,12 +301,21 @@ struct CodeScreen: View {
         }
     }
 
-    /// File's Jump to Definition: open the symbol's page. Paging goes through every symbol, and
-    /// swiping down comes back to File.
-    private func jumpToDefinition(_ symbol: CodeSymbol) {
-        pagerSymbols = indexedSymbols
-        pagerSymbolID = symbol.id
-        openedSymbolID = symbol.id
+    /// Jump to Definition: the selected name, if it finds at least one symbol.
+    private func symbolSearchTerm(forSelection selection: String) -> String? {
+        guard let term = SymbolSearch.searchTerm(fromSelection: selection),
+              !SymbolSearch.matches(term, in: indexedSymbols).isEmpty
+        else { return nil }
+        return term
+    }
+
+    /// Jump to Definition (from File or a symbol's page): put the name in the symbol search and
+    /// focus it. In File the matches list above the field; from a symbol's page, the page
+    /// closes and the Symbols cards filter.
+    private func searchSymbols(for name: String) {
+        openedSymbolID = nil
+        symbolQuery = name
+        isSearchingSymbols = true
     }
 
     /// The pager's Show in File: close it, switch to File and put the symbol at the top.

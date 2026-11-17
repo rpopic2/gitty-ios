@@ -31,10 +31,11 @@ struct CodeTextView: UIViewRepresentable {
     /// False while another mode (Symbols) covers the file. The view stays alive to keep its place.
     var isActive = true
     var positionStore: ReadingPositionStore = .standard
-    /// Jump to Definition in the text menu: the symbol a selected name refers to…
-    var findDefinition: (@MainActor (String) -> CodeSymbol?)? = nil
-    /// …and what to do when it's chosen.
-    var onJumpToDefinition: (@MainActor (CodeSymbol) -> Void)? = nil
+    /// Jump to Definition in the text menu: the search term for a selected name (`nil` hides the
+    /// item)…
+    var symbolSearchTerm: (@MainActor (String) -> String?)? = nil
+    /// …and searching symbols for it.
+    var onSearchSymbols: (@MainActor (String) -> Void)? = nil
     /// Scrolls to a place in the file once per request (Show in File).
     var scrollRequest: FileScrollRequest? = nil
 
@@ -72,8 +73,8 @@ struct CodeTextView: UIViewRepresentable {
         textView.scrollsToTop = isActive
         coordinator.documentURL = documentURL
         coordinator.positionStore = positionStore
-        coordinator.findDefinition = findDefinition
-        coordinator.onJumpToDefinition = onJumpToDefinition
+        coordinator.symbolSearchTerm = symbolSearchTerm
+        coordinator.onSearchSymbols = onSearchSymbols
 
         if textView.contentInset.bottom != bottomBarHeight {
             textView.contentInset.bottom = bottomBarHeight
@@ -111,8 +112,8 @@ struct CodeTextView: UIViewRepresentable {
         var onBarCollapsedChange: (@MainActor (Bool) -> Void)?
         var barTracker = BarCollapseTracker()
         var barTapCount = 0
-        var findDefinition: (@MainActor (String) -> CodeSymbol?)?
-        var onJumpToDefinition: (@MainActor (CodeSymbol) -> Void)?
+        var symbolSearchTerm: (@MainActor (String) -> String?)?
+        var onSearchSymbols: (@MainActor (String) -> Void)?
 
         /// Characters laid out per slice. Most source files fit in one slice, so they are fully
         /// laid out before the first frame; bigger files finish over the next few frames.
@@ -254,22 +255,10 @@ struct CodeTextView: UIViewRepresentable {
 
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
-            var extra: [UIMenuElement] = []
-            if let symbol = definition(forSelectionIn: range, of: textView), let onJumpToDefinition {
-                extra.append(UIAction(title: String(localized: "Jump to Definition"),
-                                      image: UIImage(systemName: "arrow.right.circle")) { _ in
-                    onJumpToDefinition(symbol)
-                })
-            }
+            let extra = RawTextStyle.jumpToDefinitionItems(for: range, in: textView,
+                                                           searchTerm: symbolSearchTerm,
+                                                           onSearch: onSearchSymbols)
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
-        }
-
-        /// The symbol the selected name refers to, if the selection is a name defined in this file.
-        private func definition(forSelectionIn range: NSRange, of textView: UITextView) -> CodeSymbol? {
-            guard let findDefinition, range.length > 0, range.length <= 200,
-                  NSMaxRange(range) <= textView.textStorage.length
-            else { return nil }
-            return findDefinition(textView.textStorage.attributedSubstring(from: range).string)
         }
 
         // MARK: Show in File

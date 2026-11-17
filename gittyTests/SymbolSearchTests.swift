@@ -77,6 +77,14 @@ struct SymbolSearchTests {
         #expect(SymbolSearch.definition(named: "missing", in: all) == nil)
     }
 
+    @Test func searchTermFromSelection() {
+        #expect(SymbolSearch.searchTerm(fromSelection: " read_regable(") == "read_regable")
+        #expect(SymbolSearch.searchTerm(fromSelection: "Circle") == "Circle")
+        #expect(SymbolSearch.searchTerm(fromSelection: "read regable") == nil)
+        #expect(SymbolSearch.searchTerm(fromSelection: "42") == nil)
+        #expect(SymbolSearch.searchTerm(fromSelection: "();") == nil)
+    }
+
     @Test func memberNameIsTheLastPart() {
         #expect(SymbolSearch.memberName("list.icollection<t>.isreadonly") == "isreadonly")
         #expect(SymbolSearch.memberName("main") == "main")
