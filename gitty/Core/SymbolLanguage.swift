@@ -2,6 +2,7 @@ import Foundation
 import SwiftTreeSitter
 import TreeSitterC
 import TreeSitterCSharp
+import TreeSitterSwift
 
 /// What Symbols mode needs to know about one language. Adding a language means adding its
 /// tree-sitter grammar package, a `symbols-<name>.scm` query in `gitty/Languages/`, and an entry
@@ -67,7 +68,17 @@ nonisolated struct SymbolLanguage: Sendable {
                              "record_declaration", "enum_declaration"]
     )
 
-    static let all: [SymbolLanguage] = [.c, .cSharp]
+    static let swift = SymbolLanguage(
+        name: "Swift",
+        fileExtensions: ["swift"],
+        language: Language(tree_sitter_swift()),
+        queryResource: "symbols-swift",
+        bodyNodeTypes: ["function_body", "computed_property", "lambda_literal", "willset_didset_block"],
+        // `extension` is a class_declaration in this grammar.
+        containerNodeTypes: ["class_declaration", "protocol_declaration"]
+    )
+
+    static let all: [SymbolLanguage] = [.c, .cSharp, .swift]
 
     static func forExtension(_ fileExtension: String) -> SymbolLanguage? {
         let ext = fileExtension.lowercased()

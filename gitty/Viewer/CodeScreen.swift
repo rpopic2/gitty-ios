@@ -151,7 +151,7 @@ struct CodeScreen: View {
                 ContentUnavailableView(
                     "No Symbols for This File Type",
                     systemImage: "doc.questionmark",
-                    description: Text("Symbols are available for C and C# files for now.")
+                    description: Text("Symbols are available for C, C# and Swift files for now.")
                 )
             }
         }

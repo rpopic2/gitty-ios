@@ -11,7 +11,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - **Safari-style bottom bar:** shows the file name, collapses while you scroll down, and shows a thin loading line only while downloading. Liquid Glass on iOS 26+, the Safari 18 style on iOS 18.
 - **Photos-style mode selector** under the bar: **Project**, **File** (the raw file) and **Symbols**.
 - **Project:** every file you've opened or saved, recent first, with an icon on files that open offline. Tap one to open it in File mode, or swipe one to delete it and its saved copy. With no file open, the start page shows this list with the address bar ready.
-- **Symbols:** every definition as a card, like photos in Photos. For C that's top-level functions, types, macros and globals. For C#, each type is followed by its members, named `Type.Member`. Tap a card to see only that symbol, swipe left and right to move between symbols, and swipe down to zoom back to the list. Symbols come from [tree-sitter](https://tree-sitter.github.io/).
+- **Symbols:** every definition as a card, like photos in Photos. For C that's top-level functions, types, macros and globals. For C# and Swift, each type (and Swift extension) is followed by its members, named `Type.Member`. Tap a card to see only that symbol, swipe left and right to move between symbols, and swipe down to zoom back to the list. Symbols come from [tree-sitter](https://tree-sitter.github.io/).
 
 - **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source, with a banner (and a long-press menu item) to open it in the default browser instead. The last file reopens on launch. You can also share a page from Safari to gitty, or use **Paste and Go**: long-press the bar, or pick it from the field's edit menu.
 
@@ -30,6 +30,7 @@ Symbols mode uses tree-sitter. Choose File ▸ Add Package Dependencies… and a
 | `https://github.com/tree-sitter/swift-tree-sitter` | 0.25.0 | SwiftTreeSitter |
 | `https://github.com/tree-sitter/tree-sitter-c` | 0.24.2 | TreeSitterC |
 | `https://github.com/tree-sitter/tree-sitter-c-sharp` | 0.23.5 | TreeSitterCSharp |
+| `https://github.com/alex-pinkus/tree-sitter-swift` | 0.7.4-with-generated-files (exact) | TreeSitterSwift |
 
 ### Opening links from Safari (one time, in Xcode)
 
@@ -66,7 +67,7 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/Core/DocumentStore.swift` | Saved copies on disk and the network fetch: never expires, conditional refresh |
 | `gitty/Core/ReadingPositionStore.swift` | Saved reading position per file (UserDefaults) |
 | `gitty/Core/SymbolIndexer.swift` | Generic symbol engine: runs a language's query, keeps top-level definitions |
-| `gitty/Core/SymbolLanguage.swift` | Languages for Symbols mode: grammar, file extensions, query, body and container node types (C, C#) |
+| `gitty/Core/SymbolLanguage.swift` | Languages for Symbols mode: grammar, file extensions, query, body and container node types (C, C#, Swift) |
 | `gitty/Core/CMacroBlanking.swift` | C-only pass before parsing: blanks top-level macro calls such as `OPT_GENERIC(i64)` |
 | `gitty/Languages/symbols-*.scm` | One symbols query per language (tags.scm conventions) |
 | `gitty/Core/CodeSymbol.swift` | A symbol: name, kind, range (with its leading comment), line, preview |

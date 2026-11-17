@@ -110,7 +110,7 @@ nonisolated enum SymbolIndexer {
                 if language.bodyNodeTypes.contains(type) { continue nextDefinition }
                 if let enclosing = byID[ancestor.id] {
                     guard language.containerNodeTypes.contains(type) else { continue nextDefinition }
-                    containers.insert(builder.simpleName(of: enclosing), at: 0)
+                    containers.insert(builder.bareName(of: enclosing), at: 0)
                 }
                 current = ancestor.parent
             }
@@ -124,11 +124,17 @@ nonisolated enum SymbolIndexer {
 nonisolated private struct SymbolBuilder {
     let text: NSString
 
+    /// The name without its prefix, used to qualify members: `Circle.hash` for a member of
+    /// `extension Circle`.
+    func bareName(of definition: SymbolIndexer.Definition) -> String {
+        definition.names.map { text.substring(with: $0) }.joined(separator: ", ")
+    }
+
     /// The definition's own name: its `@name`s joined with ", ", after its `@name.prefix`. A space
     /// follows a prefix that ends in a letter or digit (`struct point`, `operator +`), but not one
     /// that ends in punctuation (`~Circle`, `IList.Add`).
     func simpleName(of definition: SymbolIndexer.Definition) -> String {
-        let names = definition.names.map { text.substring(with: $0) }.joined(separator: ", ")
+        let names = bareName(of: definition)
         guard let range = definition.prefix else { return names }
         let prefix = text.substring(with: range)
         guard let last = prefix.last else { return names }
