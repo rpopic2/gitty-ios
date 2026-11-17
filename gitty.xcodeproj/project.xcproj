@@ -10,6 +10,21 @@
       "Base",
     ],
   },
+  "packages": [
+    {
+      "kind": "remote",
+      "repository": "https://github.com/tree-sitter/swift-tree-sitter",
+      "version": {
+        "up-to-next-major-version": "0.25.0",
+      },
+    }, {
+      "kind": "remote",
+      "repository": "https://github.com/tree-sitter/tree-sitter-c",
+      "version": {
+        "version": "0.24.2",
+      },
+    },
+  ],
   "files": [
     { "kind": "folder", "path": "gitty", "target-membership": [ "gitty" ] },
     {
@@ -30,6 +45,21 @@
         "compile-sources",
         "frameworks",
         "resources",
+      ],
+      "package-product-members": [
+        {
+          "package": "swift-tree-sitter",
+          "product-name": "SwiftTreeSitter",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "package": "swift-tree-sitter",
+          "product-name": "SwiftTreeSitterLayer",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "package": "tree-sitter-c",
+          "product-name": "TreeSitterC",
+          "build-phase": { "build-phase": "frameworks" },
+        },
       ],
       "build-settings": {
         "CODE_SIGN_STYLE": "Automatic",
