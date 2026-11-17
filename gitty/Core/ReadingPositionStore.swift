@@ -33,6 +33,10 @@ nonisolated struct ReadingPositionStore: @unchecked Sendable {
         defaults.set(data, forKey: key(for: url))
     }
 
+    func remove(for url: URL) {
+        defaults.removeObject(forKey: key(for: url))
+    }
+
     private func key(for url: URL) -> String {
         "readingPosition:" + url.absoluteString
     }

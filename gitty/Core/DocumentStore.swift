@@ -72,6 +72,22 @@ actor DocumentStore {
         return StoredDocument(url: url, data: data, metadata: metadata)
     }
 
+    /// What's saved on the device, newest download first. Reads the small metadata files only.
+    func savedDocuments() -> [DocumentMetadata] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        return files
+            .filter { $0.pathExtension == "json" }
+            .compactMap { try? JSONDecoder().decode(DocumentMetadata.self, from: Data(contentsOf: $0)) }
+            .sorted { $0.fetchedAt > $1.fetchedAt }
+    }
+
+    /// Deletes the saved copy of `url`, if there is one. Opening it again downloads it.
+    func delete(_ url: URL) {
+        let paths = paths(for: url)
+        try? FileManager.default.removeItem(at: paths.metadata)
+        try? FileManager.default.removeItem(at: paths.data)
+    }
+
     /// Downloads `url`. If a copy exists, asks the server whether it changed first.
     /// On any failure the saved copy is left untouched.
     ///

@@ -71,6 +71,25 @@ struct DocumentStoreTests {
         #expect(cached.metadata.etag == "\"v2\"")
     }
 
+    @Test func listsSavedDocumentsNewestFirst() async throws {
+        let other = URL(string: "https://example.com/other.c")!
+        StubURLProtocol.reset(handler: ok("hello"))
+        let store = makeStore()
+        _ = try await store.fetch(url)
+        try await Task.sleep(for: .milliseconds(10))  // distinct fetchedAt
+        _ = try await store.fetch(other)
+        #expect(await store.savedDocuments().map(\.url) == [other, url])
+    }
+
+    @Test func deleteRemovesTheSavedCopy() async throws {
+        StubURLProtocol.reset(handler: ok("hello"))
+        let store = makeStore()
+        _ = try await store.fetch(url)
+        await store.delete(url)
+        #expect(await store.cached(url) == nil)
+        #expect(await store.savedDocuments().isEmpty)
+    }
+
     @Test func failedRefreshKeepsCopy() async throws {
         StubURLProtocol.reset(handler: ok("hello"))
         let store = makeStore()

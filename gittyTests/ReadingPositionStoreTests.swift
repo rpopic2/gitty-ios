@@ -32,6 +32,12 @@ struct ReadingPositionStoreTests {
         #expect(store.position(for: other)?.characterIndex == 20)
     }
 
+    @Test func removeForgetsThePosition() {
+        store.save(ReadingPosition(characterIndex: 10, lineOffset: 0), for: url)
+        store.remove(for: url)
+        #expect(store.position(for: url) == nil)
+    }
+
     @Test func laterSaveReplacesEarlier() {
         store.save(ReadingPosition(characterIndex: 10, lineOffset: 0), for: url)
         store.save(.top, for: url)
