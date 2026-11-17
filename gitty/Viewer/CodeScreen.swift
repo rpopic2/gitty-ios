@@ -36,38 +36,9 @@ struct CodeScreen: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             content
-            if isEditingAddress {
-                AddressEditor(
-                    initialText: rejectedAddress ?? model.url.absoluteString,
-                    showsInitialError: rejectedAddress != nil,
-                    onOpen: onOpen,
-                    onCancel: { isEditingAddress = false }
-                )
-                .id(rejectedAddress)  // a new rejected share restarts the editor with it
-            } else {
-                BottomBarStack(
-                    title: model.fileName,
-                    isCollapsed: model.isBarCollapsed,
-                    progressFraction: model.progressFraction,
-                    isProgressVisible: model.isProgressVisible,
-                    mode: $mode,
-                    onExpand: { model.expandBarFromTap() },
-                    onEdit: { isEditingAddress = true },
-                    copyText: model.url.absoluteString,
-                    onPasteAndGo: onPasteAndGo,
-                    onOpenInBrowser: model.isWebPage ? openInBrowser : nil
-                )
-            }
+            bottom
         }
-        .overlay(alignment: .top) {
-            if model.isWebPage, mode == .file, !isWebPageBannerDismissed, !isEditingAddress {
-                WebPageBanner(
-                    onOpenInBrowser: openInBrowser,
-                    onDismiss: { withAnimation(.smooth(duration: 0.25)) { isWebPageBannerDismissed = true } }
-                )
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
+        .overlay(alignment: .top) { webPageBanner }
         .overlay(alignment: .top) { StatusBarBackdrop() }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }
@@ -195,6 +166,51 @@ struct CodeScreen: View {
         content()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    /// The address editor while editing, otherwise the bar with the mode selector.
+    @ViewBuilder
+    private var bottom: some View {
+        if isEditingAddress {
+            AddressEditor(
+                initialText: rejectedAddress ?? model.url.absoluteString,
+                showsInitialError: rejectedAddress != nil,
+                onOpen: onOpen,
+                onCancel: { isEditingAddress = false }
+            )
+            .id(rejectedAddress)  // a new rejected share restarts the editor with it
+        } else {
+            BottomBarStack(
+                title: model.fileName,
+                isCollapsed: model.isBarCollapsed,
+                progressFraction: model.progressFraction,
+                isProgressVisible: model.isProgressVisible,
+                mode: $mode,
+                onExpand: { model.expandBarFromTap() },
+                onEdit: { isEditingAddress = true },
+                copyText: model.url.absoluteString,
+                onPasteAndGo: onPasteAndGo,
+                onOpenInBrowser: openInBrowserAction
+            )
+        }
+    }
+
+    /// "This is a web page." at the top of File mode, until dismissed.
+    @ViewBuilder
+    private var webPageBanner: some View {
+        if model.isWebPage, mode == .file, !isWebPageBannerDismissed, !isEditingAddress {
+            WebPageBanner(
+                onOpenInBrowser: { openInBrowser() },
+                onDismiss: { withAnimation(.smooth(duration: 0.25)) { isWebPageBannerDismissed = true } }
+            )
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    /// The bar menu's Open in Browser: only for web pages.
+    private var openInBrowserAction: (@MainActor () -> Void)? {
+        guard model.isWebPage else { return nil }
+        return { openInBrowser() }
     }
 
     /// Hands the URL to the default browser.
