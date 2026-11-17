@@ -23,15 +23,49 @@
       "version": {
         "version": "0.24.2",
       },
+    }, {
+      "kind": "remote",
+      "repository": "https://github.com/tree-sitter/tree-sitter-c-sharp",
+      "version": {
+        "version": "0.23.5",
+      },
     },
   ],
   "files": [
-    { "kind": "folder", "path": "gitty", "target-membership": [ "gitty" ] },
     {
+      "kind": "folder",
+      "path": "gitty",
+      "target-membership": [
+        "gitty",
+      ],
+      "membership-exceptions": [
+        {
+          "target": "gitty",
+          "exclusions": [
+            "Info.plist",
+          ],
+        },
+      ],
+    }, {
+      "kind": "folder",
+      "path": "gittyShare",
+      "target-membership": [
+        "gittyShare",
+      ],
+      "membership-exceptions": [
+        {
+          "target": "gittyShare",
+          "exclusions": [
+            "Info.plist",
+          ],
+        },
+      ],
+    }, {
       "kind": "group",
       "name": "Products",
       "children": [
         { "path": "<PRODUCTS>/gitty.app", "id": "000000000000000000000120", "type": "wrapper.application", "index": false },
+        { "path": "<PRODUCTS>/gittyShare.appex", "id": "CC206BBD30ACB39300B1130C", "type": "wrapper.app-extension", "index": false, "target-membership": [ { "build-phase": "gitty/copy/Embed Foundation Extensions", "header-preservation": "remove-on-copy" } ] },
       ],
     },
   ],
@@ -41,10 +75,18 @@
       "id": "000000000000000100000000",
       "product": "Products/gitty.app",
       "product-type": "application",
+      "dependencies": [
+        "gittyShare",
+      ],
       "build-phases": [
         "compile-sources",
         "frameworks",
         "resources",
+        {
+          "kind": "copy",
+          "name": "Embed Foundation Extensions",
+          "bundle-base-path": "plugins-directory",
+        },
       ],
       "package-product-members": [
         {
@@ -59,6 +101,10 @@
           "package": "tree-sitter-c",
           "product-name": "TreeSitterC",
           "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "package": "tree-sitter-c-sharp",
+          "product-name": "TreeSitterCSharp",
+          "build-phase": { "build-phase": "frameworks" },
         },
       ],
       "build-settings": {
@@ -69,6 +115,7 @@
         "ENABLE_PREVIEWS": "YES",
         "ENABLE_USER_SELECTED_FILES": "readonly",
         "GENERATE_INFOPLIST_FILE": "YES",
+        "INFOPLIST_FILE": "gitty/Info.plist",
         "INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]": "YES",
         "INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]": "YES",
         "INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]": "YES",
@@ -94,6 +141,43 @@
         "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
         "SWIFT_VERSION": "5.0",
         "TARGETED_DEVICE_FAMILY": "1,2",
+      },
+    }, {
+      "name": "gittyShare",
+      "id": "CC206BBC30ACB39300B1130C",
+      "product": "Products/gittyShare.appex",
+      "product-type": "app-extension",
+      "build-phases": [
+        "compile-sources",
+        "frameworks",
+        "resources",
+      ],
+      "build-settings": {
+        "CODE_SIGN_STYLE": "Automatic",
+        "CURRENT_PROJECT_VERSION": "1",
+        "DEVELOPMENT_TEAM": "LX9FWYVCGZ",
+        "GENERATE_INFOPLIST_FILE": "YES",
+        "INFOPLIST_FILE": "gittyShare/Info.plist",
+        "INFOPLIST_KEY_CFBundleDisplayName": "gittyShare",
+        "INFOPLIST_KEY_NSHumanReadableCopyright": "",
+        "IPHONEOS_DEPLOYMENT_TARGET": "18.0",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/Frameworks",
+          "@executable_path/../../Frameworks",
+        ],
+        "MARKETING_VERSION": "1.0",
+        "PRODUCT_BUNDLE_IDENTIFIER": "com.rpopic.gitty.gittyShare",
+        "PRODUCT_NAME": "$(TARGET_NAME)",
+        "SDKROOT": "iphoneos",
+        "SKIP_INSTALL": "YES",
+        "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
+        "SWIFT_APPROACHABLE_CONCURRENCY": "YES",
+        "SWIFT_EMIT_LOC_STRINGS": "YES",
+        "SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY": "YES",
+        "SWIFT_VERSION": "5.0",
+        "TARGETED_DEVICE_FAMILY": "1,2",
+        "VALIDATE_PRODUCT[config=Release]": "YES",
       },
     },
   ],
@@ -168,5 +252,5 @@
     "XROS_DEPLOYMENT_TARGET": "27.2",
   },
   "last-upgrade": "27.0",
-  "last-swift-update": "27.0",
+  "last-swift-update": "27.2",
 }
