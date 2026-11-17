@@ -52,7 +52,7 @@ struct AddressEditor: View {
         .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
         .padding(.vertical, 8)
         .modifier(EditorBarBackground())
-        .modifier(HidesKeyboardOnSwipeDown())
+        .modifier(OnSwipeDown())  // hides the keyboard; the address stays open for editing
     }
 
     private var field: some View {
@@ -236,13 +236,21 @@ struct SymbolSearchEditor: View {
         .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
         .padding(.vertical, 8)
         .modifier(EditorBarBackground())
-        .modifier(HidesKeyboardOnSwipeDown())
+        // Swiping down on the search bar closes the search, like Done (the filter stays).
+        .modifier(OnSwipeDown { onDone() })
     }
 }
 
-/// Swiping down on the bar hides the keyboard and takes focus off the field (it stays open).
-/// The lists above do the same as soon as they scroll.
-private struct HidesKeyboardOnSwipeDown: ViewModifier {
+/// A downward swipe on the bar: hides the keyboard, then runs `action` (if any). The address
+/// editor only hides the keyboard (the field stays open); the symbol search closes.
+/// The lists above the bars hide the keyboard as soon as they scroll.
+private struct OnSwipeDown: ViewModifier {
+    var action: (@MainActor () -> Void)?
+
+    init(_ action: (@MainActor () -> Void)? = nil) {
+        self.action = action
+    }
+
     func body(content: Content) -> some View {
         content.simultaneousGesture(
             DragGesture(minimumDistance: 12).onEnded { drag in
@@ -250,6 +258,7 @@ private struct HidesKeyboardOnSwipeDown: ViewModifier {
                 guard down > 20, down > abs(drag.translation.width) else { return }
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                 to: nil, from: nil, for: nil)
+                action?()
             }
         )
     }

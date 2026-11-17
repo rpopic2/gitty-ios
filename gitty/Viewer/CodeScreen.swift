@@ -171,7 +171,8 @@ struct CodeScreen: View {
                     pagerSymbolID = symbol.id
                     openedSymbolID = symbol.id
                 },
-                onBarCollapsedChange: { model.setBarCollapsed($0) }
+                onBarCollapsedChange: { model.setBarCollapsed($0) },
+                onPullDown: closeSearchOnPullDown
             )
         case .unsupportedLanguage:
             placeholder {
@@ -292,13 +293,19 @@ struct CodeScreen: View {
                 }
             }
         case .ready:
-            SymbolResultsList(symbols: shownSymbols) { symbol in
+            SymbolResultsList(symbols: shownSymbols, onPullDown: { isSearchingSymbols = false }) { symbol in
                 isSearchingSymbols = false
                 pagerSymbols = shownSymbols
                 pagerSymbolID = symbol.id
                 openedSymbolID = symbol.id
             }
         }
+    }
+
+    /// While searching in Symbols mode, pulling the cards down past their top closes the search.
+    private var closeSearchOnPullDown: (@MainActor () -> Void)? {
+        guard isSearchingSymbols else { return nil }
+        return { isSearchingSymbols = false }
     }
 
     /// Jump to Definition: the selected name, if it finds at least one symbol.

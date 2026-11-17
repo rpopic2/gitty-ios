@@ -14,9 +14,29 @@ struct SymbolsView: View {
     let barTapCount: Int
     let onOpen: @MainActor (CodeSymbol) -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
+    /// While searching: pulling the cards down past their top closes the search field.
+    let onPullDown: (@MainActor () -> Void)?
 
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
+
+    // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
+    // doesn't warn about converting it to `@Sendable`.
+    init(symbols: [CodeSymbol], isActive: Bool, namespace: Namespace.ID, scrolledID: Binding<Int?>,
+         isBarCollapsed: Bool, barTapCount: Int,
+         onOpen: @escaping @MainActor (CodeSymbol) -> Void,
+         onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
+         onPullDown: (@MainActor () -> Void)? = nil) {
+        self.symbols = symbols
+        self.isActive = isActive
+        self.namespace = namespace
+        _scrolledID = scrolledID
+        self.isBarCollapsed = isBarCollapsed
+        self.barTapCount = barTapCount
+        self.onOpen = onOpen
+        self.onBarCollapsedChange = onBarCollapsedChange
+        self.onPullDown = onPullDown
+    }
 
     var body: some View {
         ScrollView {
@@ -36,6 +56,7 @@ struct SymbolsView: View {
         .scrollPosition(id: $scrolledID, anchor: .center)
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .scrollDisabled(!isActive)  // hidden: stays put, and leaves status-bar taps to File
+        .modifier(OnPullDownPastTop(action: isActive ? onPullDown : nil))
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .background(Color(uiColor: .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in
@@ -63,10 +84,14 @@ struct SymbolsView: View {
 /// Symbol search results over File: a compact list (kind, name, line), best matches first.
 struct SymbolResultsList: View {
     let symbols: [CodeSymbol]
+    /// Pulling the list down past its top closes the search.
+    let onPullDown: @MainActor () -> Void
     let onOpen: @MainActor (CodeSymbol) -> Void
 
-    init(symbols: [CodeSymbol], onOpen: @escaping @MainActor (CodeSymbol) -> Void) {
+    init(symbols: [CodeSymbol], onPullDown: @escaping @MainActor () -> Void,
+         onOpen: @escaping @MainActor (CodeSymbol) -> Void) {
         self.symbols = symbols
+        self.onPullDown = onPullDown
         self.onOpen = onOpen
     }
 
@@ -93,7 +118,26 @@ struct SymbolResultsList: View {
         }
         .listStyle(.plain)
         .contentMargins(.bottom, FileBarMetrics.fieldHeight + 16, for: .scrollContent)  // the search field
+        .modifier(OnPullDownPastTop(action: onPullDown))
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
+    }
+}
+
+/// Pulling a list down past its top (about 60pt) runs `action` once per pull, like pulling down
+/// to dismiss a sheet. `nil` turns it off.
+struct OnPullDownPastTop: ViewModifier {
+    let action: (@MainActor () -> Void)?
+
+    init(action: (@MainActor () -> Void)?) {
+        self.action = action
+    }
+
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y < -geometry.contentInsets.top - 60
+        } action: { wasPulled, isPulled in
+            if isPulled && !wasPulled { action?() }
+        }
     }
 }
 
