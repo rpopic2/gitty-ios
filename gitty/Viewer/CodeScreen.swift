@@ -22,6 +22,11 @@ struct CodeScreen: View {
     @State private var pagerSymbolID: Int?
     /// The card the Symbols list keeps in view.
     @State private var listSymbolID: Int?
+    /// The symbols the pager pages through: the list's (search results) when a card was tapped,
+    /// all of them after Jump to Definition from File.
+    @State private var pagerSymbols: [CodeSymbol] = []
+    /// Show in File: where File should scroll to.
+    @State private var fileScrollRequest: FileScrollRequest?
     /// Symbol search in Symbols mode. Stays until it's cleared or another file is opened.
     @State private var symbolQuery = ""
     @State private var isSearchingSymbols = false
@@ -51,12 +56,13 @@ struct CodeScreen: View {
         }
         .navigationDestination(item: $openedSymbolID) { openedID in
             SymbolPager(
-                symbols: shownSymbols,  // the pager pages through the search results only
+                symbols: pagerSymbols,
                 initialID: openedID,
                 currentID: $pagerSymbolID,
                 text: model.text(of:),
                 // Not on tap: center the card only when heading back, so it zooms back into view.
-                onWillClose: { listSymbolID = $0 }
+                onWillClose: { listSymbolID = $0 },
+                onShowInFile: { showInFile($0) }
             )
             .navigationTransition(.zoom(sourceID: pagerSymbolID ?? -1, in: symbolNamespace))
         }
@@ -102,7 +108,10 @@ struct CodeScreen: View {
                     barTapCount: model.barTapCount,
                     onRefresh: { await model.refresh() },
                     onBarCollapsedChange: { model.setBarCollapsed($0) },
-                    isActive: mode == .file
+                    isActive: mode == .file,
+                    findDefinition: { SymbolSearch.definition(named: $0, in: indexedSymbols) },
+                    onJumpToDefinition: { jumpToDefinition($0) },
+                    scrollRequest: fileScrollRequest
                 )
                 .ignoresSafeArea()
                 .opacity(mode == .file ? 1 : 0)
@@ -153,6 +162,7 @@ struct CodeScreen: View {
                 isBarCollapsed: model.isBarCollapsed,
                 barTapCount: model.barTapCount,
                 onOpen: { symbol in
+                    pagerSymbols = shownSymbols  // page through the search results only
                     pagerSymbolID = symbol.id
                     openedSymbolID = symbol.id
                 },
@@ -236,6 +246,21 @@ struct CodeScreen: View {
     private var openInBrowserAction: (@MainActor () -> Void)? {
         guard model.isWebPage else { return nil }
         return { openInBrowser() }
+    }
+
+    /// File's Jump to Definition: open the symbol's page. Paging goes through every symbol, and
+    /// swiping down comes back to File.
+    private func jumpToDefinition(_ symbol: CodeSymbol) {
+        pagerSymbols = indexedSymbols
+        pagerSymbolID = symbol.id
+        openedSymbolID = symbol.id
+    }
+
+    /// The pager's Show in File: close it, switch to File and put the symbol at the top.
+    private func showInFile(_ symbol: CodeSymbol) {
+        openedSymbolID = nil
+        mode = .file
+        fileScrollRequest = FileScrollRequest(characterIndex: symbol.range.location)
     }
 
     /// Hands the URL to the default browser.

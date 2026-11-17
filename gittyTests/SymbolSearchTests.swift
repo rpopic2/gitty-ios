@@ -60,6 +60,23 @@ struct SymbolSearchTests {
         #expect(SymbolSearch.words(of: "Circle.operator +") == ["circle", "operator"])
     }
 
+    @Test func definitionPrefersTheFullName() {
+        let all = symbols(["Circle", "Circle.Circle", "Circle.draw", "IShape.draw"])
+        #expect(SymbolSearch.definition(named: "Circle", in: all)?.name == "Circle")
+        #expect(SymbolSearch.definition(named: "draw", in: all)?.name == "Circle.draw")  // first in file
+    }
+
+    @Test func definitionNamesAndSelections() {
+        let all = symbols(["struct point", "Circle.Pi, Tau", "read_regable", "SQUARE"])
+        #expect(SymbolSearch.definition(named: "point", in: all)?.name == "struct point")
+        #expect(SymbolSearch.definition(named: "Tau", in: all)?.name == "Circle.Pi, Tau")
+        #expect(SymbolSearch.definition(named: " read_regable(", in: all)?.name == "read_regable")
+        #expect(SymbolSearch.definition(named: "SQUARE", in: all)?.name == "SQUARE")
+        #expect(SymbolSearch.definition(named: "read regable", in: all) == nil)  // not a single name
+        #expect(SymbolSearch.definition(named: "42", in: all) == nil)
+        #expect(SymbolSearch.definition(named: "missing", in: all) == nil)
+    }
+
     @Test func memberNameIsTheLastPart() {
         #expect(SymbolSearch.memberName("list.icollection<t>.isreadonly") == "isreadonly")
         #expect(SymbolSearch.memberName("main") == "main")

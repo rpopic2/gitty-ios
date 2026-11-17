@@ -13,6 +13,8 @@ struct SymbolPager: View {
     let text: @MainActor (CodeSymbol) -> NSAttributedString?
     /// Called with the symbol on screen when the pager starts to close (the swipe down begins).
     let onWillClose: @MainActor (Int) -> Void
+    /// The caption's Show in File button: close the pager and show the symbol in File.
+    let onShowInFile: @MainActor (CodeSymbol) -> Void
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
@@ -21,12 +23,14 @@ struct SymbolPager: View {
     // doesn't warn about converting it to `@Sendable`.
     init(symbols: [CodeSymbol], initialID: Int, currentID: Binding<Int?>,
          text: @escaping @MainActor (CodeSymbol) -> NSAttributedString?,
-         onWillClose: @escaping @MainActor (Int) -> Void) {
+         onWillClose: @escaping @MainActor (Int) -> Void,
+         onShowInFile: @escaping @MainActor (CodeSymbol) -> Void) {
         self.symbols = symbols
         self.initialID = initialID
         _currentID = currentID
         self.text = text
         self.onWillClose = onWillClose
+        self.onShowInFile = onShowInFile
     }
 
     private var visibleID: Int { scrolledID ?? initialID }
@@ -77,7 +81,7 @@ struct SymbolPager: View {
                 }
 
                 if let current {
-                    SymbolCaption(symbol: current)
+                    SymbolCaption(symbol: current, onShowInFile: { onShowInFile(current) })
                         .padding(.bottom, 8)
                 }
             }
@@ -117,6 +121,7 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
 /// "name · Line N" in a small capsule at the bottom, in place of the bar and selector.
 private struct SymbolCaption: View {
     let symbol: CodeSymbol
+    let onShowInFile: @MainActor () -> Void
 
     static let height: CGFloat = 36
     /// Space kept free under the text so its end isn't hidden behind the caption.
@@ -132,9 +137,21 @@ private struct SymbolCaption: View {
             Text("· Line \(symbol.line)")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+            Divider()
+                .frame(height: 16)
+                .padding(.horizontal, 2)
+            Button(action: onShowInFile) {
+                Label("Show in File", systemImage: "doc.text")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
         }
         .font(.subheadline)
-        .padding(.horizontal, 16)
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
         .frame(height: Self.height)
         .padding(.horizontal, 24)
 

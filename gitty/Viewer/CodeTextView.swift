@@ -31,6 +31,12 @@ struct CodeTextView: UIViewRepresentable {
     /// False while another mode (Symbols) covers the file. The view stays alive to keep its place.
     var isActive = true
     var positionStore: ReadingPositionStore = .standard
+    /// Jump to Definition in the text menu: the symbol a selected name refers to…
+    var findDefinition: (@MainActor (String) -> CodeSymbol?)? = nil
+    /// …and what to do when it's chosen.
+    var onJumpToDefinition: (@MainActor (CodeSymbol) -> Void)? = nil
+    /// Scrolls to a place in the file once per request (Show in File).
+    var scrollRequest: FileScrollRequest? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -66,6 +72,8 @@ struct CodeTextView: UIViewRepresentable {
         textView.scrollsToTop = isActive
         coordinator.documentURL = documentURL
         coordinator.positionStore = positionStore
+        coordinator.findDefinition = findDefinition
+        coordinator.onJumpToDefinition = onJumpToDefinition
 
         if textView.contentInset.bottom != bottomBarHeight {
             textView.contentInset.bottom = bottomBarHeight
@@ -80,6 +88,11 @@ struct CodeTextView: UIViewRepresentable {
             coordinator.version = version
             textView.attributedText = text.attributedString
             coordinator.layOutWholeDocument(textView)
+        }
+
+        if let request = scrollRequest, request.id != coordinator.lastScrollRequestID {
+            coordinator.lastScrollRequestID = request.id
+            coordinator.scroll(toCharacter: request.characterIndex, in: textView)
         }
     }
 
@@ -98,6 +111,8 @@ struct CodeTextView: UIViewRepresentable {
         var onBarCollapsedChange: (@MainActor (Bool) -> Void)?
         var barTracker = BarCollapseTracker()
         var barTapCount = 0
+        var findDefinition: (@MainActor (String) -> CodeSymbol?)?
+        var onJumpToDefinition: (@MainActor (CodeSymbol) -> Void)?
 
         /// Characters laid out per slice. Most source files fit in one slice, so they are fully
         /// laid out before the first frame; bigger files finish over the next few frames.
@@ -239,7 +254,34 @@ struct CodeTextView: UIViewRepresentable {
 
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
-            RawTextStyle.editMenu(from: suggestedActions)
+            var extra: [UIMenuElement] = []
+            if let symbol = definition(forSelectionIn: range, of: textView), let onJumpToDefinition {
+                extra.append(UIAction(title: String(localized: "Jump to Definition"),
+                                      image: UIImage(systemName: "arrow.right.circle")) { _ in
+                    onJumpToDefinition(symbol)
+                })
+            }
+            return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
+        }
+
+        /// The symbol the selected name refers to, if the selection is a name defined in this file.
+        private func definition(forSelectionIn range: NSRange, of textView: UITextView) -> CodeSymbol? {
+            guard let findDefinition, range.length > 0, range.length <= 200,
+                  NSMaxRange(range) <= textView.textStorage.length
+            else { return nil }
+            return findDefinition(textView.textStorage.attributedSubstring(from: range).string)
+        }
+
+        // MARK: Show in File
+
+        var lastScrollRequestID: UUID?
+
+        /// Puts the line with `characterIndex` at the top of the screen and remembers it as the
+        /// reading position.
+        func scroll(toCharacter characterIndex: Int, in textView: UITextView) {
+            pendingRestore = ReadingPosition(characterIndex: characterIndex, lineOffset: 0)
+            restorePendingPosition(in: textView)
+            saveCurrentPosition()
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -253,6 +295,13 @@ struct CodeTextView: UIViewRepresentable {
             if let change { onBarCollapsedChange?(change) }
         }
     }
+}
+
+/// A request to scroll File to a place, such as the start of a symbol (Show in File). A new
+/// request (a new `id`) scrolls again, even to the same place.
+nonisolated struct FileScrollRequest: Equatable, Sendable {
+    let id = UUID()
+    let characterIndex: Int
 }
 
 /// A `UITextView` that reports width changes, since wrapped text must then be laid out again.

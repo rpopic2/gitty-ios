@@ -134,6 +134,29 @@ nonisolated enum SymbolSearch {
         return assign(0)
     }
 
+    // MARK: - Jump to Definition
+
+    /// The symbol a selected name refers to, for Jump to Definition: a symbol whose full name is
+    /// the name (`Circle` the type) first, otherwise the first one in file order whose own name is
+    /// (`Circle.draw` for `draw`, `struct point` for `point`, `Pi, Tau` for `Tau`). Surrounding
+    /// punctuation is ignored; text with spaces or no letters isn't a name.
+    static func definition(named selection: String, in symbols: [CodeSymbol]) -> CodeSymbol? {
+        let name = selection.trimmingCharacters(in: CharacterSet.alphanumerics.union(["_"]).inverted)
+        guard !name.isEmpty, !name.contains(where: \.isWhitespace),
+              name.contains(where: { $0.isLetter || $0 == "_" })
+        else { return nil }
+        if let exact = symbols.first(where: { $0.name == name }) { return exact }
+        return symbols.first { definedNames(in: $0.name).contains(name) }
+    }
+
+    /// The names a symbol defines: the part after the last dot, split at ", ", each without a
+    /// leading keyword (`struct point` → `point`).
+    static func definedNames(in name: String) -> [String] {
+        memberName(name)
+            .components(separatedBy: ", ")
+            .compactMap { $0.split(separator: " ").last.map(String.init) }
+    }
+
     /// The part after the last dot: `draw` in `Circle.draw`, `IsReadOnly` in
     /// `List.ICollection<T>.IsReadOnly`. Names without a dot are their own member name.
     static func memberName(_ name: String) -> String {
