@@ -36,14 +36,16 @@ struct CodeScreen: View {
         .onChange(of: mode) {
             model.setBarCollapsed(false)
         }
-        .onChange(of: pagerSymbolID) { _, id in
-            // Keep the card of the symbol on screen in view, so swiping down zooms back to it.
-            if let id { listSymbolID = id }
-        }
         .navigationDestination(item: $openedSymbolID) { openedID in
-            SymbolPager(symbols: indexedSymbols, initialID: openedID, currentID: $pagerSymbolID,
-                        text: model.text(of:))
-                .navigationTransition(.zoom(sourceID: pagerSymbolID ?? -1, in: symbolNamespace))
+            SymbolPager(
+                symbols: indexedSymbols,
+                initialID: openedID,
+                currentID: $pagerSymbolID,
+                text: model.text(of:),
+                // Not on tap: center the card only when heading back, so it zooms back into view.
+                onWillClose: { listSymbolID = $0 }
+            )
+            .navigationTransition(.zoom(sourceID: pagerSymbolID ?? -1, in: symbolNamespace))
         }
         .alert("Couldn’t Refresh", isPresented: refreshAlertIsPresented, presenting: model.refreshError) { _ in
             Button("OK", role: .cancel) {}

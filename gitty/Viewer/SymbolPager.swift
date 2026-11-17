@@ -11,6 +11,8 @@ struct SymbolPager: View {
     /// The symbol on screen. Reported only after the pager has opened on `initialID`.
     @Binding var currentID: Int?
     let text: @MainActor (CodeSymbol) -> NSAttributedString?
+    /// Called with the symbol on screen when the pager starts to close (the swipe down begins).
+    let onWillClose: @MainActor (Int) -> Void
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
@@ -69,10 +71,33 @@ struct SymbolPager: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .background(WillDisappearObserver { onWillClose(visibleID) })
         .onChange(of: scrolledID) { _, id in
             // Until the pager is on the tapped symbol, don't let the first layout overwrite it.
             guard isPositioned, let id else { return }
             currentID = id
+        }
+    }
+}
+
+/// Reports when the screen it's on starts to go away. For the zoom transition that's the moment
+/// the swipe down begins. It's also called if the swipe is then cancelled, which is harmless here.
+/// SwiftUI has no hook for this, so it uses a UIKit view controller's `viewWillDisappear`.
+private struct WillDisappearObserver: UIViewControllerRepresentable {
+    let onWillDisappear: @MainActor () -> Void
+
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.onWillDisappear = onWillDisappear
+    }
+
+    final class Controller: UIViewController {
+        var onWillDisappear: (@MainActor () -> Void)?
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            onWillDisappear?()
         }
     }
 }
