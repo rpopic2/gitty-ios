@@ -81,6 +81,22 @@ struct CodeScreen: View {
 
     @ViewBuilder
     private var content: some View {
+        ZStack {
+            document
+                .accessibilityHidden(mode == .project)
+            // Project lists files, so it doesn't depend on this file loading (or failing with a 404).
+            if mode == .project {
+                ProjectView(currentURL: model.url) { url in
+                    mode = .file  // opening a file shows it
+                    onOpen(url)
+                }
+            }
+        }
+    }
+
+    /// The open file in File and Symbols mode: loading, loaded, or the reason it couldn't load.
+    @ViewBuilder
+    private var document: some View {
         switch model.phase {
         case .loading:
             // A blank page while the progress line runs, as in Safari.
@@ -105,16 +121,8 @@ struct CodeScreen: View {
                 .allowsHitTesting(mode == .file)
                 .accessibilityHidden(mode != .file)
 
-                switch mode {
-                case .file:
-                    EmptyView()
-                case .symbols:
+                if mode == .symbols {
                     symbols
-                case .project:
-                    ProjectView(currentURL: model.url) { url in
-                        mode = .file  // opening a file shows it
-                        onOpen(url)
-                    }
                 }
             }
         case .failed(let message):
