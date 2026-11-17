@@ -53,7 +53,7 @@ struct ProjectView: View {
         }
         .listStyle(.insetGrouped)
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
-        .scrollDismissesKeyboard(.interactively)
+        .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .task { await reload() }  // every time the list appears
     }
 

@@ -52,6 +52,7 @@ struct AddressEditor: View {
         .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
         .padding(.vertical, 8)
         .modifier(EditorBarBackground())
+        .modifier(HidesKeyboardOnSwipeDown())
     }
 
     private var field: some View {
@@ -235,6 +236,22 @@ struct SymbolSearchEditor: View {
         .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
         .padding(.vertical, 8)
         .modifier(EditorBarBackground())
+        .modifier(HidesKeyboardOnSwipeDown())
+    }
+}
+
+/// Swiping down on the bar hides the keyboard and takes focus off the field (it stays open).
+/// The lists above do the same as soon as they scroll.
+private struct HidesKeyboardOnSwipeDown: ViewModifier {
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            DragGesture(minimumDistance: 12).onEnded { drag in
+                let down = drag.translation.height
+                guard down > 20, down > abs(drag.translation.width) else { return }
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                to: nil, from: nil, for: nil)
+            }
+        )
     }
 }
 

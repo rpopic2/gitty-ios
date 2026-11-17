@@ -34,7 +34,7 @@ struct SymbolsView: View {
             .scrollTargetLayout()
         }
         .scrollPosition(id: $scrolledID, anchor: .center)
-        .scrollDismissesKeyboard(.interactively)
+        .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .scrollDisabled(!isActive)  // hidden: stays put, and leaves status-bar taps to File
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .background(Color(uiColor: .systemGroupedBackground))
@@ -93,7 +93,7 @@ struct SymbolResultsList: View {
         }
         .listStyle(.plain)
         .contentMargins(.bottom, FileBarMetrics.fieldHeight + 16, for: .scrollContent)  // the search field
-        .scrollDismissesKeyboard(.interactively)
+        .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
     }
 }
 

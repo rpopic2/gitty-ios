@@ -13,7 +13,7 @@ struct SymbolPager: View {
     let text: @MainActor (CodeSymbol) -> NSAttributedString?
     /// Called with the symbol on screen when the pager starts to close (the swipe down begins).
     let onWillClose: @MainActor (Int) -> Void
-    /// The caption's Show in File button: close the pager and show the symbol in File.
+    /// Tapping the caption: close the pager and show the symbol in File.
     let onShowInFile: @MainActor (CodeSymbol) -> Void
 
     @State private var scrolledID: Int?
@@ -119,6 +119,7 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
 }
 
 /// "name · Line N" in a small capsule at the bottom, in place of the bar and selector.
+/// Tapping it shows the symbol in File.
 private struct SymbolCaption: View {
     let symbol: CodeSymbol
     let onShowInFile: @MainActor () -> Void
@@ -128,6 +129,16 @@ private struct SymbolCaption: View {
     static let reservedHeight: CGFloat = height + 16
 
     var body: some View {
+        Button(action: onShowInFile) {
+            capsule
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(Text("Shows this symbol in File"))
+    }
+
+    @ViewBuilder
+    private var capsule: some View {
         let label = HStack(spacing: 6) {
             Image(systemName: symbol.kind.systemImage)
                 .foregroundStyle(.tint)
@@ -137,28 +148,18 @@ private struct SymbolCaption: View {
             Text("· Line \(symbol.line)")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-            Divider()
-                .frame(height: 16)
-                .padding(.horizontal, 2)
-            Button(action: onShowInFile) {
-                Label("Show in File", systemImage: "doc.text")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.tint)
         }
         .font(.subheadline)
-        .padding(.leading, 16)
-        .padding(.trailing, 8)
+        .padding(.horizontal, 16)
         .frame(height: Self.height)
-        .padding(.horizontal, 24)
+        .contentShape(Capsule())
 
         if #available(iOS 26.0, *) {
-            label.glassEffect(.regular, in: Capsule())
+            label.glassEffect(.regular.interactive(), in: Capsule())
+                .padding(.horizontal, 24)
         } else {
             label.background(.bar, in: Capsule())
+                .padding(.horizontal, 24)
         }
     }
 }
