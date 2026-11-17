@@ -22,6 +22,8 @@ final class CodeDocumentModel {
     private(set) var phase: Phase = .loading
     /// Top-level definitions of the text on screen, for Symbols mode.
     private(set) var symbolIndex: SymbolIndex = .indexing
+    /// The download is a web page (raw HTML), so the viewer offers to open it in the browser.
+    private(set) var isWebPage = false
     private(set) var isBarCollapsed = false
     /// Goes up each time the reader taps the collapsed bar, so the text view can stop a fling.
     private(set) var barTapCount = 0
@@ -99,6 +101,7 @@ final class CodeDocumentModel {
             RawTextStyle.render(document)
         }.value
         let version = UUID()
+        isWebPage = WebPageDetector.isWebPage(contentType: document.metadata.contentType, data: document.data)
         phase = .loaded(rendered, version: version)
         await indexSymbols(of: rendered, version: version)
     }

@@ -60,6 +60,8 @@ struct FileBar: View {
     var copyText: String? = nil
     /// …and Paste and Go.
     var onPasteAndGo: (@MainActor () -> Void)? = nil
+    /// Only for web pages.
+    var onOpenInBrowser: (@MainActor () -> Void)? = nil
 
     private func tap() {
         if isCollapsed { onExpand() } else { onEdit() }
@@ -85,6 +87,9 @@ struct FileBar: View {
             }
             if let onPasteAndGo, Clipboard.hasAddress {
                 Button("Paste and Go", systemImage: "doc.on.clipboard") { onPasteAndGo() }
+            }
+            if let onOpenInBrowser {
+                Button("Open in Browser", systemImage: "safari") { onOpenInBrowser() }
             }
         }
         .accessibilityElement(children: .ignore)
@@ -187,12 +192,13 @@ struct BottomBarStack: View {
     let onEdit: @MainActor () -> Void
     var copyText: String? = nil
     var onPasteAndGo: (@MainActor () -> Void)? = nil
+    var onOpenInBrowser: (@MainActor () -> Void)? = nil
 
     var body: some View {
         let stack = VStack(spacing: 0) {
             FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
                     isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
-                    copyText: copyText, onPasteAndGo: onPasteAndGo)
+                    copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser)
             if !isCollapsed, let mode {
                 ModeSelector(mode: mode)
                     .padding(.bottom, FileBarMetrics.selectorBottomPadding)

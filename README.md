@@ -13,7 +13,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - **Project:** every file you've opened or saved, recent first, with an icon on files that open offline. Tap one to open it in File mode, or swipe one to delete it and its saved copy. With no file open, the start page shows this list with the address bar ready.
 - **Symbols:** every definition as a card, like photos in Photos. For C that's top-level functions, types, macros and globals. For C#, each type is followed by its members, named `Type.Member`. Tap a card to see only that symbol, swipe left and right to move between symbols, and swipe down to zoom back to the list. Symbols come from [tree-sitter](https://tree-sitter.github.io/).
 
-- **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source. The last file reopens on launch. You can also share a page from Safari to gitty, or use **Paste and Go**: long-press the bar, or pick it from the field's edit menu.
+- **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source, with a banner (and a long-press menu item) to open it in the default browser instead. The last file reopens on launch. You can also share a page from Safari to gitty, or use **Paste and Go**: long-press the bar, or pick it from the field's edit menu.
 
 ## Project
 
@@ -61,6 +61,7 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/App/` | App entry point, and the root view that picks the start page or the open file |
 | `gitty/Core/AddressParser.swift` | What was typed → the URL to load (https only, GitHub links → raw) |
 | `gitty/Core/RecentFilesStore.swift` | Recently opened URLs (UserDefaults) |
+| `gitty/Core/WebPageDetector.swift` | Whether a download is a web page (served as HTML) |
 | `gitty/Viewer/AddressEditor.swift` | Editing the address: URL field above the keyboard, Paste and Go |
 | `gitty/Core/DocumentStore.swift` | Saved copies on disk and the network fetch: never expires, conditional refresh |
 | `gitty/Core/ReadingPositionStore.swift` | Saved reading position per file (UserDefaults) |

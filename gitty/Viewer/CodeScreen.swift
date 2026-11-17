@@ -4,6 +4,9 @@ import UIKit
 /// One file, full screen, with a Safari-style bar and the Photos-style mode selector at the bottom.
 struct CodeScreen: View {
     @State private var model: CodeDocumentModel
+    @Environment(\.openURL) private var openURL
+    /// The reader closed the "This is a web page." banner for this file.
+    @State private var isWebPageBannerDismissed = false
     /// Tapping the bar edits the address; the editor covers the screen while it's open.
     @Binding var isEditingAddress: Bool
     /// A shared link that couldn't be opened: the editor starts with it and says why.
@@ -51,8 +54,18 @@ struct CodeScreen: View {
                     onExpand: { model.expandBarFromTap() },
                     onEdit: { isEditingAddress = true },
                     copyText: model.url.absoluteString,
-                    onPasteAndGo: onPasteAndGo
+                    onPasteAndGo: onPasteAndGo,
+                    onOpenInBrowser: model.isWebPage ? openInBrowser : nil
                 )
+            }
+        }
+        .overlay(alignment: .top) {
+            if model.isWebPage, mode == .file, !isWebPageBannerDismissed, !isEditingAddress {
+                WebPageBanner(
+                    onOpenInBrowser: openInBrowser,
+                    onDismiss: { withAnimation(.smooth(duration: 0.25)) { isWebPageBannerDismissed = true } }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .overlay(alignment: .top) { StatusBarBackdrop() }
@@ -182,6 +195,11 @@ struct CodeScreen: View {
         content()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    /// Hands the URL to the default browser.
+    private func openInBrowser() {
+        openURL(model.url)
     }
 
     private var refreshAlertIsPresented: Binding<Bool> {
