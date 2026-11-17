@@ -86,6 +86,15 @@ private struct URLTextField: UIViewRepresentable {
     let onSubmit: @MainActor () -> Void
     let onPasteAndGo: @MainActor (String) -> Void
 
+    // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
+    // doesn't warn about converting it to `@Sendable`.
+    init(text: Binding<String>, onSubmit: @escaping @MainActor () -> Void,
+         onPasteAndGo: @escaping @MainActor (String) -> Void) {
+        _text = text
+        self.onSubmit = onSubmit
+        self.onPasteAndGo = onPasteAndGo
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, onSubmit: onSubmit, onPasteAndGo: onPasteAndGo)
     }

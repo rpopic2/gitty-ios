@@ -6,11 +6,18 @@ import UIKit
 /// the list and the device.
 struct ProjectView: View {
     /// The file on screen, marked in the list.
-    var currentURL: URL?
+    let currentURL: URL?
     let onOpen: @MainActor (URL) -> Void
 
     @State private var recents: [URL] = []
     @State private var saved: [URL] = []
+
+    // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
+    // doesn't warn about converting it to `@Sendable`.
+    init(currentURL: URL? = nil, onOpen: @escaping @MainActor (URL) -> Void) {
+        self.currentURL = currentURL
+        self.onOpen = onOpen
+    }
 
     private var files: [FileEntry] {
         let savedSet = Set(saved)

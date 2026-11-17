@@ -17,6 +17,18 @@ struct SymbolPager: View {
     @State private var scrolledID: Int?
     @State private var isPositioned = false
 
+    // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
+    // doesn't warn about converting it to `@Sendable`.
+    init(symbols: [CodeSymbol], initialID: Int, currentID: Binding<Int?>,
+         text: @escaping @MainActor (CodeSymbol) -> NSAttributedString?,
+         onWillClose: @escaping @MainActor (Int) -> Void) {
+        self.symbols = symbols
+        self.initialID = initialID
+        _currentID = currentID
+        self.text = text
+        self.onWillClose = onWillClose
+    }
+
     private var visibleID: Int { scrolledID ?? initialID }
 
     private var current: CodeSymbol? {

@@ -57,11 +57,28 @@ struct FileBar: View {
     let onExpand: @MainActor () -> Void
     let onEdit: @MainActor () -> Void
     /// Long-press menu, like Safari's: copy the current URL…
-    var copyText: String? = nil
+    let copyText: String?
     /// …and Paste and Go.
-    var onPasteAndGo: (@MainActor () -> Void)? = nil
+    let onPasteAndGo: (@MainActor () -> Void)?
     /// Only for web pages.
-    var onOpenInBrowser: (@MainActor () -> Void)? = nil
+    let onOpenInBrowser: (@MainActor () -> Void)?
+
+    // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
+    // doesn't warn about converting it to `@Sendable`.
+    init(title: String, isCollapsed: Bool, progressFraction: Double, isProgressVisible: Bool,
+         onExpand: @escaping @MainActor () -> Void, onEdit: @escaping @MainActor () -> Void,
+         copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
+         onOpenInBrowser: (@MainActor () -> Void)? = nil) {
+        self.title = title
+        self.isCollapsed = isCollapsed
+        self.progressFraction = progressFraction
+        self.isProgressVisible = isProgressVisible
+        self.onExpand = onExpand
+        self.onEdit = onEdit
+        self.copyText = copyText
+        self.onPasteAndGo = onPasteAndGo
+        self.onOpenInBrowser = onOpenInBrowser
+    }
 
     private func tap() {
         if isCollapsed { onExpand() } else { onEdit() }
@@ -190,9 +207,28 @@ struct BottomBarStack: View {
     let mode: Binding<ViewMode>?
     let onExpand: @MainActor () -> Void
     let onEdit: @MainActor () -> Void
-    var copyText: String? = nil
-    var onPasteAndGo: (@MainActor () -> Void)? = nil
-    var onOpenInBrowser: (@MainActor () -> Void)? = nil
+    let copyText: String?
+    let onPasteAndGo: (@MainActor () -> Void)?
+    let onOpenInBrowser: (@MainActor () -> Void)?
+
+    // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
+    // doesn't warn about converting it to `@Sendable`.
+    init(title: String, isCollapsed: Bool, progressFraction: Double, isProgressVisible: Bool,
+         mode: Binding<ViewMode>?,
+         onExpand: @escaping @MainActor () -> Void, onEdit: @escaping @MainActor () -> Void,
+         copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
+         onOpenInBrowser: (@MainActor () -> Void)? = nil) {
+        self.title = title
+        self.isCollapsed = isCollapsed
+        self.progressFraction = progressFraction
+        self.isProgressVisible = isProgressVisible
+        self.mode = mode
+        self.onExpand = onExpand
+        self.onEdit = onEdit
+        self.copyText = copyText
+        self.onPasteAndGo = onPasteAndGo
+        self.onOpenInBrowser = onOpenInBrowser
+    }
 
     var body: some View {
         let stack = VStack(spacing: 0) {
