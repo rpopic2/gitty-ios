@@ -6,14 +6,23 @@ import UIKit
 struct AddressEditor: View {
     /// What the field starts with: the current URL, selected, or nothing on the start page.
     let initialText: String
+    /// Show right away why `initialText` can't be opened (a shared link that isn't a URL).
+    var showsInitialError = false
     let onOpen: @MainActor (URL) -> Void
     let onCancel: @MainActor () -> Void
 
-    @State private var text = ""
-    @State private var selection: TextSelection?
+    @State private var text: String
     @State private var errorMessage: String?
     @State private var recents: [URL] = []
-    @FocusState private var isFocused: Bool
+
+    init(initialText: String, showsInitialError: Bool = false,
+         onOpen: @escaping @MainActor (URL) -> Void, onCancel: @escaping @MainActor () -> Void) {
+        self.initialText = initialText
+        self.showsInitialError = showsInitialError
+        self.onOpen = onOpen
+        self.onCancel = onCancel
+        _text = State(initialValue: initialText)
+    }
 
     private var store: RecentFilesStore { .standard }
 
@@ -35,10 +44,10 @@ struct AddressEditor: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .onAppear {
             recents = store.urls()
-            text = initialText
-            selection = TextSelection(range: text.startIndex..<text.endIndex)  // like Safari
+            if showsInitialError, case .invalid(let message) = AddressParser.parse(initialText) {
+                errorMessage = message
+            }
         }
-        .task { isFocused = true }  // after the first layout, so the keyboard comes up reliably
         .onChange(of: text) { errorMessage = nil }
     }
 
@@ -63,29 +72,10 @@ struct AddressEditor: View {
     }
 
     private var field: some View {
-        HStack(spacing: 6) {
-            TextField("Enter URL", text: $text, selection: $selection)
-                .focused($isFocused)
-                .keyboardType(.URL)
-                .textContentType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.go)
-                .onSubmit(submit)
-            if !text.isEmpty {
-                Button {
-                    text = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear")
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: FileBarMetrics.fieldHeight)
-        .modifier(FieldBackground())
+        URLTextField(text: $text, onSubmit: submit)
+            .padding(.horizontal, 14)
+            .frame(height: FileBarMetrics.fieldHeight)
+            .modifier(FieldBackground())
     }
 
     private func submit() {
@@ -94,7 +84,69 @@ struct AddressEditor: View {
             onOpen(url)
         case .invalid(let message):
             withAnimation(.easeOut(duration: 0.15)) { errorMessage = message }
-            isFocused = true
+        }
+    }
+}
+
+/// The URL field: a UIKit text field, like Safari's. It takes focus and selects the whole URL
+/// when it appears, has the system clear button, and keeps its own selection valid as the text
+/// changes. (SwiftUI's `TextField(selection:)` with a preset selection crashed on delete, because
+/// the selection still pointed into the old, longer text.)
+private struct URLTextField: UIViewRepresentable {
+    @Binding var text: String
+    let onSubmit: @MainActor () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onSubmit: onSubmit) }
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.placeholder = String(localized: "Enter URL")
+        field.text = text
+        field.font = .preferredFont(forTextStyle: .body)
+        field.adjustsFontForContentSizeCategory = true
+        field.keyboardType = .URL
+        field.textContentType = .URL
+        field.autocapitalizationType = .none
+        field.autocorrectionType = .no
+        field.spellCheckingType = .no
+        field.returnKeyType = .go
+        field.clearButtonMode = .whileEditing
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.textChanged(_:)), for: .editingChanged)
+        // Fill the width it's given instead of sizing to its text.
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // Once it's in a window: bring up the keyboard and select the whole URL, like Safari.
+        Task { @MainActor in
+            field.becomeFirstResponder()
+            field.selectAll(nil)
+        }
+        return field
+    }
+
+    func updateUIView(_ field: UITextField, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.onSubmit = onSubmit
+        if field.text != text { field.text = text }
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var text: Binding<String>
+        var onSubmit: @MainActor () -> Void
+
+        init(text: Binding<String>, onSubmit: @escaping @MainActor () -> Void) {
+            self.text = text
+            self.onSubmit = onSubmit
+        }
+
+        @objc func textChanged(_ field: UITextField) {
+            text.wrappedValue = field.text ?? ""
+        }
+
+        /// Go: open the URL, or keep the keyboard up while the hint explains what's wrong.
+        func textFieldShouldReturn(_ field: UITextField) -> Bool {
+            onSubmit()
+            return false
         }
     }
 }
