@@ -34,6 +34,32 @@ struct SymbolSearchTests {
         #expect(search("draw", names) == ["Circle.draw", "drawLater", "Canvas.dRaW2", "Shape.redraw", "d.r.a.w"])
     }
 
+    @Test func spacesSeparateWords() {
+        let names = ["read_regable", "readRegable", "Reader.regable", "regable", "read", "Parser.readRegs"]
+        // Exact words first (like typing "read_regable"), then words in order.
+        #expect(search("read regable", names) == ["read_regable", "readRegable", "Reader.regable"])
+        #expect(search("read_regable", names).first == "read_regable")
+    }
+
+    @Test func wordsInAnyOrderRankLower() {
+        let names = ["regable_read", "read_regable"]
+        #expect(search("read regable", names) == ["read_regable", "regable_read"])
+        #expect(search("regable read", names) == ["regable_read", "read_regable"])
+    }
+
+    @Test func typedWordsStartNameWords() {
+        #expect(search("read reg", ["read_regable", "bread_regable"]) == ["read_regable", "bread_regable"])
+        #expect(search("rd rg", ["read_regable"]) == ["read_regable"])  // letters in order still match
+        #expect(search("zz qq", ["read_regable"]).isEmpty)
+    }
+
+    @Test func splitsNamesIntoWords() {
+        #expect(SymbolSearch.words(of: "readRegable") == ["read", "regable"])
+        #expect(SymbolSearch.words(of: "HTTPServer") == ["http", "server"])
+        #expect(SymbolSearch.words(of: "read_regable") == ["read", "regable"])
+        #expect(SymbolSearch.words(of: "Circle.operator +") == ["circle", "operator"])
+    }
+
     @Test func memberNameIsTheLastPart() {
         #expect(SymbolSearch.memberName("list.icollection<t>.isreadonly") == "isreadonly")
         #expect(SymbolSearch.memberName("main") == "main")

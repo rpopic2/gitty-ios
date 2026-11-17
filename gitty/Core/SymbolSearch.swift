@@ -2,6 +2,10 @@ import Foundation
 
 /// Fuzzy symbol search, like Xcode's Open Quickly: the typed letters must appear in order in the
 /// name, but not necessarily next to each other ("crdr" finds `Circle.draw`). Case doesn't matter.
+///
+/// Spaces separate words: "read regable" finds `read_regable`, `readRegable` and `Reader.regable`,
+/// and "regable read" finds them too, a little lower. Each typed word must start a word of the
+/// name, where names split at `_`, `.`, other punctuation and camelCase.
 nonisolated enum SymbolSearch {
     /// The symbols that match `query`, best first. Equally good matches keep file order.
     /// An empty query matches everything, in file order.
@@ -9,9 +13,15 @@ nonisolated enum SymbolSearch {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return symbols }
 
+        let queryWords = query.split(whereSeparator: \.isWhitespace).flatMap { words(of: String($0)) }
+        let hasSpaces = query.contains(where: \.isWhitespace)
+
         var ranked: [Ranked] = []
         for symbol in symbols {
-            if let score = rank(query, symbol.name) {
+            let score = hasSpaces
+                ? rank(words: queryWords, query, symbol.name)
+                : rank(query, symbol.name)
+            if let score {
                 ranked.append(Ranked(symbol: symbol, rank: score))
             }
         }
@@ -48,6 +58,80 @@ nonisolated enum SymbolSearch {
         if isSubsequence(query, of: member) { return 6 }
         if isSubsequence(query, of: full) { return 7 }
         return nil
+    }
+
+    /// Like `rank(_:_:)`, for a search with spaces. Lower is better; `nil` means no match.
+    /// 0 the member name's words are the search's, 1 the full name's are, 2 the words start
+    /// words of the member name in order, 3 of the full name in order, 4 of the member name in
+    /// any order, 5 of the full name in any order, 6 every word appears in the name,
+    /// 7 all the letters appear in order.
+    static func rank(words query: [String], _ rawQuery: String, _ name: String) -> Int? {
+        guard !query.isEmpty else { return nil }
+        let fullWords = words(of: name)
+        let memberWords = words(of: memberName(name))
+        if memberWords == query { return 0 }
+        if fullWords == query { return 1 }
+        if startsWordsInOrder(query, memberWords) { return 2 }
+        if startsWordsInOrder(query, fullWords) { return 3 }
+        if startsWordsInAnyOrder(query, memberWords) { return 4 }
+        if startsWordsInAnyOrder(query, fullWords) { return 5 }
+        let full = name.lowercased()
+        let typed = rawQuery.split(whereSeparator: \.isWhitespace).map(String.init)
+        if typed.allSatisfy({ full.contains($0) }) { return 6 }
+        if isSubsequence(typed.joined(), of: full) { return 7 }
+        return nil
+    }
+
+    /// The words of a name, lowercased: split at anything that isn't a letter or digit and at
+    /// camelCase boundaries. `readRegable` → read, regable; `HTTPServer` → http, server;
+    /// `List.ICollection<T>.IsReadOnly` → list, i, collection, t, is, read, only.
+    static func words(of name: String) -> [String] {
+        let characters = Array(name)
+        var words: [String] = []
+        var current = ""
+        for (index, character) in characters.enumerated() {
+            guard character.isLetter || character.isNumber else {
+                if !current.isEmpty { words.append(current) }
+                current = ""
+                continue
+            }
+            if let previous = current.last {
+                let next: Character? = index + 1 < characters.count ? characters[index + 1] : nil
+                let lowerToUpper = previous.isLowercase && character.isUppercase
+                let endOfAcronym = previous.isUppercase && character.isUppercase && (next?.isLowercase ?? false)
+                if lowerToUpper || endOfAcronym {
+                    words.append(current)
+                    current = ""
+                }
+            }
+            current.append(character)
+        }
+        if !current.isEmpty { words.append(current) }
+        return words.map { $0.lowercased() }
+    }
+
+    /// Each query word starts a later word of the name than the one before it.
+    static func startsWordsInOrder(_ query: [String], _ words: [String]) -> Bool {
+        var next = 0
+        for word in words where next < query.count && word.hasPrefix(query[next]) {
+            next += 1
+        }
+        return next == query.count
+    }
+
+    /// Each query word starts a different word of the name, in any order.
+    static func startsWordsInAnyOrder(_ query: [String], _ words: [String]) -> Bool {
+        var used = Array(repeating: false, count: words.count)
+        func assign(_ index: Int) -> Bool {
+            guard index < query.count else { return true }
+            for (wordIndex, word) in words.enumerated() where !used[wordIndex] && word.hasPrefix(query[index]) {
+                used[wordIndex] = true
+                if assign(index + 1) { return true }
+                used[wordIndex] = false
+            }
+            return false
+        }
+        return assign(0)
     }
 
     /// The part after the last dot: `draw` in `Circle.draw`, `IsReadOnly` in
