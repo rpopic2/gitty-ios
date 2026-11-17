@@ -36,9 +36,10 @@ struct ProjectView: View {
                         FileRow(file: file, isCurrent: isCurrent)
                             .contentShape(Rectangle())
                             .onTapGesture { onOpen(file.url) }
-                            // The open file looks selected, like a sidebar row in Files or Mail.
+                            // The open file looks selected: a gray highlight, like a row that stays
+                            // selected in a list. Text keeps its normal colors.
                             .listRowBackground(isCurrent
-                                ? Color.accentColor
+                                ? Color(uiColor: .systemGray4)
                                 : Color(uiColor: .secondarySystemGroupedBackground))
                             .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
                             .swipeActions {
@@ -80,13 +81,13 @@ private struct FileEntry: Identifiable {
 }
 
 /// Name and location, and an icon on files that open offline. The open file's row is drawn
-/// selected: white text on the accent color (the background is set by the list).
+/// selected by the list (a gray row background).
 private struct FileRow: View {
     let file: FileEntry
     let isCurrent: Bool
 
-    private var primary: Color { isCurrent ? .white : .primary }
-    private var secondary: Color { isCurrent ? .white.opacity(0.8) : .secondary }
+    private var primary: Color { .primary }
+    private var secondary: Color { .secondary }
 
     var body: some View {
         HStack(spacing: 12) {
