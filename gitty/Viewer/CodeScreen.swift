@@ -213,10 +213,11 @@ struct CodeScreen: View {
         }
     }
 
-    /// "This is a web page." at the top of File mode, until dismissed.
+    /// "This is a web page." at the top of File mode, until dismissed. Like the bottom bar, it
+    /// slides away while you scroll down and comes back when the bar expands.
     @ViewBuilder
     private var webPageBanner: some View {
-        if model.isWebPage, mode == .file, !isWebPageBannerDismissed, !isEditingAddress {
+        if model.isWebPage, mode == .file, !isWebPageBannerDismissed, !isEditingAddress, !model.isBarCollapsed {
             WebPageBanner(
                 onOpenInBrowser: { openInBrowser() },
                 onDismiss: { withAnimation(.smooth(duration: 0.25)) { isWebPageBannerDismissed = true } }
