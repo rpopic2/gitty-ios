@@ -21,6 +21,16 @@ nonisolated enum AddressParser {
         return .url(rawGitHubURL(for: url) ?? url)
     }
 
+    /// The app's link scheme. The share extension opens `gitty://open?url=<address>`.
+    static let appScheme = "gitty"
+
+    /// The address carried by a `gitty://open?url=…` link, or `nil` for any other link.
+    static func sharedAddress(in link: URL) -> String? {
+        guard link.scheme?.lowercased() == appScheme, link.host()?.lowercased() == "open" else { return nil }
+        return URLComponents(url: link, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "url" }?.value
+    }
+
     /// `github.com/owner/repo/blob/<ref>/<path>` (or `/raw/`) → `raw.githubusercontent.com/owner/repo/<ref>/<path>`,
     /// so a link copied from a GitHub page opens as the file itself. Anything else (other hosts, repo
     /// pages, folders) returns `nil` and is loaded as typed.

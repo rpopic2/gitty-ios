@@ -6,6 +6,8 @@ struct CodeScreen: View {
     @State private var model: CodeDocumentModel
     /// Tapping the bar edits the address; the editor covers the screen while it's open.
     @Binding var isEditingAddress: Bool
+    /// A shared link that couldn't be opened: the editor starts with it and says why.
+    let rejectedAddress: String?
     let onOpen: @MainActor (URL) -> Void
     @SceneStorage("viewMode") private var mode: ViewMode = .file
 
@@ -17,10 +19,11 @@ struct CodeScreen: View {
     /// The card the Symbols list keeps in view.
     @State private var listSymbolID: Int?
 
-    init(url: URL, isEditingAddress: Binding<Bool>, onOpen: @escaping @MainActor (URL) -> Void,
-         store: DocumentStore = .shared) {
+    init(url: URL, isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
+         onOpen: @escaping @MainActor (URL) -> Void, store: DocumentStore = .shared) {
         _model = State(initialValue: CodeDocumentModel(url: url, store: store))
         _isEditingAddress = isEditingAddress
+        self.rejectedAddress = rejectedAddress
         self.onOpen = onOpen
     }
 
@@ -29,10 +32,12 @@ struct CodeScreen: View {
             content
             if isEditingAddress {
                 AddressEditor(
-                    initialText: model.url.absoluteString,
+                    initialText: rejectedAddress ?? model.url.absoluteString,
+                    showsInitialError: rejectedAddress != nil,
                     onOpen: onOpen,
                     onCancel: { isEditingAddress = false }
                 )
+                .id(rejectedAddress)  // a new rejected share restarts the editor with it
             } else {
                 BottomBarStack(
                     title: model.fileName,

@@ -43,6 +43,14 @@ struct AddressParserTests {
         #expect(AddressParser.parse("http://example.com/a.c") == .invalid(AddressParser.notSecure))
     }
 
+    @Test func readsSharedLinks() {
+        // As built by gittyShare's ShareViewController.appLink(for:).
+        let link = URL(string: "gitty://open?url=https%3A%2F%2Fexample.com%2Fa.c%3Fx%3D1%26y%3D2")!
+        #expect(AddressParser.sharedAddress(in: link) == "https://example.com/a.c?x=1&y=2")
+        #expect(AddressParser.sharedAddress(in: URL(string: "gitty://other?url=x")!) == nil)
+        #expect(AddressParser.sharedAddress(in: URL(string: "https://open?url=x")!) == nil)
+    }
+
     @Test func displayNames() {
         #expect(URL(string: "https://example.com/dir/main.c")!.displayFileName == "main.c")
         #expect(URL(string: "https://example.com/")!.displayFileName == "example.com")

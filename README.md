@@ -12,7 +12,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - **Photos-style mode selector** under the bar: **Project** (coming later), **File** (the raw file) and **Symbols**.
 - **Symbols:** every top-level function, type, macro and global as a card, like photos in Photos. Tap one to see only that symbol, swipe left and right to move between symbols, and swipe down to zoom back to the list. Symbols come from [tree-sitter](https://tree-sitter.github.io/) (C for now).
 
-- **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source. Recently opened files are listed while you type. The last file reopens on launch.
+- **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source. Recently opened files are listed while you type. The last file reopens on launch. You can also share a page from Safari to gitty.
 
 ## Project
 
@@ -28,6 +28,17 @@ Symbols mode uses tree-sitter. Choose File ▸ Add Package Dependencies… and a
 |---|---|---|
 | `https://github.com/tree-sitter/swift-tree-sitter` | 0.25.0 | SwiftTreeSitter |
 | `https://github.com/tree-sitter/tree-sitter-c` | 0.24.2 | TreeSitterC |
+
+### Opening links from Safari (one time, in Xcode)
+
+The `gittyShare/` folder is a Share Extension: Safari ▸ Share ▸ gitty opens the page in gitty, exactly as if it had been typed into the bar.
+
+1. **Link scheme:** select the `gitty` target ▸ Info ▸ URL Types ▸ +, and set URL Schemes to `gitty`.
+2. **Extension target:** File ▸ New ▸ Target ▸ Share Extension, with Product Name `gittyShare`, embedded in `gitty`. If Xcode asks to activate a scheme, either answer is fine.
+3. Xcode writes its template files into `gittyShare/`. Put ours back with `git checkout -- gittyShare`, then delete `gittyShare/Base.lproj/MainInterface.storyboard` (or `MainInterface.storyboard`). The extension has no storyboard.
+4. In the `gittyShare` target, set the iOS deployment target to **18.0**, the same as the app.
+
+Apple has no API for a share extension to open its own app. The extension uses the common workaround: it finds the `UIApplication` in the responder chain and calls `open` through the Objective-C runtime.
 
 ### Tests
 
@@ -66,4 +77,5 @@ The engine is the same for every language. It keeps only the outermost definitio
 | `gitty/Viewer/SymbolPager.swift` | One symbol at a time: paging, zoom back, read-only text view |
 | `gitty/Viewer/CodeDocumentModel.swift` | Screen state: loading, refresh, progress, bar |
 | `gitty/Viewer/CodeScreen.swift` | The screen: modes, bottom stack, navigation to the pager |
+| `gittyShare/` | Share Extension: hands a shared URL to the app as `gitty://open?url=…` |
 | `gittyTests/` | Decoder, document store, reading position, symbol indexer, address and recents tests |
