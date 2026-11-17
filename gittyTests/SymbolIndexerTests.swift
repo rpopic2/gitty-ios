@@ -125,9 +125,16 @@ struct SymbolIndexerTests {
 
     @Test func blankingKeepsLengthAndOnlyTouchesMacroCalls() {
         let source = "OPT_GENERIC(i64)\nint x;\nstatic int\nfoo(int x);\nbar(a)\n{\n}\n" as NSString
-        let blanked = SymbolIndexer.blankingTopLevelMacroCalls(in: source)
+        let blanked = CMacroBlanking.blankingTopLevelMacroCalls(in: source)
         #expect((blanked as NSString).length == source.length)
         #expect(blanked == "                \nint x;\nstatic int\nfoo(int x);\nbar(a)\n{\n}\n")
+    }
+
+    @Test func everyLanguageQueryCompiles() {
+        // Building `query` fails loudly if a symbols-<name>.scm is missing or broken.
+        for language in SymbolLanguage.all {
+            #expect(language.query.patternCount > 0, "\(language.name)")
+        }
     }
 
     @Test func otherLanguagesAreUnsupported() {

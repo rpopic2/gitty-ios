@@ -33,6 +33,14 @@ Symbols mode uses tree-sitter. Choose File ▸ Add Package Dependencies… and a
 
 The `gittyTests/` folder holds Swift Testing tests but has no target yet. To add one, choose File ▸ New ▸ Target ▸ Unit Testing Bundle and name it `gittyTests` (Swift Testing, testing `gitty`). Then replace the folder Xcode generates with the existing `gittyTests/` folder and press ⌘U.
 
+## Adding a language to Symbols mode
+
+1. Add the grammar's Swift package (for example `tree-sitter-python`) to the `gitty` target.
+2. Add `gitty/Languages/symbols-<name>.scm`. Start from the grammar's own `queries/tags.scm` and use its conventions: capture the definition as `@definition.function`, `.method`, `.class`, `.type`, `.macro`, `.variable` or `.constant`, and its name as `@name`. You can also capture `@name.prefix`, which is shown before the name.
+3. Add an entry to `SymbolLanguage.all`, with the file extensions and the node types that count as bodies (definitions inside them aren't top-level).
+
+The engine is the same for every language. It keeps only the outermost definitions, attaches the comment directly above each one, and orders them as they appear in the file.
+
 ## Code map
 
 | Path | What it does |
@@ -40,7 +48,10 @@ The `gittyTests/` folder holds Swift Testing tests but has no target yet. To add
 | `gitty/App/` | App entry point and the hard-coded source URL |
 | `gitty/Core/DocumentStore.swift` | Saved copies on disk and the network fetch: never expires, conditional refresh |
 | `gitty/Core/ReadingPositionStore.swift` | Saved reading position per file (UserDefaults) |
-| `gitty/Core/SymbolIndexer.swift` | tree-sitter parse, then a walk of the top level for functions, types, macros and globals |
+| `gitty/Core/SymbolIndexer.swift` | Generic symbol engine: runs a language's query, keeps top-level definitions |
+| `gitty/Core/SymbolLanguage.swift` | Languages for Symbols mode: grammar, file extensions, query (C for now) |
+| `gitty/Core/CMacroBlanking.swift` | C-only pass before parsing: blanks top-level macro calls such as `OPT_GENERIC(i64)` |
+| `gitty/Languages/symbols-*.scm` | One symbols query per language (tags.scm conventions) |
 | `gitty/Core/CodeSymbol.swift` | A symbol: name, kind, range (with its leading comment), line, preview |
 | `gitty/Core/RawTextDecoder.swift` | Bytes to text, decoded the way Safari does it (BOM, charset, UTF-8, windows-1252) |
 | `gitty/Viewer/RawTextStyle.swift` | Safari's raw-text style constants, taken from WebKit's source |
