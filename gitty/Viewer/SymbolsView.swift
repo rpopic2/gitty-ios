@@ -60,6 +60,43 @@ struct SymbolsView: View {
     }
 }
 
+/// Symbol search results over File: a compact list (kind, name, line), best matches first.
+struct SymbolResultsList: View {
+    let symbols: [CodeSymbol]
+    let onOpen: @MainActor (CodeSymbol) -> Void
+
+    init(symbols: [CodeSymbol], onOpen: @escaping @MainActor (CodeSymbol) -> Void) {
+        self.symbols = symbols
+        self.onOpen = onOpen
+    }
+
+    var body: some View {
+        List(symbols) { symbol in
+            Button { onOpen(symbol) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: symbol.kind.systemImage)
+                        .foregroundStyle(.tint)
+                        .frame(width: 22)
+                        .accessibilityHidden(true)
+                    Text(symbol.name)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    Text("Line \(symbol.line)")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityLabel("\(symbol.kind.title) \(symbol.name), line \(symbol.line)")
+        }
+        .listStyle(.plain)
+        .contentMargins(.bottom, FileBarMetrics.fieldHeight + 16, for: .scrollContent)  // the search field
+        .scrollDismissesKeyboard(.interactively)
+    }
+}
+
 private final class ScrollTracking {
     var tracker = BarCollapseTracker()
     var isUserScrolling = false

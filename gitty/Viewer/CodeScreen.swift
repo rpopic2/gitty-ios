@@ -44,6 +44,9 @@ struct CodeScreen: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             content
+            if isSearchingSymbols && barSearchesSymbols && mode == .file {
+                fileSearchResults
+            }
             bottom
         }
         .overlay(alignment: .top) { webPageBanner }
@@ -199,7 +202,7 @@ struct CodeScreen: View {
     /// selector. In Symbols mode, tapping the bar searches symbols instead of editing the address.
     @ViewBuilder
     private var bottom: some View {
-        if isSearchingSymbols && mode == .symbols {
+        if isSearchingSymbols && barSearchesSymbols {
             SymbolSearchEditor(query: $symbolQuery, onDone: { isSearchingSymbols = false })
         } else if isEditingAddress {
             AddressEditor(
@@ -218,12 +221,16 @@ struct CodeScreen: View {
                 mode: $mode,
                 onExpand: { model.expandBarFromTap() },
                 onEdit: {
-                    if mode == .symbols { isSearchingSymbols = true } else { isEditingAddress = true }
+                    // File and Symbols search symbols; the address is edited from Project (or
+                    // anywhere when there's nothing to search).
+                    if barSearchesSymbols { isSearchingSymbols = true } else { isEditingAddress = true }
                 },
                 copyText: model.url.absoluteString,
                 onPasteAndGo: onPasteAndGo,
                 onOpenInBrowser: openInBrowserAction,
-                searchQuery: mode == .symbols ? symbolQuery : nil,
+                // Symbols shows the active search in the bar; File shows the file name (and
+                // searches when tapped); Project edits the address.
+                searchQuery: barSearchesSymbols ? (mode == .symbols ? symbolQuery : "") : nil,
                 onClearSearch: { symbolQuery = "" }
             )
         }
@@ -233,7 +240,8 @@ struct CodeScreen: View {
     /// slides away while you scroll down and comes back when the bar expands.
     @ViewBuilder
     private var webPageBanner: some View {
-        if model.isWebPage, mode == .file, !isWebPageBannerDismissed, !isEditingAddress, !model.isBarCollapsed {
+        if model.isWebPage, mode == .file, !isWebPageBannerDismissed, !isEditingAddress,
+           !isSearchingSymbols, !model.isBarCollapsed {
             WebPageBanner(
                 onOpenInBrowser: { openInBrowser() },
                 onDismiss: { withAnimation(.smooth(duration: 0.25)) { isWebPageBannerDismissed = true } }
@@ -246,6 +254,49 @@ struct CodeScreen: View {
     private var openInBrowserAction: (@MainActor () -> Void)? {
         guard model.isWebPage else { return nil }
         return { openInBrowser() }
+    }
+
+    /// Whether tapping the bar searches symbols: in File and Symbols mode, once the file has
+    /// loaded in a language with symbols. Otherwise (Project, a failed load, a web page or another
+    /// language) it edits the address, so there's always a way to open something else.
+    private var barSearchesSymbols: Bool {
+        guard mode != .project, case .loaded = model.phase else { return false }
+        if case .unsupportedLanguage = model.symbolIndex { return false }
+        return true
+    }
+
+    /// Searching symbols in File mode: the matches above the search field (every symbol until
+    /// you type). Tapping one opens its page, paging through the matches; swiping down comes
+    /// back to File.
+    @ViewBuilder
+    private var fileSearchResults: some View {
+        switch model.symbolIndex {
+        case .indexing:
+            placeholder { ProgressView() }
+        case .unsupportedLanguage:
+            placeholder {
+                ContentUnavailableView(
+                    "No Symbols for This File Type",
+                    systemImage: "doc.questionmark",
+                    description: Text("Symbols are available for C, C# and Swift files for now.")
+                )
+            }
+        case .ready where shownSymbols.isEmpty:
+            placeholder {
+                if symbolQuery.isEmpty {
+                    ContentUnavailableView("No Symbols", systemImage: "function")
+                } else {
+                    ContentUnavailableView.search(text: symbolQuery)
+                }
+            }
+        case .ready:
+            SymbolResultsList(symbols: shownSymbols) { symbol in
+                isSearchingSymbols = false
+                pagerSymbols = shownSymbols
+                pagerSymbolID = symbol.id
+                openedSymbolID = symbol.id
+            }
+        }
     }
 
     /// File's Jump to Definition: open the symbol's page. Paging goes through every symbol, and
