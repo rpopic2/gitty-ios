@@ -2,13 +2,6 @@ import Foundation
 import Testing
 @testable import gitty
 
-/// Runs only when the tree-sitter packages are linked into the app.
-private let parserLinked: Bool = {
-    if case .parserMissing = SymbolIndexer.index("", fileExtension: "c") { return false }
-    return true
-}()
-
-@Suite(.enabled(if: parserLinked, "Add the SwiftTreeSitter and TreeSitterC packages"))
 struct SymbolIndexerTests {
     let source = """
     #include <stdio.h>

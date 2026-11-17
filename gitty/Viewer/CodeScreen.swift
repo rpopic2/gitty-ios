@@ -129,14 +129,6 @@ struct CodeScreen: View {
                 },
                 onBarCollapsedChange: { model.setBarCollapsed($0) }
             )
-        case .parserMissing:
-            placeholder {
-                ContentUnavailableView(
-                    "Symbols Need tree-sitter",
-                    systemImage: "shippingbox",
-                    description: Text("Add the SwiftTreeSitter and TreeSitterC packages to the gitty target. See the README.")
-                )
-            }
         case .unsupportedLanguage:
             placeholder {
                 ContentUnavailableView(

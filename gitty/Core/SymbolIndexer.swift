@@ -1,17 +1,11 @@
 import Foundation
-#if canImport(SwiftTreeSitter) && canImport(TreeSitterC)
 import SwiftTreeSitter
 import TreeSitterC
-#endif
 
 /// Finds the top-level definitions in a source file with tree-sitter.
-///
-/// Needs the `SwiftTreeSitter` and `TreeSitterC` packages (see README). Without them the app
-/// still builds, and `index` reports `.parserMissing`.
 nonisolated enum SymbolIndexer {
     enum Outcome: Sendable {
         case symbols([CodeSymbol])
-        case parserMissing
         case unsupportedLanguage
     }
 
@@ -19,7 +13,6 @@ nonisolated enum SymbolIndexer {
 
     static func index(_ text: String, fileExtension: String) -> Outcome {
         guard ["c", "h"].contains(fileExtension.lowercased()) else { return .unsupportedLanguage }
-        #if canImport(SwiftTreeSitter) && canImport(TreeSitterC)
         let parser = Parser()
         // `parse(_:)` feeds the text as UTF-16, so node ranges are NSRanges into the same text.
         guard (try? parser.setLanguage(Language(tree_sitter_c()))) != nil,
@@ -29,13 +22,9 @@ nonisolated enum SymbolIndexer {
         var walker = CWalker(text: text as NSString)
         walker.visitChildren(of: root)
         return .symbols(walker.symbols)
-        #else
-        return .parserMissing
-        #endif
     }
 }
 
-#if canImport(SwiftTreeSitter) && canImport(TreeSitterC)
 /// Walks the top level of a C syntax tree (including `#if` blocks) and collects definitions.
 nonisolated private struct CWalker {
     let text: NSString
@@ -228,4 +217,3 @@ nonisolated private struct CWalker {
             .joined(separator: "\n")
     }
 }
-#endif

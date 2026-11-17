@@ -13,7 +13,6 @@ final class CodeDocumentModel {
     enum SymbolIndex {
         case indexing
         case ready([CodeSymbol])
-        case parserMissing
         case unsupportedLanguage
     }
 
@@ -113,7 +112,6 @@ final class CodeDocumentModel {
         guard case .loaded(_, let current) = phase, current == version else { return }  // newer text arrived
         switch outcome {
         case .symbols(let symbols): symbolIndex = .ready(symbols)
-        case .parserMissing: symbolIndex = .parserMissing
         case .unsupportedLanguage: symbolIndex = .unsupportedLanguage
         }
     }

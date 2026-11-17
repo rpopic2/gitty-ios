@@ -22,14 +22,12 @@ For now the app opens one hard-coded file (`gitty/App/Sources.swift`).
 
 ### Packages (one time, in Xcode)
 
-Symbols mode needs tree-sitter. Choose File ▸ Add Package Dependencies… and add both to the `gitty` target:
+Symbols mode uses tree-sitter. Choose File ▸ Add Package Dependencies… and add both to the `gitty` target:
 
 | Package | Version | Product |
 |---|---|---|
 | `https://github.com/tree-sitter/swift-tree-sitter` | 0.25.0 | SwiftTreeSitter |
 | `https://github.com/tree-sitter/tree-sitter-c` | 0.24.2 | TreeSitterC |
-
-Without them the app still builds, and Symbols mode explains what's missing.
 
 ### Tests
 
