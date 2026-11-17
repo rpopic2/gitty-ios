@@ -75,7 +75,7 @@ struct CodeTextView: UIViewRepresentable {
         coordinator.isBarCollapsed = isBarCollapsed
         if coordinator.barTapCount != barTapCount {
             coordinator.barTapCount = barTapCount
-            coordinator.barWasTappedOpen(textView)
+            coordinator.barWasTappedOpen()
         }
         coordinator.documentURL = documentURL
         coordinator.positionStore = positionStore
@@ -247,15 +247,11 @@ struct CodeTextView: UIViewRepresentable {
             holdsBarOpen = false
         }
 
-        /// Like Safari: tapping the bar during a fling stops the fling and keeps the bar open.
+        /// Like Safari: tapping the bar during a fling keeps the bar open while the fling carries on.
         /// Without this, the remaining momentum counts as scrolling down and collapses it again.
-        func barWasTappedOpen(_ textView: UITextView) {
+        func barWasTappedOpen() {
             holdsBarOpen = true
             accumulated = 0
-            if textView.isDecelerating {
-                textView.setContentOffset(textView.contentOffset, animated: false)  // stops the fling
-                saveCurrentPosition()  // no didEndDecelerating comes after a stop like this
-            }
         }
 
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
