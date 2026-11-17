@@ -15,6 +15,8 @@ final class CodeDocumentModel {
 
     private(set) var phase: Phase = .loading
     private(set) var isBarCollapsed = false
+    /// Goes up each time the reader taps the collapsed bar, so the text view can stop a fling.
+    private(set) var barTapCount = 0
 
     /// 0...1. Drawn with `scaleEffect`, so animating it never re-lays out the bar.
     private(set) var progressFraction: Double = 0
@@ -92,6 +94,12 @@ final class CodeDocumentModel {
     }
 
     // MARK: - Bottom bar
+
+    /// The reader tapped the collapsed bar.
+    func expandBarFromTap() {
+        barTapCount += 1
+        setBarCollapsed(false)
+    }
 
     func setBarCollapsed(_ collapsed: Bool) {
         guard collapsed != isBarCollapsed else { return }

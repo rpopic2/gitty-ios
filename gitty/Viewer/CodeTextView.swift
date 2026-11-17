@@ -24,6 +24,8 @@ struct CodeTextView: UIViewRepresentable {
     /// Space kept free under the text for the expanded bottom bar, above the home indicator.
     let bottomBarHeight: CGFloat
     let isBarCollapsed: Bool
+    /// Changes when the reader taps the collapsed bar open.
+    let barTapCount: Int
     let onRefresh: @MainActor () async -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
     var positionStore: ReadingPositionStore = .standard
@@ -71,6 +73,10 @@ struct CodeTextView: UIViewRepresentable {
         coordinator.onRefresh = onRefresh
         coordinator.onBarCollapsedChange = onBarCollapsedChange
         coordinator.isBarCollapsed = isBarCollapsed
+        if coordinator.barTapCount != barTapCount {
+            coordinator.barTapCount = barTapCount
+            coordinator.barWasTappedOpen(textView)
+        }
         coordinator.documentURL = documentURL
         coordinator.positionStore = positionStore
 
@@ -104,6 +110,9 @@ struct CodeTextView: UIViewRepresentable {
         var onRefresh: (@MainActor () async -> Void)?
         var onBarCollapsedChange: (@MainActor (Bool) -> Void)?
         var isBarCollapsed = false
+        var barTapCount = 0
+        /// After the reader taps the bar open, it stays open until they start a new drag.
+        private var holdsBarOpen = false
 
         /// How far (pt) the user must scroll in one direction before the bar changes.
         private let collapseThreshold: CGFloat = 10
@@ -235,6 +244,18 @@ struct CodeTextView: UIViewRepresentable {
             lastOffsetY = scrollView.contentOffset.y
             accumulated = 0
             pendingRestore = nil  // the reader took over before a big file finished laying out
+            holdsBarOpen = false
+        }
+
+        /// Like Safari: tapping the bar during a fling stops the fling and keeps the bar open.
+        /// Without this, the remaining momentum counts as scrolling down and collapses it again.
+        func barWasTappedOpen(_ textView: UITextView) {
+            holdsBarOpen = true
+            accumulated = 0
+            if textView.isDecelerating {
+                textView.setContentOffset(textView.contentOffset, animated: false)  // stops the fling
+                saveCurrentPosition()  // no didEndDecelerating comes after a stop like this
+            }
         }
 
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -263,7 +284,7 @@ struct CodeTextView: UIViewRepresentable {
                 setCollapsed(false)
                 return
             }
-            guard scrollView.isDragging || scrollView.isDecelerating, delta != 0 else { return }
+            guard !holdsBarOpen, scrollView.isDragging || scrollView.isDecelerating, delta != 0 else { return }
 
             if (delta > 0) != (accumulated > 0) { accumulated = 0 }  // direction changed
             accumulated += delta

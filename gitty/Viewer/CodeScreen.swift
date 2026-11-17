@@ -17,7 +17,7 @@ struct CodeScreen: View {
                 isCollapsed: model.isBarCollapsed,
                 progressFraction: model.progressFraction,
                 isProgressVisible: model.isProgressVisible,
-                onExpand: { model.setBarCollapsed(false) }
+                onExpand: { model.expandBarFromTap() }
             )
         }
         .overlay(alignment: .top) { StatusBarBackdrop() }
@@ -44,6 +44,7 @@ struct CodeScreen: View {
                 documentURL: model.url,
                 bottomBarHeight: FileBarMetrics.expandedHeight,
                 isBarCollapsed: model.isBarCollapsed,
+                barTapCount: model.barTapCount,
                 onRefresh: { await model.refresh() },
                 onBarCollapsedChange: { model.setBarCollapsed($0) }
             )
