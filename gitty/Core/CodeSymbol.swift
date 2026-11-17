@@ -4,6 +4,8 @@ import Foundation
 nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
     enum Kind: String, Sendable, CaseIterable {
         case function, type, macro, global
+        /// Members of types (C# and similar).
+        case method, property, field, enumMember
 
         var title: String {
             switch self {
@@ -11,6 +13,10 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
             case .type: "Type"
             case .macro: "Macro"
             case .global: "Global"
+            case .method: "Method"
+            case .property: "Property"
+            case .field: "Field"
+            case .enumMember: "Enum Case"
             }
         }
 
@@ -20,6 +26,10 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
             case .type: "cube"
             case .macro: "number"
             case .global: "globe"
+            case .method: "m.square"
+            case .property: "p.square"
+            case .field: "f.square"
+            case .enumMember: "e.square"
             }
         }
     }

@@ -5,8 +5,9 @@ import SwiftTreeSitter
 ///
 /// The language's query says what a definition is, using the tags.scm conventions:
 /// `@definition.<kind>` on the definition and `@name` on its name (`@name.prefix` is shown before
-/// it). This engine is the same for every language. It groups matches, keeps only top-level ones,
-/// and adds each symbol's range (with the comment above it), line and preview.
+/// it). This engine is the same for every language. It groups matches, keeps only top-level ones
+/// and the members of container types (C# classes), names members `Type.Member`, and adds each
+/// symbol's range (with the comment above it), line and preview.
 nonisolated enum SymbolIndexer {
     enum Outcome: Sendable {
         case symbols([CodeSymbol])
@@ -26,10 +27,10 @@ nonisolated enum SymbolIndexer {
         else { return .symbols([]) }
 
         let definitions = collectDefinitions(language.query.execute(in: tree))
-        let topLevel = keepTopLevel(definitions, bodyNodeTypes: language.bodyNodeTypes)
         let builder = SymbolBuilder(text: original)
-        return .symbols(topLevel.enumerated().map { index, definition in
-            builder.symbol(id: index, for: definition)
+        let kept = keepTopLevel(definitions, language: language, builder: builder)
+        return .symbols(kept.enumerated().map { index, item in
+            builder.symbol(id: index, for: item.definition, name: item.name)
         })
     }
 
@@ -43,72 +44,79 @@ nonisolated enum SymbolIndexer {
     }
 
     /// One entry per definition node. Several declarators (`int a, b;`) arrive as several matches
-    /// for the same node, each with its own `@name`.
+    /// for the same node, each with its own `@name`. Patterns that only add a `@name.prefix` (C#
+    /// explicit interface implementations) also land on the same entry.
     private static func collectDefinitions(_ matches: QueryCursor) -> [Definition] {
-        var order: [NSRange] = []
-        var byRange: [NSRange: Definition] = [:]
+        var order: [UInt] = []
+        var byID: [UInt: Definition] = [:]
         for match in matches {
             guard let definition = match.captures.first(where: { $0.nameComponents.first == "definition" }),
                   definition.nameComponents.count > 1,
                   let kind = kind(for: definition.nameComponents[1])
             else { continue }
-            let key = definition.node.range
-            if byRange[key] == nil {
-                byRange[key] = Definition(node: definition.node, kind: kind, names: [], prefix: nil)
+            let key = definition.node.id
+            if byID[key] == nil {
+                byID[key] = Definition(node: definition.node, kind: kind, names: [], prefix: nil)
                 order.append(key)
             }
             for capture in match.captures {
                 switch capture.nameComponents {
-                case ["name"] where !(byRange[key]!.names.contains(capture.range)):
-                    byRange[key]!.names.append(capture.range)
+                case ["name"] where !(byID[key]!.names.contains(capture.range)):
+                    byID[key]!.names.append(capture.range)
                 case ["name", "prefix"]:
-                    byRange[key]!.prefix = capture.range
+                    byID[key]!.prefix = capture.range
                 default:
                     break
                 }
             }
         }
-        return order.compactMap { byRange[$0] }.filter { !$0.names.isEmpty }
+        return order.compactMap { byID[$0] }.filter { !$0.names.isEmpty }
     }
 
     /// tags.scm kinds → what Symbols mode shows. Other kinds (references, modules…) are ignored.
     private static func kind(for tagKind: String) -> CodeSymbol.Kind? {
         switch tagKind {
-        case "function", "method": .function
+        case "function": .function
+        case "method": .method
         case "class", "struct", "interface", "type", "enum": .type
         case "macro": .macro
         case "variable", "constant": .global
+        case "property": .property
+        case "field": .field
+        case "enum_member": .enumMember
         default: nil
         }
     }
 
-    /// Drops definitions inside bodies (locals, fields, parameters) and inside other definitions
-    /// (the struct inside `typedef struct {…} Size;`), so the outermost one wins.
-    private static func keepTopLevel(_ definitions: [Definition], bodyNodeTypes: Set<String>) -> [Definition] {
+    /// Keeps top-level definitions and the members of container types, in file order, each with
+    /// its full name (`Circle.Inner.Value`). Drops a definition when it's inside a body (locals,
+    /// struct fields, parameters, C# method bodies) or inside a definition that isn't a container
+    /// (the struct inside C's `typedef struct {…} Size;`).
+    private static func keepTopLevel(
+        _ definitions: [Definition], language: SymbolLanguage, builder: SymbolBuilder
+    ) -> [(definition: Definition, name: String)] {
+        let byID = Dictionary(definitions.map { ($0.node.id, $0) }, uniquingKeysWith: { first, _ in first })
         let sorted = definitions.sorted {
             $0.node.range.location != $1.node.range.location
                 ? $0.node.range.location < $1.node.range.location
-                : $0.node.range.length > $1.node.range.length  // outer first
+                : $0.node.range.length > $1.node.range.length  // a type before its members
         }
-        var kept: [Definition] = []
-        var keptEnd = 0  // syntax nodes nest, so "inside a kept one" means "ends before keptEnd"
-        for definition in sorted {
-            let range = definition.node.range
-            if range.location < keptEnd && NSMaxRange(range) <= keptEnd { continue }
-            if hasAncestor(definition.node, in: bodyNodeTypes) { continue }
-            kept.append(definition)
-            keptEnd = max(keptEnd, NSMaxRange(range))
+        var kept: [(definition: Definition, name: String)] = []
+        nextDefinition: for definition in sorted {
+            var containers: [String] = []
+            var current = definition.node.parent
+            while let ancestor = current {
+                let type = ancestor.nodeType ?? ""
+                if language.bodyNodeTypes.contains(type) { continue nextDefinition }
+                if let enclosing = byID[ancestor.id] {
+                    guard language.containerNodeTypes.contains(type) else { continue nextDefinition }
+                    containers.insert(builder.simpleName(of: enclosing), at: 0)
+                }
+                current = ancestor.parent
+            }
+            kept.append((definition, (containers + [builder.simpleName(of: definition)]).joined(separator: ".")))
         }
         return kept
-    }
-
-    private static func hasAncestor(_ node: Node, in types: Set<String>) -> Bool {
-        var current = node.parent
-        while let ancestor = current {
-            if let type = ancestor.nodeType, types.contains(type) { return true }
-            current = ancestor.parent
-        }
-        return false
     }
 }
 
@@ -116,12 +124,19 @@ nonisolated enum SymbolIndexer {
 nonisolated private struct SymbolBuilder {
     let text: NSString
 
-    func symbol(id: Int, for definition: SymbolIndexer.Definition) -> CodeSymbol {
+    /// The definition's own name: its `@name`s joined with ", ", after its `@name.prefix`. A space
+    /// follows a prefix that ends in a letter or digit (`struct point`, `operator +`), but not one
+    /// that ends in punctuation (`~Circle`, `IList.Add`).
+    func simpleName(of definition: SymbolIndexer.Definition) -> String {
+        let names = definition.names.map { text.substring(with: $0) }.joined(separator: ", ")
+        guard let range = definition.prefix else { return names }
+        let prefix = text.substring(with: range)
+        guard let last = prefix.last else { return names }
+        return prefix + (last.isLetter || last.isNumber ? " " : "") + names
+    }
+
+    func symbol(id: Int, for definition: SymbolIndexer.Definition, name: String) -> CodeSymbol {
         let node = definition.node
-        var name = definition.names.map { text.substring(with: $0) }.joined(separator: ", ")
-        if let prefix = definition.prefix {
-            name = text.substring(with: prefix) + " " + name
-        }
         let body = trimmingTrailingWhitespace(node.range)
         let start = leadingComment(of: node)?.range.location ?? body.location
         return CodeSymbol(
