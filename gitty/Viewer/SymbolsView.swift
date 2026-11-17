@@ -32,6 +32,7 @@ struct SymbolsView: View {
             .scrollTargetLayout()
         }
         .scrollPosition(id: $scrolledID, anchor: .center)
+        .scrollDismissesKeyboard(.interactively)
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .background(Color(uiColor: .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in

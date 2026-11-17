@@ -22,6 +22,9 @@ struct CodeScreen: View {
     @State private var pagerSymbolID: Int?
     /// The card the Symbols list keeps in view.
     @State private var listSymbolID: Int?
+    /// Symbol search in Symbols mode. Stays until it's cleared or another file is opened.
+    @State private var symbolQuery = ""
+    @State private var isSearchingSymbols = false
 
     init(url: URL, isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
          onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
@@ -44,10 +47,11 @@ struct CodeScreen: View {
         .task { await model.load() }
         .onChange(of: mode) {
             model.setBarCollapsed(false)
+            isSearchingSymbols = false
         }
         .navigationDestination(item: $openedSymbolID) { openedID in
             SymbolPager(
-                symbols: indexedSymbols,
+                symbols: shownSymbols,  // the pager pages through the search results only
                 initialID: openedID,
                 currentID: $pagerSymbolID,
                 text: model.text(of:),
@@ -133,9 +137,11 @@ struct CodeScreen: View {
                     description: Text("No top-level definitions were found in this file.")
                 )
             }
-        case .ready(let symbols):
+        case .ready where shownSymbols.isEmpty:
+            placeholder { ContentUnavailableView.search(text: symbolQuery) }
+        case .ready:
             SymbolsView(
-                symbols: symbols,
+                symbols: shownSymbols,
                 namespace: symbolNamespace,
                 scrolledID: $listSymbolID,
                 isBarCollapsed: model.isBarCollapsed,
@@ -161,6 +167,11 @@ struct CodeScreen: View {
         if case .ready(let symbols) = model.symbolIndex { symbols } else { [] }
     }
 
+    /// The symbols matching the search, best first; all of them in file order without one.
+    private var shownSymbols: [CodeSymbol] {
+        SymbolSearch.matches(symbolQuery, in: indexedSymbols)
+    }
+
     /// Full-screen, opaque, so the hidden file text never shows through.
     private func placeholder<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
@@ -168,10 +179,13 @@ struct CodeScreen: View {
             .background(Color(uiColor: .systemGroupedBackground))
     }
 
-    /// The address editor while editing, otherwise the bar with the mode selector.
+    /// The address editor or the symbol search while editing, otherwise the bar with the mode
+    /// selector. In Symbols mode, tapping the bar searches symbols instead of editing the address.
     @ViewBuilder
     private var bottom: some View {
-        if isEditingAddress {
+        if isSearchingSymbols && mode == .symbols {
+            SymbolSearchEditor(query: $symbolQuery, onDone: { isSearchingSymbols = false })
+        } else if isEditingAddress {
             AddressEditor(
                 initialText: rejectedAddress ?? model.url.absoluteString,
                 showsInitialError: rejectedAddress != nil,
@@ -187,10 +201,14 @@ struct CodeScreen: View {
                 isProgressVisible: model.isProgressVisible,
                 mode: $mode,
                 onExpand: { model.expandBarFromTap() },
-                onEdit: { isEditingAddress = true },
+                onEdit: {
+                    if mode == .symbols { isSearchingSymbols = true } else { isEditingAddress = true }
+                },
                 copyText: model.url.absoluteString,
                 onPasteAndGo: onPasteAndGo,
-                onOpenInBrowser: openInBrowserAction
+                onOpenInBrowser: openInBrowserAction,
+                searchQuery: mode == .symbols ? symbolQuery : nil,
+                onClearSearch: { symbolQuery = "" }
             )
         }
     }

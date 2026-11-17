@@ -62,13 +62,18 @@ struct FileBar: View {
     let onPasteAndGo: (@MainActor () -> Void)?
     /// Only for web pages.
     let onOpenInBrowser: (@MainActor () -> Void)?
+    /// In Symbols mode: the symbol search (empty when there's none, `nil` in other modes). A
+    /// non-empty search is shown instead of the title, with a clear button.
+    let searchQuery: String?
+    let onClearSearch: (@MainActor () -> Void)?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(title: String, isCollapsed: Bool, progressFraction: Double, isProgressVisible: Bool,
          onExpand: @escaping @MainActor () -> Void, onEdit: @escaping @MainActor () -> Void,
          copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
-         onOpenInBrowser: (@MainActor () -> Void)? = nil) {
+         onOpenInBrowser: (@MainActor () -> Void)? = nil,
+         searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil) {
         self.title = title
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
@@ -78,6 +83,28 @@ struct FileBar: View {
         self.copyText = copyText
         self.onPasteAndGo = onPasteAndGo
         self.onOpenInBrowser = onOpenInBrowser
+        self.searchQuery = searchQuery
+        self.onClearSearch = onClearSearch
+    }
+
+    private var activeSearch: String? {
+        guard let searchQuery, !searchQuery.isEmpty else { return nil }
+        return searchQuery
+    }
+
+    private var clearButton: ClearSearchButton? {
+        guard activeSearch != nil, !isCollapsed, let onClearSearch else { return nil }
+        return ClearSearchButton(action: onClearSearch)
+    }
+
+    private var accessibilityTitle: Text {
+        if let activeSearch { return Text("Search: \(activeSearch)") }
+        return title.isEmpty ? Text("Enter URL") : Text(title)
+    }
+
+    private var accessibilityEditHint: Text {
+        if isCollapsed { return Text("Shows the bar") }
+        return searchQuery == nil ? Text("Edits the address") : Text("Searches symbols")
     }
 
     private func tap() {
@@ -87,11 +114,13 @@ struct FileBar: View {
     var body: some View {
         Group {
             if #available(iOS 26.0, *) {
-                GlassFileBar(title: title, isCollapsed: isCollapsed,
-                             progress: ProgressLine(fraction: progressFraction, isVisible: isProgressVisible))
+                GlassFileBar(title: title, search: activeSearch, isCollapsed: isCollapsed,
+                             progress: ProgressLine(fraction: progressFraction, isVisible: isProgressVisible),
+                             clearButton: clearButton)
             } else {
-                ClassicFileBar(title: title, isCollapsed: isCollapsed,
-                               progress: ProgressLine(fraction: progressFraction, isVisible: isProgressVisible))
+                ClassicFileBar(title: title, search: activeSearch, isCollapsed: isCollapsed,
+                               progress: ProgressLine(fraction: progressFraction, isVisible: isProgressVisible),
+                               clearButton: clearButton)
             }
         }
         .contentShape(Rectangle())
@@ -110,25 +139,64 @@ struct FileBar: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title.isEmpty ? Text("Enter URL") : Text(title))
+        .accessibilityLabel(accessibilityTitle)
         .accessibilityValue(isProgressVisible ? Text("Loading") : Text(""))
-        .accessibilityHint(isCollapsed ? Text("Shows the bar") : Text("Edits the address"))
+        .accessibilityHint(accessibilityEditHint)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { tap() }
+        .accessibilityActions {
+            if activeSearch != nil, let onClearSearch {
+                Button("Clear Search") { onClearSearch() }
+            }
+        }
     }
 }
 
+/// The file name, the "Enter URL" placeholder, or the active symbol search.
 private struct BarTitle: View {
     let title: String
+    let search: String?
     let isCollapsed: Bool
 
+    private var font: Font {
+        isCollapsed ? FileBarMetrics.collapsedTitleFont : FileBarMetrics.titleFont
+    }
+
     var body: some View {
-        Text(title.isEmpty ? "Enter URL" : title)
-            .font(isCollapsed ? FileBarMetrics.collapsedTitleFont : FileBarMetrics.titleFont)
-            .contentTransition(.interpolate)  // smooth size change between states
-            .foregroundStyle(title.isEmpty ? .secondary : .primary)
-            .lineLimit(1)
-            .truncationMode(.middle)
+        if let search {
+            HStack(spacing: 5) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                Text(search)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .font(font)
+        } else {
+            Text(title.isEmpty ? "Enter URL" : title)
+                .font(font)
+                .contentTransition(.interpolate)  // smooth size change between states
+                .foregroundStyle(title.isEmpty ? .secondary : .primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+}
+
+/// Clears the symbol search, at the trailing end of the bar.
+private struct ClearSearchButton: View {
+    let action: @MainActor () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 6)
     }
 }
 
@@ -136,14 +204,17 @@ private struct BarTitle: View {
 @available(iOS 26.0, *)
 private struct GlassFileBar: View {
     let title: String
+    let search: String?
     let isCollapsed: Bool
     let progress: ProgressLine
+    let clearButton: ClearSearchButton?
 
     var body: some View {
-        BarTitle(title: title, isCollapsed: isCollapsed)
-            .padding(.horizontal, isCollapsed ? 14 : 20)
+        BarTitle(title: title, search: search, isCollapsed: isCollapsed)
+            .padding(.horizontal, isCollapsed ? 14 : (clearButton == nil ? 20 : 44))
             .frame(maxWidth: isCollapsed ? nil : .infinity)
             .frame(height: isCollapsed ? FileBarMetrics.glassCollapsedHeight : FileBarMetrics.glassHeight)
+            .overlay(alignment: .trailing) { clearButton }
             .overlay(alignment: .bottom) { progress }
             .clipShape(Capsule())
             .glassEffect(.regular.interactive(), in: Capsule())
@@ -155,18 +226,21 @@ private struct GlassFileBar: View {
 /// iOS 18: Safari 18's rounded field. The toolbar material behind it is drawn by `BottomBarStack`.
 private struct ClassicFileBar: View {
     let title: String
+    let search: String?
     let isCollapsed: Bool
     let progress: ProgressLine
+    let clearButton: ClearSearchButton?
 
     private var field: RoundedRectangle {
         RoundedRectangle(cornerRadius: FileBarMetrics.fieldCornerRadius, style: .continuous)
     }
 
     var body: some View {
-        BarTitle(title: title, isCollapsed: isCollapsed)
-            .padding(.horizontal, 12)
+        BarTitle(title: title, search: search, isCollapsed: isCollapsed)
+            .padding(.horizontal, clearButton == nil ? 12 : 40)
             .frame(maxWidth: .infinity)
             .frame(height: isCollapsed ? FileBarMetrics.fieldCollapsedHeight : FileBarMetrics.fieldHeight)
+            .overlay(alignment: .trailing) { clearButton }
             .background {
                 field
                     .fill(Color(uiColor: .tertiarySystemFill))
@@ -210,6 +284,8 @@ struct BottomBarStack: View {
     let copyText: String?
     let onPasteAndGo: (@MainActor () -> Void)?
     let onOpenInBrowser: (@MainActor () -> Void)?
+    let searchQuery: String?
+    let onClearSearch: (@MainActor () -> Void)?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -217,7 +293,8 @@ struct BottomBarStack: View {
          mode: Binding<ViewMode>?,
          onExpand: @escaping @MainActor () -> Void, onEdit: @escaping @MainActor () -> Void,
          copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
-         onOpenInBrowser: (@MainActor () -> Void)? = nil) {
+         onOpenInBrowser: (@MainActor () -> Void)? = nil,
+         searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil) {
         self.title = title
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
@@ -228,13 +305,16 @@ struct BottomBarStack: View {
         self.copyText = copyText
         self.onPasteAndGo = onPasteAndGo
         self.onOpenInBrowser = onOpenInBrowser
+        self.searchQuery = searchQuery
+        self.onClearSearch = onClearSearch
     }
 
     var body: some View {
         let stack = VStack(spacing: 0) {
             FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
                     isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
-                    copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser)
+                    copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
+                    searchQuery: searchQuery, onClearSearch: onClearSearch)
             if !isCollapsed, let mode {
                 ModeSelector(mode: mode)
                     .padding(.bottom, FileBarMetrics.selectorBottomPadding)

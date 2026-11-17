@@ -55,7 +55,7 @@ struct AddressEditor: View {
     }
 
     private var field: some View {
-        URLTextField(text: $text, onSubmit: submit, onPasteAndGo: pasteAndGo)
+        BarTextField(style: .url, text: $text, onSubmit: submit, onPasteAndGo: pasteAndGo)
             .padding(.horizontal, 14)
             .frame(height: FileBarMetrics.fieldHeight)
             .modifier(FieldBackground())
@@ -77,19 +77,29 @@ struct AddressEditor: View {
     }
 }
 
-/// The URL field: a UIKit text field, like Safari's. It takes focus and selects the whole URL
+/// The bar's text field (address or symbol search): a UIKit text field, like Safari's. It takes focus and selects the whole text
 /// when it appears, has the system clear button, and keeps its own selection valid as the text
 /// changes. (SwiftUI's `TextField(selection:)` with a preset selection crashed on delete, because
 /// the selection still pointed into the old, longer text.)
-private struct URLTextField: UIViewRepresentable {
+private struct BarTextField: UIViewRepresentable {
+    enum Style {
+        /// The address: URL keyboard, Go, Paste and Go in the edit menu.
+        case url
+        /// Symbol search: normal keyboard, Search.
+        case search
+    }
+
+    let style: Style
     @Binding var text: String
     let onSubmit: @MainActor () -> Void
-    let onPasteAndGo: @MainActor (String) -> Void
+    /// Adds Paste and Go to the edit menu when set.
+    let onPasteAndGo: (@MainActor (String) -> Void)?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(text: Binding<String>, onSubmit: @escaping @MainActor () -> Void,
-         onPasteAndGo: @escaping @MainActor (String) -> Void) {
+    init(style: Style, text: Binding<String>, onSubmit: @escaping @MainActor () -> Void,
+         onPasteAndGo: (@MainActor (String) -> Void)? = nil) {
+        self.style = style
         _text = text
         self.onSubmit = onSubmit
         self.onPasteAndGo = onPasteAndGo
@@ -101,23 +111,31 @@ private struct URLTextField: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UITextField {
         let field = UITextField()
-        field.placeholder = String(localized: "Enter URL")
         field.text = text
         field.font = .preferredFont(forTextStyle: .body)
         field.adjustsFontForContentSizeCategory = true
-        field.keyboardType = .URL
-        field.textContentType = .URL
         field.autocapitalizationType = .none
         field.autocorrectionType = .no
         field.spellCheckingType = .no
-        field.returnKeyType = .go
         field.clearButtonMode = .whileEditing
+        switch style {
+        case .url:
+            field.placeholder = String(localized: "Enter URL")
+            field.keyboardType = .URL
+            field.textContentType = .URL
+            field.returnKeyType = .go
+        case .search:
+            field.placeholder = String(localized: "Search Symbols")
+            field.keyboardType = .asciiCapable  // symbol names
+            field.returnKeyType = .search
+        }
         field.delegate = context.coordinator
         field.addTarget(context.coordinator, action: #selector(Coordinator.textChanged(_:)), for: .editingChanged)
         // Fill the width it's given instead of sizing to its text.
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        // Once it's in a window: bring up the keyboard and select the whole URL, like Safari.
+        // Once it's in a window: bring up the keyboard and select the whole text, like Safari, so
+        // typing replaces it.
         Task { @MainActor in
             field.becomeFirstResponder()
             field.selectAll(nil)
@@ -135,10 +153,10 @@ private struct URLTextField: UIViewRepresentable {
     final class Coordinator: NSObject, UITextFieldDelegate {
         var text: Binding<String>
         var onSubmit: @MainActor () -> Void
-        var onPasteAndGo: @MainActor (String) -> Void
+        var onPasteAndGo: (@MainActor (String) -> Void)?
 
         init(text: Binding<String>, onSubmit: @escaping @MainActor () -> Void,
-             onPasteAndGo: @escaping @MainActor (String) -> Void) {
+             onPasteAndGo: (@MainActor (String) -> Void)?) {
             self.text = text
             self.onSubmit = onSubmit
             self.onPasteAndGo = onPasteAndGo
@@ -147,10 +165,10 @@ private struct URLTextField: UIViewRepresentable {
         /// Adds Paste and Go right after Paste, like Safari's address field.
         func textField(_ textField: UITextField, editMenuForCharactersIn range: NSRange,
                        suggestedActions: [UIMenuElement]) -> UIMenu? {
-            guard Clipboard.hasAddress else { return nil }  // nil: the standard menu
+            guard onPasteAndGo != nil, Clipboard.hasAddress else { return nil }  // nil: the standard menu
             let pasteAndGo = UIAction(title: String(localized: "Paste and Go")) { [weak self] _ in
                 guard let address = Clipboard.address() else { return }
-                self?.onPasteAndGo(address)
+                self?.onPasteAndGo?(address)
             }
             let children = Self.inserting(pasteAndGo, afterPasteIn: suggestedActions)
                 ?? [pasteAndGo] + suggestedActions  // no Paste item found: put it first
@@ -186,6 +204,37 @@ private struct URLTextField: UIViewRepresentable {
             onSubmit()
             return false
         }
+    }
+}
+
+/// Searching symbols, in Symbols mode: the bar becomes a search field above the keyboard. The
+/// list filters as you type; Done (or Search) keeps the filter, and the field's clear button
+/// clears it.
+struct SymbolSearchEditor: View {
+    @Binding var query: String
+    let onDone: @MainActor () -> Void
+
+    init(query: Binding<String>, onDone: @escaping @MainActor () -> Void) {
+        _query = query
+        self.onDone = onDone
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                BarTextField(style: .search, text: $query, onSubmit: onDone)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: FileBarMetrics.fieldHeight)
+            .modifier(FieldBackground())
+            Button("Done") { onDone() }
+        }
+        .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
+        .padding(.vertical, 8)
+        .modifier(EditorBarBackground())
     }
 }
 
