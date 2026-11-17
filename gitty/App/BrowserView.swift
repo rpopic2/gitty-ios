@@ -60,7 +60,8 @@ struct BrowserView: View {
     }
 }
 
-/// Before any file is open: an empty page with the address bar ready, like a new Safari tab.
+/// Before any file is open: the Project list (recent and saved files) with the address bar
+/// selected and the keyboard up, like a new Safari tab.
 private struct StartScreen: View {
     @Binding var isEditingAddress: Bool
     let rejectedAddress: String?
@@ -69,8 +70,7 @@ private struct StartScreen: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Color(uiColor: .systemBackground)
-                .ignoresSafeArea()
+            ProjectView(onOpen: onOpen)
             if isEditingAddress {
                 AddressEditor(initialText: rejectedAddress ?? "", showsInitialError: rejectedAddress != nil,
                               onOpen: onOpen, onCancel: { isEditingAddress = false })

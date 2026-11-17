@@ -9,10 +9,11 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - **Picks up where you left off:** the reading position of each file is saved when scrolling stops and when the app goes to the background. It is stored as a text position, so it survives rotation and refreshes.
 - **Smooth, exact scrolling:** every line's height is known up front, so the scroll bar and text never jump.
 - **Safari-style bottom bar:** shows the file name, collapses while you scroll down, and shows a thin loading line only while downloading. Liquid Glass on iOS 26+, the Safari 18 style on iOS 18.
-- **Photos-style mode selector** under the bar: **Project** (coming later), **File** (the raw file) and **Symbols**.
+- **Photos-style mode selector** under the bar: **Project**, **File** (the raw file) and **Symbols**.
+- **Project:** every file you've opened or saved, recent first, with an icon on files that open offline. Tap one to open it in File mode, or swipe one to delete it and its saved copy. With no file open, the start page shows this list with the address bar ready.
 - **Symbols:** every definition as a card, like photos in Photos. For C that's top-level functions, types, macros and globals. For C#, each type is followed by its members, named `Type.Member`. Tap a card to see only that symbol, swipe left and right to move between symbols, and swipe down to zoom back to the list. Symbols come from [tree-sitter](https://tree-sitter.github.io/).
 
-- **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source. Recently opened files, then every other file saved on the device, are listed while you type. Swipe one to delete it and its saved copy. The last file reopens on launch. You can also share a page from Safari to gitty, or use **Paste and Go**: long-press the bar, or pick it from the field's edit menu.
+- **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source. The last file reopens on launch. You can also share a page from Safari to gitty, or use **Paste and Go**: long-press the bar, or pick it from the field's edit menu.
 
 ## Project
 
@@ -60,7 +61,7 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/App/` | App entry point, and the root view that picks the start page or the open file |
 | `gitty/Core/AddressParser.swift` | What was typed → the URL to load (https only, GitHub links → raw) |
 | `gitty/Core/RecentFilesStore.swift` | Recently opened URLs (UserDefaults) |
-| `gitty/Viewer/AddressEditor.swift` | Editing the address: URL field above the keyboard, recent files above it |
+| `gitty/Viewer/AddressEditor.swift` | Editing the address: URL field above the keyboard, Paste and Go |
 | `gitty/Core/DocumentStore.swift` | Saved copies on disk and the network fetch: never expires, conditional refresh |
 | `gitty/Core/ReadingPositionStore.swift` | Saved reading position per file (UserDefaults) |
 | `gitty/Core/SymbolIndexer.swift` | Generic symbol engine: runs a language's query, keeps top-level definitions |
@@ -73,6 +74,7 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/Viewer/CodeTextView.swift` | `UITextView` (TextKit 1, full layout), pull-to-refresh, scroll tracking for the bar |
 | `gitty/Viewer/FileBar.swift` | Bottom bar, loading line and the bar + selector stack. Sizes in `FileBarMetrics` |
 | `gitty/Viewer/ModeSelector.swift` | Project / File / Symbols selector |
+| `gitty/Viewer/ProjectView.swift` | Project mode and start page: recent and saved files |
 | `gitty/Viewer/BarCollapseTracker.swift` | When the bar collapses while scrolling (shared by File and Symbols) |
 | `gitty/Viewer/SymbolsView.swift` | The Symbols list and its cards |
 | `gitty/Viewer/SymbolPager.swift` | One symbol at a time: paging, zoom back, read-only text view |

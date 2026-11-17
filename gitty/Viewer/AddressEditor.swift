@@ -1,9 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// Editing the address, like tapping Safari's address bar: a focused URL field at the bottom (above
-/// the keyboard) and files above it: recently opened ones first, then every other file saved on
-/// the device. Covers the screen while it's open.
+/// Editing the address, like tapping Safari's address bar: a focused URL field at the bottom, above
+/// the keyboard, with Cancel and a hint when the text can't be opened. Recent and saved files are
+/// in the Project view.
 struct AddressEditor: View {
     /// What the field starts with: the current URL, selected, or nothing on the start page.
     let initialText: String
@@ -14,8 +14,6 @@ struct AddressEditor: View {
 
     @State private var text: String
     @State private var errorMessage: String?
-    @State private var recents: [URL] = []
-    @State private var saved: [URL] = []
 
     init(initialText: String, showsInitialError: Bool = false,
          onOpen: @escaping @MainActor (URL) -> Void, onCancel: @escaping @MainActor () -> Void) {
@@ -26,37 +24,14 @@ struct AddressEditor: View {
         _text = State(initialValue: initialText)
     }
 
-    private var store: RecentFilesStore { .standard }
-
-    /// Recent files first, then other saved files (newest first), without duplicates. Everything
-    /// until the reader starts typing, then the ones that contain the text.
-    private var shownFiles: [FileEntry] {
-        let savedSet = Set(saved)
-        var seen = Set<URL>()
-        let files = (recents + saved)
-            .filter { seen.insert($0).inserted }
-            .map { FileEntry(url: $0, isSaved: savedSet.contains($0)) }
-        let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, query != initialText else { return files }
-        return files.filter { $0.url.absoluteString.localizedCaseInsensitiveContains(query) }
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            FilesList(files: shownFiles, onOpen: onOpen, onDelete: delete)
-            editorBar
-        }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .onAppear {
-            recents = store.urls()
-            if showsInitialError, case .invalid(let message) = AddressParser.parse(initialText) {
-                errorMessage = message
+        editorBar
+            .onAppear {
+                if showsInitialError, case .invalid(let message) = AddressParser.parse(initialText) {
+                    errorMessage = message
+                }
             }
-        }
-        .task {
-            saved = await DocumentStore.shared.savedDocuments().map(\.url)
-        }
-        .onChange(of: text) { errorMessage = nil }
+            .onChange(of: text) { errorMessage = nil }
     }
 
     private var editorBar: some View {
@@ -84,15 +59,6 @@ struct AddressEditor: View {
             .padding(.horizontal, 14)
             .frame(height: FileBarMetrics.fieldHeight)
             .modifier(FieldBackground())
-    }
-
-    /// Removes the file from the list and deletes its saved copy and reading position.
-    private func delete(_ url: URL) {
-        store.remove(url)
-        ReadingPositionStore.standard.remove(for: url)
-        recents = store.urls()
-        saved.removeAll { $0 == url }
-        Task { await DocumentStore.shared.delete(url) }
     }
 
     /// The field's edit menu ▸ Paste and Go: put the copied address in the field and go.
@@ -211,60 +177,6 @@ private struct URLTextField: UIViewRepresentable {
             onSubmit()
             return false
         }
-    }
-}
-
-private struct FileEntry: Identifiable {
-    let url: URL
-    /// Has a saved copy, so it opens offline.
-    let isSaved: Bool
-    var id: URL { url }
-}
-
-/// Recent and saved files: name and location, and an icon on files that open offline.
-/// Tap to open; swipe to delete it from the list and the device.
-private struct FilesList: View {
-    let files: [FileEntry]
-    let onOpen: @MainActor (URL) -> Void
-    let onDelete: @MainActor (URL) -> Void
-
-    var body: some View {
-        List {
-            if !files.isEmpty {
-                Section("Files") {
-                    ForEach(files) { file in
-                        Button { onOpen(file.url) } label: {
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(file.url.displayFileName)
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    Text(file.url.displayLocation)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                Spacer(minLength: 0)
-                                if file.isSaved {
-                                    Image(systemName: "arrow.down.circle.fill")
-                                        .foregroundStyle(.secondary)
-                                        .accessibilityLabel("Saved on this device")
-                                }
-                            }
-                        }
-                        .swipeActions {
-                            Button(role: .destructive) { onDelete(file.url) } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .scrollDismissesKeyboard(.interactively)
     }
 }
 

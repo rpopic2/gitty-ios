@@ -111,12 +111,9 @@ struct CodeScreen: View {
                 case .symbols:
                     symbols
                 case .project:
-                    placeholder {
-                        ContentUnavailableView(
-                            "Project",
-                            systemImage: "folder",
-                            description: Text("The project view comes in a later step.")
-                        )
+                    ProjectView(currentURL: model.url) { url in
+                        mode = .file  // opening a file shows it
+                        onOpen(url)
                     }
                 }
             }
