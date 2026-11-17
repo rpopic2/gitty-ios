@@ -6,11 +6,19 @@ import UIKit
 /// (the zoom navigation transition provides that gesture).
 struct SymbolPager: View {
     let symbols: [CodeSymbol]
+    /// The symbol that was tapped. The pager opens on it.
+    let initialID: Int
+    /// The symbol on screen. Reported only after the pager has opened on `initialID`.
     @Binding var currentID: Int?
     let text: @MainActor (CodeSymbol) -> NSAttributedString?
 
+    @State private var scrolledID: Int?
+    @State private var isPositioned = false
+
+    private var visibleID: Int { scrolledID ?? initialID }
+
     private var current: CodeSymbol? {
-        symbols.first { $0.id == currentID }
+        symbols.first { $0.id == visibleID }
     }
 
     var body: some View {
@@ -25,25 +33,34 @@ struct SymbolPager: View {
                 trailing: safeArea.trailing
             )
             ZStack(alignment: .bottom) {
-                ScrollView(.horizontal) {
-                    LazyHStack(spacing: 0) {
-                        ForEach(symbols) { symbol in
-                            ReadOnlyTextView(
-                                text: text(symbol) ?? NSAttributedString(),
-                                textID: symbol.id,
-                                insets: pageInsets,
-                                isCurrent: symbol.id == currentID
-                            )
-                            .containerRelativeFrame([.horizontal, .vertical])
+                ScrollViewReader { reader in
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: 0) {
+                            ForEach(symbols) { symbol in
+                                ReadOnlyTextView(
+                                    text: text(symbol) ?? NSAttributedString(),
+                                    textID: symbol.id,
+                                    insets: pageInsets,
+                                    isCurrent: symbol.id == visibleID
+                                )
+                                .containerRelativeFrame([.horizontal, .vertical])
+                            }
                         }
+                        .scrollTargetLayout()
                     }
-                    .scrollTargetLayout()
+                    .scrollTargetBehavior(.paging)
+                    .scrollPosition(id: $scrolledID)
+                    .scrollIndicators(.hidden)
+                    .background(Color(uiColor: RawTextStyle.backgroundColor))
+                    .ignoresSafeArea()
+                    .onAppear {
+                        // `scrollPosition(id:)` ignores a starting value during the first layout and
+                        // opens on the first page. Move to the tapped symbol explicitly.
+                        reader.scrollTo(initialID, anchor: .leading)
+                        scrolledID = initialID
+                        isPositioned = true
+                    }
                 }
-                .scrollTargetBehavior(.paging)
-                .scrollPosition(id: $currentID)
-                .scrollIndicators(.hidden)
-                .background(Color(uiColor: RawTextStyle.backgroundColor))
-                .ignoresSafeArea()
 
                 if let current {
                     SymbolCaption(symbol: current)
@@ -52,6 +69,11 @@ struct SymbolPager: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .onChange(of: scrolledID) { _, id in
+            // Until the pager is on the tapped symbol, don't let the first layout overwrite it.
+            guard isPositioned, let id else { return }
+            currentID = id
+        }
     }
 }
 

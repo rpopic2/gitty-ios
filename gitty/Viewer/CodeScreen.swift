@@ -40,8 +40,9 @@ struct CodeScreen: View {
             // Keep the card of the symbol on screen in view, so swiping down zooms back to it.
             if let id { listSymbolID = id }
         }
-        .navigationDestination(item: $openedSymbolID) { _ in
-            SymbolPager(symbols: indexedSymbols, currentID: $pagerSymbolID, text: model.text(of:))
+        .navigationDestination(item: $openedSymbolID) { openedID in
+            SymbolPager(symbols: indexedSymbols, initialID: openedID, currentID: $pagerSymbolID,
+                        text: model.text(of:))
                 .navigationTransition(.zoom(sourceID: pagerSymbolID ?? -1, in: symbolNamespace))
         }
         .alert("Couldn’t Refresh", isPresented: refreshAlertIsPresented, presenting: model.refreshError) { _ in
