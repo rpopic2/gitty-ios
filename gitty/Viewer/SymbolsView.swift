@@ -17,10 +17,14 @@ struct SymbolsView: View {
     /// False while another mode covers the list (it stays alive to keep its place).
     let isActive: Bool
     let namespace: Namespace.ID
-    /// The card in the middle of the screen. Set it to bring a card back on screen.
-    @Binding var scrolledID: Int?
-    /// Where to start when `scrolledID` is still `nil`: the saved place in the list.
+    /// Brings a card into view (the pager closing on another card). Each request scrolls once,
+    /// even to the same card as last time.
+    let scrollRequest: SymbolScrollRequest?
+    /// The saved place in the list, where it starts.
     let initialID: @MainActor () -> Int?
+    /// Another card reached the middle of the screen (to save the place). It's reported without
+    /// redrawing anything, here or in the screen around it: that happens many times a second.
+    let onCenteredSymbolChange: @MainActor (Int) -> Void
     let isBarCollapsed: Bool
     let barTapCount: Int
     /// The open file, which symbols without a `fileURL` are in (for the grouped view).
@@ -43,16 +47,13 @@ struct SymbolsView: View {
     @State private var switchAnchor: Int?
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
-    /// The list's own scroll position. It's passed on to `scrolledID` only once the list has
-    /// moved to where it should start, so the first layout (on the first card) can't overwrite it.
-    @State private var position: Int?
-    @State private var isPositioned = false
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(symbols: [CodeSymbol], query: String, isActive: Bool, namespace: Namespace.ID,
-         scrolledID: Binding<Int?>,
+         scrollRequest: SymbolScrollRequest?,
          initialID: @escaping @MainActor () -> Int? = { nil },
+         onCenteredSymbolChange: @escaping @MainActor (Int) -> Void,
          isBarCollapsed: Bool, barTapCount: Int, openFile: URL,
          onOpen: @escaping @MainActor (CodeSymbol) -> Void,
          onOpenFile: @escaping @MainActor (URL) -> Void,
@@ -62,8 +63,9 @@ struct SymbolsView: View {
         self.query = query
         self.isActive = isActive
         self.namespace = namespace
-        _scrolledID = scrolledID
+        self.scrollRequest = scrollRequest
         self.initialID = initialID
+        self.onCenteredSymbolChange = onCenteredSymbolChange
         self.isBarCollapsed = isBarCollapsed
         self.barTapCount = barTapCount
         self.openFile = openFile
@@ -86,18 +88,13 @@ struct SymbolsView: View {
                         .transition(.opacity)
                 }
             }
-        }
-        .onChange(of: position) { _, id in
-            guard isPositioned, let id, id != scrolledID else { return }
-            scrolledID = id
-        }
-        .onChange(of: scrolledID) { _, id in
-            // Set from outside (the pager closing on another card): bring that card into view.
-            guard let id, id != position else { return }
-            position = id
+            .onChange(of: scrollRequest) { _, request in
+                guard let request else { return }
+                reader.scrollTo(request.id, anchor: .center)
+            }
         }
         .accessibilityAction(named: layoutActionName) {
-            switchLayout(grouped: !isGrouped, anchor: position)
+            switchLayout(grouped: !isGrouped, anchor: scroll.centeredID)
         }
     }
 
@@ -110,11 +107,27 @@ struct SymbolsView: View {
     /// first item, so move to the start explicitly: after a pinch, the symbol that was in the
     /// middle; otherwise the saved place. Search results start at the top, with the best match.
     private func moveToStart(_ reader: ScrollViewProxy) {
-        let target = switchAnchor ?? (query.isEmpty ? initialID() ?? scrolledID : nil)
+        let target = switchAnchor ?? (query.isEmpty ? initialID() ?? scroll.centeredID : nil)
         switchAnchor = nil
         if let target { reader.scrollTo(target, anchor: .center) }
-        position = target
-        isPositioned = true
+        scroll.centeredID = target
+        scroll.isPositioned = true
+    }
+
+    /// The card in the middle, for `scrollPosition`: kept in the unobserved `scroll`, so a new
+    /// card reaching the middle redraws nothing, and reported to `onCenteredSymbolChange` once
+    /// the list has moved to where it starts (its first layout, on the first card, isn't).
+    private var centeredID: Binding<Int?> {
+        let scroll = scroll
+        let report = onCenteredSymbolChange
+        return Binding(
+            get: { scroll.centeredID },
+            set: { id in
+                guard id != scroll.centeredID else { return }
+                scroll.centeredID = id
+                if scroll.isPositioned, let id { report(id) }
+            }
+        )
     }
 
     // MARK: Layouts
@@ -174,10 +187,10 @@ struct SymbolsView: View {
                 guard !pinchHandled else { return }
                 if value.magnification < 0.8, !isGrouped {
                     pinchHandled = true
-                    switchLayout(grouped: true, anchor: position)
+                    switchLayout(grouped: true, anchor: scroll.centeredID)
                 } else if value.magnification > 1.25, isGrouped {
                     pinchHandled = true
-                    switchLayout(grouped: false, anchor: position)
+                    switchLayout(grouped: false, anchor: scroll.centeredID)
                 }
             }
             .onEnded { _ in pinchHandled = false }
@@ -185,6 +198,7 @@ struct SymbolsView: View {
 
     private func switchLayout(grouped: Bool, anchor: Int?) {
         switchAnchor = anchor
+        scroll.isPositioned = false  // until the other layout has moved to the anchor
         withAnimation(.smooth(duration: 0.3)) { isGrouped = grouped }
     }
 
@@ -213,7 +227,7 @@ struct SymbolsView: View {
         ScrollView {
             content()
         }
-        .scrollPosition(id: $position, anchor: .center)
+        .scrollPosition(id: centeredID, anchor: .center)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe that
         // closes the search mustn't scroll; scrolling comes back for the next swipe.
@@ -415,6 +429,21 @@ struct OnPullDownPastTop: ViewModifier {
 private final class ScrollTracking {
     var tracker = BarCollapseTracker()
     var isUserScrolling = false
+    /// The card in the middle of the screen.
+    var centeredID: Int?
+    /// The list has moved to where it starts, so `centeredID` changes are the reader's.
+    var isPositioned = false
+}
+
+/// A request to bring a card into view in Symbols. A new request (a new `token`) scrolls
+/// again, even to the same card.
+nonisolated struct SymbolScrollRequest: Equatable, Sendable {
+    let id: Int
+    let token = UUID()
+
+    init(_ id: Int) {
+        self.id = id
+    }
 }
 
 /// One symbol in the list: its kind, name, line and the first lines of its code.

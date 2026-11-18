@@ -3,7 +3,10 @@ import UIKit
 
 /// Project mode, and the start page: the project chosen in the sidebar, or, for Files, every
 /// file you've opened or saved that isn't part of a project.
-struct ProjectView: View {
+///
+/// Equatable, so the screen around it can redraw (while Symbols scrolls, say) without its list
+/// of every file in the project redrawing too: use `.equatable()`.
+struct ProjectView: View, Equatable {
     /// The open project's id, or "" for Files.
     let projectID: String
     /// The file on screen, marked in the list.
@@ -24,6 +27,12 @@ struct ProjectView: View {
         self.isActive = isActive
         self.sorting = sorting
         self.onOpen = onOpen
+    }
+
+    /// `onOpen` isn't compared: what it does never changes.
+    nonisolated static func == (lhs: ProjectView, rhs: ProjectView) -> Bool {
+        lhs.projectID == rhs.projectID && lhs.currentURL == rhs.currentURL
+            && lhs.isActive == rhs.isActive && lhs.sorting == rhs.sorting
     }
 
     var body: some View {

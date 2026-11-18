@@ -22,8 +22,8 @@ struct CodeScreen: View {
     @State private var openedSymbolID: Int?
     /// The symbol on screen in the pager. The zoom back lands on its card.
     @State private var pagerSymbolID: Int?
-    /// The card the Symbols list keeps in view.
-    @State private var listSymbolID: Int?
+    /// Brings a card into view in the Symbols list (the pager closing on another symbol).
+    @State private var listScrollRequest: SymbolScrollRequest?
     /// The symbols the pager pages through: the list's (search results) when a card was tapped,
     /// all of them after Search from File.
     @State private var pagerSymbols: [CodeSymbol] = []
@@ -85,7 +85,6 @@ struct CodeScreen: View {
         .onChange(of: needsProjectSymbols, initial: true) {
             if needsProjectSymbols { model.loadProjectSymbols() }
         }
-        .onChange(of: listSymbolID) { saveListPosition() }
         .onChange(of: symbolQuery, initial: true) { model.search(symbolQuery) }
         .navigationDestination(item: $openedSymbolID) { openedID in
             SymbolPager(
@@ -95,8 +94,8 @@ struct CodeScreen: View {
                 text: model.text(of:),
                 // Not on tap, which would move the card the zoom starts from. Once you page, the
                 // list (hidden behind) follows, so it's already on the card when you swipe down.
-                onPage: { listSymbolID = $0 },
-                onWillClose: { listSymbolID = $0 },
+                onPage: { listScrollRequest = SymbolScrollRequest($0) },
+                onWillClose: { listScrollRequest = SymbolScrollRequest($0) },
                 onShowInFile: { showInFile($0) },
                 symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
                 onSearchSymbols: { searchSymbols(for: $0) },
@@ -129,6 +128,7 @@ struct CodeScreen: View {
                     mode = .file  // opening a file shows it
                     onOpen(url)
                 }
+                .equatable()  // hidden, its big list mustn't redraw each time this screen does
                 .opacity(mode == .project ? 1 : 0)
                 .allowsHitTesting(mode == .project)
                 .accessibilityHidden(mode != .project)
@@ -215,8 +215,9 @@ struct CodeScreen: View {
                 query: shownQuery,
                 isActive: mode == .symbols,
                 namespace: symbolNamespace,
-                scrolledID: $listSymbolID,
+                scrollRequest: listScrollRequest,
                 initialID: { savedListSymbolID() },
+                onCenteredSymbolChange: { saveListPosition($0) },
                 isBarCollapsed: model.isBarCollapsed,
                 barTapCount: model.barTapCount,
                 openFile: model.url,
@@ -255,11 +256,12 @@ struct CodeScreen: View {
     /// Saves the card in the middle of the Symbols list, like File saves its place. It changes
     /// only when another card reaches the middle (a few times a second at most), and the save is
     /// a few bytes. Not while searching: a search reorders the cards, and isn't kept.
-    private func saveListPosition() {
-        guard symbolQuery.isEmpty, let id = listSymbolID,
-              let symbol = indexedSymbols.first(where: { $0.id == id })
-        else { return }
-        ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), for: model.url)
+    private func saveListPosition(_ id: Int) {
+        guard symbolQuery.isEmpty else { return }
+        // Ids are places in the full list, so no need to look through it.
+        let symbols = indexedSymbols
+        guard symbols.indices.contains(id), symbols[id].id == id else { return }
+        ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbols[id]), for: model.url)
     }
 
     /// The symbols matching the search, best first; all of them in file order without one.
