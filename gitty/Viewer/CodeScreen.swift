@@ -206,6 +206,7 @@ struct CodeScreen: View {
                 query: shownQuery,
                 mode: $mode,
                 isActive: mode.showsSymbols,
+                ownText: ownText,
                 scrollRequest: listScrollRequest,
                 initialID: { savedListSymbolID() },
                 onCenteredSymbolChange: { saveListPosition($0) },
@@ -233,6 +234,13 @@ struct CodeScreen: View {
                 )
             }
         }
+    }
+
+    /// The open file's text, for its symbols' code at the Code level (the same object until
+    /// it's refreshed).
+    private var ownText: NSString? {
+        guard case .loaded = model.phase else { return nil }
+        return model.plainText
     }
 
     private var indexedSymbols: [CodeSymbol] {
