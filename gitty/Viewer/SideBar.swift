@@ -36,9 +36,9 @@ final class SideBarState {
     private static let animation = Animation.smooth(duration: 0.3)
 }
 
-/// The app's content with the sidebar to its right. Swiping left from the right edge of the
-/// screen pushes the content aside and pulls the sidebar in, following the finger. Tapping or
-/// swiping right on the content that's still showing puts it back.
+/// The app's content with the sidebar to its right, as wide as the screen. Swiping left from the
+/// right edge of the screen pushes the content off and pulls the sidebar in, following the
+/// finger; swiping right on the sidebar puts it back the same way.
 struct SideBarContainer<Content: View, SideBar: View>: View {
     let state: SideBarState
     let content: () -> Content
@@ -68,7 +68,7 @@ struct SideBarContainer<Content: View, SideBar: View>: View {
             }
         }
         .onGeometryChange(for: CGFloat.self) { proxy in
-            min(340, (proxy.size.width * 0.82).rounded())
+            proxy.size.width
         } action: { width in
             state.width = width
             if state.isOpen { state.reveal = width }
@@ -76,24 +76,22 @@ struct SideBarContainer<Content: View, SideBar: View>: View {
         .background(ScreenEdgePan(state: state))
     }
 
-    /// The content that still shows beside the open sidebar: dimmed, tap or swipe right to close.
+    /// The content still showing while the sidebar slides: dimmed, and a tap puts it back.
+    /// (Swiping right is the window's pan, in `ScreenEdgePan`.)
     private var closeArea: some View {
         Color.black
             .opacity(0.15 * state.reveal / max(state.width, 1))
             .ignoresSafeArea()
             .contentShape(Rectangle())
             .onTapGesture { state.close() }
-            .gesture(
-                DragGesture(minimumDistance: 8)
-                    .onChanged { drag in state.track(state.width - max(drag.translation.width, 0)) }
-                    .onEnded { drag in state.settle(velocity: -drag.velocity.width) }
-            )
     }
 }
 
-/// UIKit's screen-edge swipe, from the right edge, on the whole window. It's attached to the
-/// window (not to a view in front of the content), so it doesn't take touches from anything,
-/// and scroll views wait for it to fail before they start scrolling.
+/// The sidebar's swipes, on the whole window: UIKit's screen-edge swipe from the right edge opens
+/// it, and a swipe to the right anywhere closes it while it's open. They're attached to the
+/// window (not to a view in front of the content), so they don't take touches from anything,
+/// and scroll views wait for them to fail before they start scrolling. Neither starts for a
+/// vertical swipe, so the sidebar's list scrolls as usual.
 private struct ScreenEdgePan: UIViewRepresentable {
     let state: SideBarState
 
@@ -102,7 +100,7 @@ private struct ScreenEdgePan: UIViewRepresentable {
     func makeUIView(context: Context) -> InstallerView {
         let view = InstallerView()
         view.isUserInteractionEnabled = false
-        view.recognizer = context.coordinator.recognizer
+        view.recognizers = [context.coordinator.openRecognizer, context.coordinator.closeRecognizer]
         return view
     }
 
@@ -110,30 +108,34 @@ private struct ScreenEdgePan: UIViewRepresentable {
         context.coordinator.state = state
     }
 
-    /// Adds the recognizer to whichever window it's in.
+    /// Adds the recognizers to whichever window it's in.
     final class InstallerView: UIView {
-        var recognizer: UIGestureRecognizer?
+        var recognizers: [UIGestureRecognizer] = []
 
         override func willMove(toWindow newWindow: UIWindow?) {
             super.willMove(toWindow: newWindow)
-            guard let recognizer else { return }
-            recognizer.view?.removeGestureRecognizer(recognizer)
-            newWindow?.addGestureRecognizer(recognizer)
+            for recognizer in recognizers {
+                recognizer.view?.removeGestureRecognizer(recognizer)
+                newWindow?.addGestureRecognizer(recognizer)
+            }
         }
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var state: SideBarState?
-        let recognizer = UIScreenEdgePanGestureRecognizer()
+        let openRecognizer = UIScreenEdgePanGestureRecognizer()
+        let closeRecognizer = UIPanGestureRecognizer()
 
         override init() {
             super.init()
-            recognizer.edges = .right
-            recognizer.addTarget(self, action: #selector(pan(_:)))
-            recognizer.delegate = self
+            openRecognizer.edges = .right
+            openRecognizer.addTarget(self, action: #selector(openPan(_:)))
+            openRecognizer.delegate = self
+            closeRecognizer.addTarget(self, action: #selector(closePan(_:)))
+            closeRecognizer.delegate = self
         }
 
-        @objc private func pan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
+        @objc private func openPan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
             guard let state, let view = recognizer.view else { return }
             switch recognizer.state {
             case .changed:
@@ -147,16 +149,39 @@ private struct ScreenEdgePan: UIViewRepresentable {
             }
         }
 
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let state else { return false }
-            return state.isEdgeSwipeEnabled && !state.isOpen
+        @objc private func closePan(_ recognizer: UIPanGestureRecognizer) {
+            guard let state, let view = recognizer.view else { return }
+            switch recognizer.state {
+            case .changed:
+                state.track(state.width - max(recognizer.translation(in: view).x, 0))
+            case .ended:
+                state.settle(velocity: -recognizer.velocity(in: view).x)
+            case .cancelled, .failed:
+                state.open()
+            default:
+                break
+            }
         }
 
-        /// Scrolling (the file, the lists) waits until the touch is known not to be an edge
-        /// swipe, which UIKit decides within a few points.
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let state else { return false }
+            guard gestureRecognizer === closeRecognizer else {
+                return state.isEdgeSwipeEnabled && !state.isOpen
+            }
+            // Only for the sidebar itself: not for a sheet over it (Settings).
+            guard state.isOpen, let window = closeRecognizer.view as? UIWindow,
+                  window.rootViewController?.presentedViewController == nil
+            else { return false }
+            let velocity = closeRecognizer.velocity(in: window)
+            return velocity.x > 0 && velocity.x > abs(velocity.y)  // mostly rightward
+        }
+
+        /// Scrolling (the file, the lists) waits until the touch is known not to be a sidebar
+        /// swipe, which UIKit decides within a few points. (A row's swipe to delete is leftward,
+        /// so it never closes the sidebar.)
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-            other is UIPanGestureRecognizer && !(other is UIScreenEdgePanGestureRecognizer)
+            other is UIPanGestureRecognizer && other !== openRecognizer && other !== closeRecognizer
         }
     }
 }
