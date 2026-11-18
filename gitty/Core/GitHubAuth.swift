@@ -7,7 +7,7 @@ nonisolated enum GitHubAppConfig {
     /// The app's Client ID (`Iv23…`), from its settings page on GitHub.
     static let clientID = "Iv23licuF05GySwuQ0Zt"
     /// The app's URL name: the part after `github.com/apps/`.
-    static let slug = ""
+    static let slug = "gitty-rpopic"
 
     /// Where you pick which repositories the app (and so gitty) can read.
     static var installURL: URL {
