@@ -12,7 +12,7 @@ struct DocumentStoreTests {
     private func makeStore() -> DocumentStore {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
-        return DocumentStore(directory: directory, configuration: configuration)
+        return DocumentStore(directory: directory, configuration: configuration, authorizer: nil)
     }
 
     private func ok(_ body: String, etag: String = "\"v1\"") -> StubURLProtocol.Handler {
@@ -105,6 +105,53 @@ struct DocumentStoreTests {
         await #expect(throws: DocumentStoreError.badStatus(500)) { try await store.fetch(url) }
         #expect(await store.cached(url)?.data == Data("hello".utf8))
     }
+
+    // MARK: GitHub token
+
+    private func makeStore(authorizer: FakeAuthorizer) -> DocumentStore {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        return DocumentStore(directory: directory, configuration: configuration, authorizer: authorizer)
+    }
+
+    @Test func sendsTheTokenWhereTheAuthorizerSaysSo() async throws {
+        let store = makeStore(authorizer: FakeAuthorizer(header: "Bearer t"))
+        StubURLProtocol.reset(handler: ok("secret"))
+        _ = try await store.fetch(url)
+        #expect(StubURLProtocol.requests.first?.value(forHTTPHeaderField: "Authorization") == "Bearer t")
+
+        let none = makeStore(authorizer: FakeAuthorizer(header: nil))
+        StubURLProtocol.reset(handler: ok("public"))
+        _ = try await none.fetch(URL(string: "https://example.com/other.c")!)
+        #expect(StubURLProtocol.requests.first?.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test func aRejectedTokenIsForgottenAndTheFileFetchedWithoutIt() async throws {
+        let authorizer = FakeAuthorizer(header: "Bearer revoked")
+        let store = makeStore(authorizer: authorizer)
+        StubURLProtocol.reset { request in
+            let status = request.value(forHTTPHeaderField: "Authorization") == nil ? 200 : 401
+            return (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])!,
+                    Data("public".utf8))
+        }
+        _ = try await store.fetch(url)
+        #expect(StubURLProtocol.requests.count == 2)
+        #expect(await store.cached(url)?.data == Data("public".utf8))
+        #expect(authorizer.rejections == 1)
+    }
+}
+
+nonisolated final class FakeAuthorizer: RequestAuthorizer, @unchecked Sendable {
+    private let lock = NSLock()
+    private let header: String?
+    private var rejected = 0
+
+    init(header: String?) { self.header = header }
+
+    var rejections: Int { lock.withLock { rejected } }
+
+    func authorization(for url: URL) async -> String? { header }
+    func tokenRejected() async { lock.withLock { rejected += 1 } }
 }
 
 nonisolated final class StubURLProtocol: URLProtocol {

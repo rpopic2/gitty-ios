@@ -18,11 +18,14 @@ struct ProjectFolderView: View {
     /// Files with a saved copy (they open offline).
     @State private var saved: Set<URL> = []
     @State private var download: DownloadProgress?
+    @State private var isSignedIn = false
+    @State private var isSigningIn = false
+    @Environment(\.openURL) private var openURL
 
     private enum LoadState {
         case loading
         case loaded(ProjectInfo, ProjectTree)
-        case failed(String)
+        case failed(any Error)
     }
 
     private struct DownloadProgress {
@@ -46,6 +49,12 @@ struct ProjectFolderView: View {
                 ToolbarItem(placement: .topBarTrailing) { downloadButton }
             }
             .task { await load(refresh: false) }
+            .sheet(isPresented: $isSigningIn) {
+                GitHubSignInView {
+                    isSigningIn = false
+                    Task { await load(refresh: true) }
+                }
+            }
     }
 
     // MARK: Content
@@ -56,13 +65,13 @@ struct ProjectFolderView: View {
         case .loading:
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        case .failed(let message):
+        case .failed(let error):
             ContentUnavailableView {
                 Label("Couldn’t Load Project", systemImage: "exclamationmark.triangle")
             } description: {
-                Text(message)
+                Text(failureMessage(for: error))
             } actions: {
-                Button("Try Again") { Task { await load(refresh: true) } }
+                failureActions(for: error)
             }
         case .loaded(let project, let tree):
             list(project: project, tree: tree)
@@ -115,6 +124,29 @@ struct ProjectFolderView: View {
         route.folder ?? project.folder ?? ""
     }
 
+    /// A repository GitHub can't find may be private: say how to get in.
+    private func failureMessage(for error: any Error) -> String {
+        let message = error.localizedDescription
+        guard error as? ProjectError == .notFound else { return message }
+        return message + (isSignedIn
+            ? " If it’s private, check that gitty’s GitHub app can read it."
+            : " If it’s a private repository, sign in to GitHub.")
+    }
+
+    @ViewBuilder
+    private func failureActions(for error: any Error) -> some View {
+        if error as? ProjectError == .notFound {
+            if isSignedIn {
+                Button("Choose Repositories") { openURL(GitHubAppConfig.installURL) }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Button("Sign In to GitHub") { isSigningIn = true }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        Button("Try Again") { Task { await load(refresh: true) } }
+    }
+
     // MARK: Loading
 
     private func load(refresh: Bool) async {
@@ -124,7 +156,8 @@ struct ProjectFolderView: View {
             state = .loaded(project, tree)
         } catch {
             if case .loaded = state, refresh { return }  // keep the list; the pull just ends
-            state = .failed(error.localizedDescription)
+            isSignedIn = await GitHubAuth.shared.isSignedIn
+            state = .failed(error)
         }
     }
 

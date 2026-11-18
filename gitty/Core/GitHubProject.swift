@@ -132,8 +132,8 @@ nonisolated enum ProjectError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .notFound: "GitHub couldn't find this repository, branch or folder. Private repositories aren't supported yet."
-        case .rateLimited: "GitHub's limit for requests without signing in was reached. Try again in a while."
+        case .notFound: "GitHub couldn't find this repository, branch or folder."
+        case .rateLimited: "GitHub's limit on requests was reached. Try again in a while."
         case .badStatus(let code): "GitHub responded with status \(code)."
         case .unknownProject: "This project is no longer in the list."
         }
@@ -151,10 +151,14 @@ actor ProjectStore {
 
     private let directory: URL
     private let session: URLSession
+    /// Adds the GitHub token, for private repositories (and a higher request limit).
+    private let authorizer: (any RequestAuthorizer)?
 
     init(directory: URL = ProjectStore.defaultDirectory,
-         configuration: URLSessionConfiguration = .ephemeral) {
+         configuration: URLSessionConfiguration = .ephemeral,
+         authorizer: (any RequestAuthorizer)? = GitHubAuth.shared) {
         self.directory = directory
+        self.authorizer = authorizer
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 30
@@ -278,6 +282,16 @@ actor ProjectStore {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        guard let authorization = await authorizer?.authorization(for: url) else {
+            return try await session.data(for: request)
+        }
+        var signedIn = request
+        signedIn.setValue(authorization, forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: signedIn)
+        guard (response as? HTTPURLResponse)?.statusCode == 401 else { return (data, response) }
+        // The token was revoked or expired: forget it and ask again without it (public
+        // repositories still work; private ones then ask you to sign in).
+        await authorizer?.tokenRejected()
         return try await session.data(for: request)
     }
 

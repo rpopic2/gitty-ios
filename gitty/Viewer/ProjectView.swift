@@ -13,6 +13,10 @@ struct ProjectView: View {
     @State private var projects: [ProjectInfo] = []
     @State private var recents: [URL] = []
     @State private var saved: [URL] = []
+    /// The signed-in GitHub account (`""` when its name isn't known), or `nil` when signed out.
+    @State private var gitHubAccount: String?
+    @State private var isConfirmingSignOut = false
+    @Environment(\.openURL) private var openURL
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -47,6 +51,7 @@ struct ProjectView: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
+                        .contextMenu { projectMenu }
                     }
                 }
             }
@@ -76,12 +81,44 @@ struct ProjectView: View {
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .task { await reload() }  // every time the list appears
+        .confirmationDialog(signOutTitle, isPresented: $isConfirmingSignOut, titleVisibility: .visible) {
+            Button("Sign Out", role: .destructive) { signOut() }
+            Button("Manage Access on GitHub") { openURL(GitHubAppConfig.authorizationsURL) }
+        } message: {
+            Text("Saved files stay on this device. To revoke gitty’s access, use GitHub’s settings.")
+        }
+    }
+
+    /// For now, signing out lives here (until there's a Settings screen with the account).
+    @ViewBuilder
+    private var projectMenu: some View {
+        if gitHubAccount != nil {
+            Button { isConfirmingSignOut = true } label: {
+                Label("Sign Out of GitHub", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        }
+    }
+
+    private var signOutTitle: String {
+        guard let gitHubAccount, !gitHubAccount.isEmpty else { return "Sign out of GitHub?" }
+        return "Sign out of GitHub as \(gitHubAccount)?"
+    }
+
+    private func signOut() {
+        gitHubAccount = nil
+        Task { await GitHubAuth.shared.signOut() }
     }
 
     private func reload() async {
         recents = RecentFilesStore.standard.urls()
         projects = await ProjectStore.shared.projects()
         saved = await DocumentStore.shared.savedDocuments().map(\.url)
+        let auth = GitHubAuth.shared
+        if await auth.isSignedIn {
+            gitHubAccount = await auth.login ?? ""
+        } else {
+            gitHubAccount = nil
+        }
     }
 
     /// Removes the project from the list. Its saved files stay (they show under Files again).

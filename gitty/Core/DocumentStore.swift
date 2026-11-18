@@ -50,11 +50,15 @@ actor DocumentStore {
 
     private let directory: URL
     private let session: URLSession
+    /// Adds the GitHub token to files from private repositories. It decides which hosts get it.
+    private let authorizer: (any RequestAuthorizer)?
     private var directoryReady = false
 
     init(directory: URL = DocumentStore.defaultDirectory,
-         configuration: URLSessionConfiguration = .ephemeral) {
+         configuration: URLSessionConfiguration = .ephemeral,
+         authorizer: (any RequestAuthorizer)? = GitHubAuth.shared) {
         self.directory = directory
+        self.authorizer = authorizer
         // Our saved copy is the only cache. Never let URLSession keep (or consult) another one.
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -105,8 +109,13 @@ actor DocumentStore {
             }
         }
 
-        let delegate = progress.map(ProgressTaskDelegate.init(onProgress:))
-        let (data, response) = try await session.data(for: request, delegate: delegate)
+        let authorization = await authorizer?.authorization(for: url)
+        var (data, response) = try await send(request, authorization: authorization, progress: progress)
+        if authorization != nil, (response as? HTTPURLResponse)?.statusCode == 401 {
+            // The token was revoked or expired: forget it and try once without it.
+            await authorizer?.tokenRejected()
+            (data, response) = try await send(request, authorization: nil, progress: progress)
+        }
         guard let http = response as? HTTPURLResponse else { throw DocumentStoreError.notHTTP }
 
         switch http.statusCode {
@@ -126,6 +135,14 @@ actor DocumentStore {
         default:
             throw DocumentStoreError.badStatus(http.statusCode)
         }
+    }
+
+    private func send(_ request: URLRequest, authorization: String?,
+                      progress: (@Sendable (Double?) -> Void)?) async throws -> (Data, URLResponse) {
+        var request = request
+        if let authorization { request.setValue(authorization, forHTTPHeaderField: "Authorization") }
+        let delegate = progress.map(ProgressTaskDelegate.init(onProgress:))
+        return try await session.data(for: request, delegate: delegate)
     }
 
     // MARK: - Disk
