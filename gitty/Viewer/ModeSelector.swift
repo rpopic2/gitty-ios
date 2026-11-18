@@ -2,7 +2,7 @@ import SwiftUI
 
 /// How the file is shown, like Years / Months / All in Photos.
 enum ViewMode: String, CaseIterable, Identifiable {
-    /// The whole repository. Comes in a later step.
+    /// The open project's files (chosen in the sidebar), or Files.
     case project
     /// The raw file, as in Safari.
     case file

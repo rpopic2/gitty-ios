@@ -92,6 +92,26 @@ actor DocumentStore {
         try? FileManager.default.removeItem(at: paths.data)
     }
 
+    /// How many files are saved and how much space they take, for Settings.
+    func storageUsage() -> (count: Int, bytes: Int64) {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.totalFileAllocatedSizeKey])) ?? []
+        var count = 0
+        var bytes: Int64 = 0
+        for file in files {
+            if file.pathExtension == "data" { count += 1 }
+            let size = (try? file.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize
+            bytes += Int64(size ?? 0)
+        }
+        return (count, bytes)
+    }
+
+    /// Deletes every saved copy. Files download again when they're opened.
+    func deleteAll() {
+        try? FileManager.default.removeItem(at: directory)
+        directoryReady = false
+    }
+
     /// Downloads `url`. If a copy exists, asks the server whether it changed first.
     /// On any failure the saved copy is left untouched.
     ///

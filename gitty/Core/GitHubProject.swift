@@ -90,20 +90,28 @@ nonisolated struct ProjectTree: Codable, Sendable {
     let etag: String?
     let fetchedAt: Date
 
-    /// What's directly inside `folder` ("" for the top): folders A–Z, then code files (those
-    /// with symbols), then other files.
-    func children(of folder: String) -> [Entry] {
+    /// Files in one directory of a project, for a section of the Project tab.
+    nonisolated struct Directory: Sendable, Identifiable {
+        /// Relative to the project's folder; "" for the files directly in it.
+        let path: String
+        let files: [Entry]
+
+        var id: String { path }
+    }
+
+    /// Every file inside `folder` ("" for the whole repository), grouped by directory: the top
+    /// first, then directories in path order (`Sources` before `Sources/Inner` before `Tests`).
+    /// In each directory, code files (those with symbols) come first, then other files, A–Z.
+    func directories(under folder: String) -> [Directory] {
         let prefix = folder.isEmpty ? "" : folder + "/"
-        let inside = entries.filter { entry in
-            entry.kind != .submodule
-                && entry.path.hasPrefix(prefix)
-                && entry.path.count > prefix.count
-                && !entry.path.dropFirst(prefix.count).contains("/")
+        var groups: [String: [Entry]] = [:]
+        for entry in entries where entry.kind == .file && entry.path.hasPrefix(prefix) {
+            let relative = entry.path.dropFirst(prefix.count)
+            let directory = relative.lastIndex(of: "/").map { String(relative[..<$0]) } ?? ""
+            groups[directory, default: []].append(entry)
         }
-        return inside.sorted { lhs, rhs in
-            let left = Self.sortGroup(lhs), right = Self.sortGroup(rhs)
-            if left != right { return left < right }
-            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        return groups.keys.sorted(by: Self.isDirectoryBefore).map { path in
+            Directory(path: path, files: (groups[path] ?? []).sorted(by: Self.isFileBefore))
         }
     }
 
@@ -118,9 +126,19 @@ nonisolated struct ProjectTree: Codable, Sendable {
         return SymbolLanguage.extensionHasSymbols(ext)
     }
 
-    private static func sortGroup(_ entry: Entry) -> Int {
-        if entry.kind == .folder { return 0 }
-        return isCode(entry) ? 1 : 2
+    /// Compares path components, so a directory's subdirectories follow it directly.
+    private static func isDirectoryBefore(_ lhs: String, _ rhs: String) -> Bool {
+        let left = lhs.split(separator: "/"), right = rhs.split(separator: "/")
+        for (a, b) in zip(left, right) where a != b {
+            return a.localizedStandardCompare(b) == .orderedAscending
+        }
+        return left.count < right.count
+    }
+
+    private static func isFileBefore(_ lhs: Entry, _ rhs: Entry) -> Bool {
+        let left = isCode(lhs), right = isCode(rhs)
+        if left != right { return left }
+        return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
     }
 }
 

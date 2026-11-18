@@ -10,8 +10,10 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - **Smooth, exact scrolling:** every line's height is known up front, so the scroll bar and text never jump.
 - **Safari-style bottom bar:** shows the file name, collapses while you scroll down, and shows a thin loading line only while downloading. Liquid Glass on iOS 26+, the Safari 18 style on iOS 18.
 - **Photos-style mode selector** under the bar: **Project**, **File** (the raw file) and **Symbols**.
-- **Projects:** enter, paste or share a GitHub repository link (`github.com/owner/repo`, or `…/tree/branch/folder`) to add it as a project. Browse its folders like the Files app, with code files first; a file downloads when you open it, and **Download All** saves a folder for offline reading. The file list comes from GitHub's trees API, fetched when the project is added and again only on pull to refresh. For a private repository, sign in to GitHub when it fails to load (see below).
-- **Project:** every file you've opened or saved, recent first, with an icon on files that open offline. Tap one to open it in File mode, or swipe one to delete it and its saved copy. With no file open, the start page shows this list with the address bar ready.
+- **Sidebar:** swipe left from the right edge of the screen to push the content aside and show the sidebar: **Files**, your **Projects**, and **Settings** at the bottom. Choosing Files or a project shows it in the Project tab. Tap or swipe right on the content beside it to close it. (On a symbol's page that swipe pages instead.)
+- **Projects:** enter, paste or share a GitHub repository link (`github.com/owner/repo`, or `…/tree/branch/folder`) to add it as a project and open it. The Project tab lists all of the open project's files, under a header for each directory, with code files first; a file downloads when you open it, and **Download All** saves the whole project for offline reading. The file list comes from GitHub's trees API, fetched when the project is added and again only on pull to refresh. For a private repository, sign in to GitHub when it fails to load (see below).
+- **Files:** every file you've opened or saved that isn't in a project, recent first, with an icon on files that open offline. Tap one to open it in File mode, or swipe one to delete it and its saved copy. With no file open, the start page shows the open project or Files, with the address bar ready.
+- **Settings:** your GitHub account (sign in, choose repositories, sign out), how much space saved files take (with Delete All Saved Files), the version, and open-source licenses.
 - **Symbols:** every definition as a card, like photos in Photos. For C that's top-level functions, types, macros and globals. For C# and Swift, each type (and Swift extension) is followed by its members, named `Type.Member`. Tap a card to see only that symbol, swipe left and right to move between symbols, and swipe down to zoom back to the list. Select or double-tap a name, in File or in a symbol's page, and choose **Jump to Definition** to search symbols for it, with the search field focused. In a symbol's page, tap the caption at the bottom to see it in the file. In File and Symbols mode the bar searches symbols (in File, the matches are listed above the field and open the symbol's page). The address is edited from Project, or anywhere a file has no symbols. Symbol search uses fuzzy matching like Xcode's Open Quickly ("crdr" finds `Circle.draw`) and lists the best matches first. The search stays until you clear it, and swiping in a symbol opened from the results goes through the matches only. Symbols come from [tree-sitter](https://tree-sitter.github.io/).
 
 - **Open any file by URL:** tap the bar and enter a URL, like in Safari. A `github.com/…/blob/…` link opens as the raw file. Other URLs load as typed, and a web page shows its HTML source, with a banner (and a long-press menu item) to open it in the default browser instead. The last file reopens on launch. You can also share a page from Safari to gitty, or use **Paste and Go**: long-press the bar, or pick it from the field's edit menu.
@@ -57,7 +59,7 @@ gitty signs in with GitHub's device flow: it shows a code, you enter it on githu
 7. **Install App** on your account, and choose the private repositories gitty may read. Change the list any time from **Choose Repositories** in gitty, or from the app's page on GitHub.
 8. Put the app's **Client ID** (`Iv23…`) and its URL name (the part after `github.com/apps/`) in `GitHubAppConfig` in `gitty/Core/GitHubAuth.swift`. Neither is a secret.
 
-To sign in, open a private repository: **Sign In to GitHub** appears under the error. To sign out, long-press a project ▸ **Sign Out of GitHub**. Saved files stay on the device. To revoke the token, use github.com ▸ Settings ▸ Applications.
+To sign in, open a private repository (**Sign In to GitHub** appears under the error), or use Settings. Sign out in Settings. Saved files stay on the device. To revoke the token, use github.com ▸ Settings ▸ Applications.
 
 ### Tests
 
@@ -95,9 +97,11 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/Viewer/CodeTextView.swift` | `UITextView` (TextKit 1, full layout), pull-to-refresh, scroll tracking for the bar |
 | `gitty/Viewer/FileBar.swift` | Bottom bar, loading line and the bar + selector stack. Sizes in `FileBarMetrics` |
 | `gitty/Viewer/ModeSelector.swift` | Project / File / Symbols selector |
-| `gitty/Viewer/ProjectFolderView.swift` | Browsing a project's folders, Download All, sign-in when a repository isn't found |
+| `gitty/Viewer/ProjectFilesView.swift` | The open project's files by directory, Download All, sign-in when a repository isn't found |
+| `gitty/Viewer/SideBar.swift` | The right sidebar: edge swipe, push layout, Files / projects / Settings |
+| `gitty/Viewer/SettingsView.swift` | Settings: GitHub account, storage, about and licenses |
 | `gitty/Viewer/GitHubSignInView.swift` | The sign-in sheet: the code to enter on GitHub, and waiting for it |
-| `gitty/Viewer/ProjectView.swift` | Project mode and start page: recent and saved files |
+| `gitty/Viewer/ProjectView.swift` | Project mode and start page: the open project, or Files (recent and saved files outside projects) |
 | `gitty/Viewer/BarCollapseTracker.swift` | When the bar collapses while scrolling (shared by File and Symbols) |
 | `gitty/Viewer/SymbolsView.swift` | The Symbols list and its cards |
 | `gitty/Viewer/SymbolPager.swift` | One symbol at a time: paging, zoom back, read-only text view |

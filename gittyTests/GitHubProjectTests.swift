@@ -48,10 +48,23 @@ struct GitHubProjectTests {
         truncated: false, etag: nil, fetchedAt: .now
     )
 
-    @Test func foldersThenCodeThenOtherFiles() {
-        #expect(tree.children(of: "").map(\.name) == ["Sources", "Package.swift", "README.md"])
-        #expect(tree.children(of: "Sources").map(\.name) == ["Inner", "b.swift", "a.png"])
-        #expect(tree.children(of: "Sources/Inner").map(\.name) == ["c.c"])
+    @Test func filesGroupedByDirectoryCodeFirst() {
+        let groups = tree.directories(under: "")
+        #expect(groups.map(\.path) == ["", "Sources", "Sources/Inner"])
+        #expect(groups.map { $0.files.map(\.name) } == [["Package.swift", "README.md"], ["b.swift", "a.png"], ["c.c"]])
+    }
+
+    @Test func directoriesAreRelativeToTheProjectFolder() {
+        let groups = tree.directories(under: "Sources")
+        #expect(groups.map(\.path) == ["", "Inner"])
+        #expect(groups.first?.files.map(\.path) == ["Sources/b.swift", "Sources/a.png"])
+    }
+
+    @Test func subdirectoriesFollowTheirParent() {
+        let paths = ["c/x.c", "a.b/x.c", "a/b/x.c", "a/x.c"]
+        let tree = ProjectTree(entries: paths.enumerated().map { ProjectTree.Entry(path: $1, kind: .file, sha: "\($0)", size: 1) },
+                               truncated: false, etag: nil, fetchedAt: .now)
+        #expect(tree.directories(under: "").map(\.path) == ["a", "a/b", "a.b", "c"])
     }
 
     @Test func filesUnderAFolderAtAnyDepth() {

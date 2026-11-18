@@ -1,42 +1,51 @@
 import SwiftUI
 import UIKit
 
-/// The root: the file at the URL the reader entered, or the start page before any.
-/// The last opened URL is remembered across launches. Links shared from Safari arrive as
-/// `gitty://open?url=…` (see the gittyShare extension). A GitHub repository link opens as a
-/// project, whose folders are pushed onto this navigation stack.
+/// The root: the file at the URL the reader entered, or the start page before any, with the
+/// sidebar (Files, projects, Settings) to the right. The last opened URL and the open project are
+/// remembered across launches. Links shared from Safari arrive as `gitty://open?url=…` (see the
+/// gittyShare extension). A GitHub repository link adds a project and opens it.
 struct BrowserView: View {
     @AppStorage("currentURL") private var currentURLString = ""
+    /// The project chosen in the sidebar, shown in Project mode; "" for Files.
+    @AppStorage("openProjectID") private var openProjectID = ""
     @SceneStorage("viewMode") private var mode: ViewMode = .file
     @State private var isEditingAddress = false
-    /// Project folders on screen (Files-app style).
-    @State private var projectPath: [ProjectRoute] = []
     /// A shared or pasted address that isn't a URL we can open: shown in the editor with the reason.
     @State private var rejectedAddress: String?
+    @State private var sideBar = SideBarState()
+    @State private var isShowingSettings = false
 
     private var currentURL: URL? {
         currentURLString.isEmpty ? nil : URL(string: currentURLString)
     }
 
     var body: some View {
-        NavigationStack(path: $projectPath) {
-            Group {
+        SideBarContainer(state: sideBar) {
+            NavigationStack {
                 if let url = currentURL {
-                    CodeScreen(url: url, isEditingAddress: $isEditingAddress,
-                               rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
+                    CodeScreen(url: url, mode: $mode, projectID: openProjectID,
+                               isEditingAddress: $isEditingAddress, rejectedAddress: rejectedAddress,
+                               onOpen: open, onPasteAndGo: pasteAndGo)
                         .id(url)  // a new URL gets a fresh screen and model
                 } else {
-                    StartScreen(isEditingAddress: $isEditingAddress,
+                    StartScreen(projectID: openProjectID, isEditingAddress: $isEditingAddress,
                                 rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
                 }
             }
-            .navigationDestination(for: ProjectRoute.self) { route in
-                ProjectFolderView(route: route) { url in
-                    mode = .file  // opening a project file shows it
-                    open(url)
+        } sideBar: {
+            SideBarView(
+                selectedID: openProjectID,
+                onSelect: showProject,
+                onDelete: { id in if id == openProjectID { openProjectID = "" } },
+                onSettings: {
+                    sideBar.close()
+                    isShowingSettings = true
                 }
-            }
+            )
         }
+        .environment(sideBar)
+        .sheet(isPresented: $isShowingSettings) { SettingsView() }
         .onOpenURL(perform: openShared)
         .onChange(of: isEditingAddress) { _, isEditing in
             if !isEditing { rejectedAddress = nil }
@@ -72,30 +81,47 @@ struct BrowserView: View {
             return
         }
         RecentFilesStore.standard.add(url)
-        projectPath.removeAll()  // back from any project folder to the file
         currentURLString = url.absoluteString  // the same URL keeps its screen: no reload
     }
 
-    /// A repository (or folder) link: add it to Projects and show its files.
+    /// A repository (or folder) link: add it to the projects and show its files.
     private func openProject(_ repository: RepoLink) {
         Task {
             let project = await ProjectStore.shared.add(repository)
-            projectPath = [ProjectRoute(projectID: project.id, folder: nil)]
+            showProject(project.id)
         }
+    }
+
+    /// Makes a project (or Files, for "") the open one and shows it in the Project tab.
+    private func showProject(_ id: String) {
+        openProjectID = id
+        mode = .project
+        isEditingAddress = false
+        sideBar.close()
     }
 }
 
-/// Before any file is open: the Project list (recent and saved files) with the address bar
-/// selected and the keyboard up, like a new Safari tab.
+/// Before any file is open: the Project list with the address bar selected and the keyboard
+/// up, like a new Safari tab.
 private struct StartScreen: View {
+    let projectID: String
     @Binding var isEditingAddress: Bool
     let rejectedAddress: String?
     let onOpen: @MainActor (URL) -> Void
     let onPasteAndGo: @MainActor () -> Void
 
+    init(projectID: String, isEditingAddress: Binding<Bool>, rejectedAddress: String?,
+         onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void) {
+        self.projectID = projectID
+        _isEditingAddress = isEditingAddress
+        self.rejectedAddress = rejectedAddress
+        self.onOpen = onOpen
+        self.onPasteAndGo = onPasteAndGo
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
-            ProjectView(onOpen: onOpen)
+            ProjectView(projectID: projectID, onOpen: onOpen)
             if isEditingAddress {
                 AddressEditor(initialText: rejectedAddress ?? "", showsInitialError: rejectedAddress != nil,
                               onOpen: onOpen, onCancel: { isEditingAddress = false })
@@ -114,6 +140,6 @@ private struct StartScreen: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .onAppear { isEditingAddress = true }
+        .onAppear { isEditingAddress = projectID.isEmpty }  // a project to browse keeps the keyboard down
     }
 }

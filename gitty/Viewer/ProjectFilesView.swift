@@ -1,17 +1,13 @@
 import SwiftUI
 import UIKit
 
-/// A place in a project to show: the project's own folder (`folder == nil`) or one inside it.
-nonisolated struct ProjectRoute: Hashable, Sendable {
+/// The open project in the Project tab: every file, grouped under a header per directory, code
+/// files first in each. Tap a file to open it in File mode. Pull to refresh the file list;
+/// Download All saves every file for offline reading.
+struct ProjectFilesView: View {
     let projectID: String
-    let folder: String?
-}
-
-/// One folder of a project, like the Files app: folders, then code files, then other files. Tap a
-/// folder to go in (back to go out), a file to open it in File mode. Pull to refresh the file
-/// list; Download All saves this folder's files for offline reading.
-struct ProjectFolderView: View {
-    let route: ProjectRoute
+    /// The file on screen, marked in the list.
+    let currentURL: URL?
     let onOpen: @MainActor (URL) -> Void
 
     @State private var state: LoadState = .loading
@@ -24,7 +20,7 @@ struct ProjectFolderView: View {
 
     private enum LoadState {
         case loading
-        case loaded(ProjectInfo, ProjectTree)
+        case loaded(ProjectInfo, ProjectTree, [ProjectTree.Directory])
         case failed(any Error)
     }
 
@@ -36,18 +32,16 @@ struct ProjectFolderView: View {
     /// Files bigger than this are left out of Download All (they still open one by one).
     private static let downloadAllSizeLimit = 5_000_000
 
-    init(route: ProjectRoute, onOpen: @escaping @MainActor (URL) -> Void) {
-        self.route = route
+    // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
+    // doesn't warn about converting it to `@Sendable`.
+    init(projectID: String, currentURL: URL?, onOpen: @escaping @MainActor (URL) -> Void) {
+        self.projectID = projectID
+        self.currentURL = currentURL
         self.onOpen = onOpen
     }
 
     var body: some View {
         content
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { downloadButton }
-            }
             .task { await load(refresh: false) }
             .sheet(isPresented: $isSigningIn) {
                 GitHubSignInView {
@@ -65,6 +59,7 @@ struct ProjectFolderView: View {
         case .loading:
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(uiColor: .systemGroupedBackground))
         case .failed(let error):
             ContentUnavailableView {
                 Label("Couldn’t Load Project", systemImage: "exclamationmark.triangle")
@@ -73,56 +68,82 @@ struct ProjectFolderView: View {
             } actions: {
                 failureActions(for: error)
             }
-        case .loaded(let project, let tree):
-            list(project: project, tree: tree)
+            .background(Color(uiColor: .systemGroupedBackground))
+        case .loaded(let project, let tree, let directories):
+            list(project: project, tree: tree, directories: directories)
         }
     }
 
-    private func list(project: ProjectInfo, tree: ProjectTree) -> some View {
-        let entries = tree.children(of: folder(in: project))
-        return List {
+    private func list(project: ProjectInfo, tree: ProjectTree, directories: [ProjectTree.Directory]) -> some View {
+        List {
             Section {
-                ForEach(entries, id: \.path) { entry in
-                    row(for: entry, in: project)
-                }
+                header(project: project, tree: tree)
             } footer: {
                 if tree.truncated {
                     Text("This repository is very large, so GitHub listed only some of its files.")
                 }
             }
+            ForEach(directories) { directory in
+                Section {
+                    ForEach(directory.files, id: \.path) { entry in
+                        row(for: entry, in: project)
+                    }
+                } header: {
+                    Text(directory.path.isEmpty ? project.title : directory.path)
+                        .textCase(nil)  // paths keep their case
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+            }
         }
         .listStyle(.insetGrouped)
+        .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
+        .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .overlay {
-            if entries.isEmpty {
-                ContentUnavailableView("Empty Folder", systemImage: "folder")
+            if directories.isEmpty {
+                ContentUnavailableView("No Files", systemImage: "folder")
             }
         }
         .refreshable { await load(refresh: true) }
     }
 
-    @ViewBuilder
-    private func row(for entry: ProjectTree.Entry, in project: ProjectInfo) -> some View {
-        if entry.kind == .folder {
-            NavigationLink(value: ProjectRoute(projectID: project.id, folder: entry.path)) {
-                Label(entry.name, systemImage: "folder")
+    /// The project's name, owner · branch, and Download All.
+    private func header(project: ProjectInfo, tree: ProjectTree) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "shippingbox")
+                .font(.title2)
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text([project.link.owner, project.ref].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-        } else if let url = project.rawURL(for: entry.path) {
-            Button { onOpen(url) } label: {
-                FileEntryRow(entry: entry, isSaved: saved.contains(url))
-            }
+            Spacer(minLength: 8)
+            downloadButton(project: project, tree: tree)
         }
     }
 
-    private var title: String {
-        guard case .loaded(let project, _) = state else { return "" }
-        let folder = folder(in: project)
-        if folder == (project.folder ?? "") { return project.title }
-        return folder.split(separator: "/").last.map(String.init) ?? project.title
+    @ViewBuilder
+    private func row(for entry: ProjectTree.Entry, in project: ProjectInfo) -> some View {
+        if let url = project.rawURL(for: entry.path) {
+            let isCurrent = url == currentURL
+            Button { onOpen(url) } label: {
+                FileEntryRow(entry: entry, isSaved: saved.contains(url))
+            }
+            // The open file looks selected, as in Files.
+            .listRowBackground(isCurrent
+                ? Color(uiColor: .systemGray4)
+                : Color(uiColor: .secondarySystemGroupedBackground))
+            .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        }
     }
 
-    private func folder(in project: ProjectInfo) -> String {
-        route.folder ?? project.folder ?? ""
-    }
+    // MARK: Failure
 
     /// A repository GitHub can't find may be private: say how to get in.
     private func failureMessage(for error: any Error) -> String {
@@ -151,9 +172,11 @@ struct ProjectFolderView: View {
 
     private func load(refresh: Bool) async {
         do {
-            let (project, tree) = try await ProjectStore.shared.tree(for: route.projectID, refresh: refresh)
+            let (project, tree) = try await ProjectStore.shared.tree(for: projectID, refresh: refresh)
             saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
-            state = .loaded(project, tree)
+            // Grouping a big repository takes a moment: do it once here, not on every redraw.
+            let directories = tree.directories(under: project.folder ?? "")
+            state = .loaded(project, tree, directories)
         } catch {
             if case .loaded = state, refresh { return }  // keep the list; the pull just ends
             isSignedIn = await GitHubAuth.shared.isSignedIn
@@ -164,28 +187,32 @@ struct ProjectFolderView: View {
     // MARK: Download All
 
     @ViewBuilder
-    private var downloadButton: some View {
+    private func downloadButton(project: ProjectInfo, tree: ProjectTree) -> some View {
         if let download {
             HStack(spacing: 6) {
                 ProgressView()
                 Text("\(download.done)/\(download.total)")
                     .monospacedDigit()
                     .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Downloading \(download.done) of \(download.total)")
-        } else if case .loaded(let project, let tree) = state {
-            let missing = missingFiles(project: project, tree: tree)
+        } else {
+            // What's missing is worked out on tap: listing a big repository's files on every
+            // redraw would cost more than it's worth.
             Button("Download All", systemImage: "arrow.down.circle") {
-                downloadAll(missing)
+                downloadAll(missingFiles(project: project, tree: tree))
             }
-            .disabled(missing.isEmpty)
+            .labelStyle(.iconOnly)
+            .font(.title2)
+            .buttonStyle(.borderless)  // only the button, not the whole row
         }
     }
 
-    /// This folder's files (at any depth) that aren't saved yet.
+    /// The project's files that aren't saved yet.
     private func missingFiles(project: ProjectInfo, tree: ProjectTree) -> [URL] {
-        tree.files(under: folder(in: project))
+        tree.files(under: project.folder ?? "")
             .filter { ($0.size ?? 0) <= Self.downloadAllSizeLimit }
             .compactMap { project.rawURL(for: $0.path) }
             .filter { !saved.contains($0) }
@@ -216,7 +243,7 @@ struct ProjectFolderView: View {
     }
 }
 
-/// A file in a project folder: a code icon for files with symbols, the name, its size, and the
+/// A file in a project: a code icon for files with symbols, the name, its size, and the
 /// offline icon once it's saved.
 private struct FileEntryRow: View {
     let entry: ProjectTree.Entry

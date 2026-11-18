@@ -21,6 +21,8 @@ struct SymbolPager: View {
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
+    /// Swiping from the right edge pages here, so it doesn't open the sidebar.
+    @Environment(SideBarState.self) private var sideBar: SideBarState?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -96,6 +98,8 @@ struct SymbolPager: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear { sideBar?.isEdgeSwipeEnabled = false }
+        .onDisappear { sideBar?.isEdgeSwipeEnabled = true }
         .background(WillDisappearObserver { onWillClose(visibleID) })
         .onChange(of: scrolledID) { _, id in
             // Until the pager is on the tapped symbol, don't let the first layout overwrite it.

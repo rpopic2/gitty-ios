@@ -13,7 +13,9 @@ struct CodeScreen: View {
     let rejectedAddress: String?
     let onOpen: @MainActor (URL) -> Void
     let onPasteAndGo: @MainActor () -> Void
-    @SceneStorage("viewMode") private var mode: ViewMode = .file
+    @Binding var mode: ViewMode
+    /// The project chosen in the sidebar ("" for Files), shown in Project mode.
+    let projectID: String
 
     @Namespace private var symbolNamespace
     /// The symbol opened in the pager (drives the navigation push).
@@ -31,10 +33,13 @@ struct CodeScreen: View {
     @State private var symbolQuery = ""
     @State private var isSearchingSymbols = false
 
-    init(url: URL, isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
+    init(url: URL, mode: Binding<ViewMode>, projectID: String, isEditingAddress: Binding<Bool>,
+         rejectedAddress: String? = nil,
          onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
          store: DocumentStore = .shared) {
         _model = State(initialValue: CodeDocumentModel(url: url, store: store))
+        _mode = mode
+        self.projectID = projectID
         _isEditingAddress = isEditingAddress
         self.rejectedAddress = rejectedAddress
         self.onOpen = onOpen
@@ -86,7 +91,7 @@ struct CodeScreen: View {
                 .accessibilityHidden(mode == .project)
             // Project lists files, so it doesn't depend on this file loading (or failing with a 404).
             if mode == .project {
-                ProjectView(currentURL: model.url) { url in
+                ProjectView(projectID: projectID, currentURL: model.url) { url in
                     mode = .file  // opening a file shows it
                     onOpen(url)
                 }
