@@ -24,6 +24,9 @@ final class CodeDocumentModel {
     var fileName: String { url.displayFileName }
 
     private(set) var phase: Phase = .loading
+    /// The loaded text as plain text, for the Code level's blocks: one object per version, so
+    /// views holding it only redraw when the text changes.
+    @ObservationIgnored private(set) var plainText: NSString?
     /// The definitions for Symbols mode and symbol search: the open file's, then (once asked for
     /// with `loadProjectSymbols()`) those of the project's other downloaded files.
     private(set) var symbolIndex: SymbolIndex = .indexing
@@ -107,6 +110,7 @@ final class CodeDocumentModel {
         guard let file, file != url else { return await refresh() }
         do {
             _ = try await store.fetch(file)
+            await FileTextCache.shared.forget(file)
             otherTexts[file] = nil
             textOrder.removeAll { $0 == file }
             loadedFilter = nil  // index the project's files again (only the changed one is redone)
@@ -156,6 +160,7 @@ final class CodeDocumentModel {
         }.value
         let version = UUID()
         isWebPage = WebPageDetector.isWebPage(contentType: document.metadata.contentType, data: document.data)
+        plainText = rendered.attributedString.string as NSString
         phase = .loaded(rendered, version: version)
         await indexSymbols(of: rendered, version: version)
     }
@@ -306,11 +311,11 @@ final class CodeDocumentModel {
             let rendered = await Task.detached(priority: .userInitiated) {
                 RawTextStyle.render(document)
             }.value
-            // The Code level and pages show a few files at a time; keep the last ones, not the
-            // whole project.
+            // Pages show a few files at a time; keep the last few, not the whole project. (The
+            // Code level has its own cache: `FileTextCache`.)
             textOrder.removeAll { $0 == file }
             textOrder.append(file)
-            if textOrder.count > 24 { otherTexts[textOrder.removeFirst()] = nil }
+            if textOrder.count > 8 { otherTexts[textOrder.removeFirst()] = nil }
             otherTexts[file] = rendered.attributedString
         }
     }

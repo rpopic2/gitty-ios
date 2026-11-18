@@ -22,8 +22,9 @@ struct SymbolsView: View {
     /// False while another mode covers the list (it stays alive to keep its place).
     let isActive: Bool
     let namespace: Namespace.ID
-    /// A symbol's whole text, for the zoomed-in level (`nil` while another file's text loads).
-    let text: @MainActor (CodeSymbol) -> NSAttributedString?
+    /// The open file's text, for its symbols' code at the Code level. Other files' code is
+    /// loaded by each block (see `SymbolCode`).
+    let ownText: NSString?
     /// Brings a card into view (the pager closing on another card). Each request scrolls once,
     /// even to the same card as last time.
     let scrollRequest: SymbolScrollRequest?
@@ -62,7 +63,7 @@ struct SymbolsView: View {
     // doesn't warn about converting it to `@Sendable`.
     init(symbols: [CodeSymbol], query: String, mode: Binding<ViewMode>, isActive: Bool,
          namespace: Namespace.ID,
-         text: @escaping @MainActor (CodeSymbol) -> NSAttributedString?,
+         ownText: NSString?,
          scrollRequest: SymbolScrollRequest?,
          initialID: @escaping @MainActor () -> Int? = { nil },
          onCenteredSymbolChange: @escaping @MainActor (Int) -> Void,
@@ -77,7 +78,7 @@ struct SymbolsView: View {
         _zoom = State(initialValue: mode.wrappedValue.showsSymbols ? mode.wrappedValue : .files)
         self.isActive = isActive
         self.namespace = namespace
-        self.text = text
+        self.ownText = ownText
         self.scrollRequest = scrollRequest
         self.initialID = initialID
         self.onCenteredSymbolChange = onCenteredSymbolChange
@@ -215,7 +216,7 @@ struct SymbolsView: View {
                 Section {
                     if symbol.kind != .file {
                         Button { onOpen(symbol) } label: {
-                            SymbolCode(symbol: symbol, text: text(symbol))
+                            SymbolCode(symbol: symbol, ownText: symbol.fileURL == nil ? ownText : nil)
                         }
                         .buttonStyle(.plain)
                         .matchedTransitionSource(id: symbol.id, in: namespace)
@@ -477,14 +478,25 @@ private struct SymbolTitle: View {
     }
 }
 
-/// Zoomed in: a symbol's whole code in the raw-text style. Until another file's text has loaded, its
-/// preview stands in.
+/// Zoomed in: a symbol's whole code in the raw-text style. The open file's comes from its text;
+/// another file's is loaded once, by this block alone (so a load redraws nothing else), with
+/// the preview standing in until then.
 private struct SymbolCode: View {
     let symbol: CodeSymbol
-    let text: NSAttributedString?
+    /// The open file's text, for its own symbols.
+    let ownText: NSString?
+    @State private var loaded: String?
+
+    private var code: String {
+        if let loaded { return loaded }
+        if let ownText, NSMaxRange(symbol.range) <= ownText.length {
+            return TabExpansion.expand(ownText.substring(with: symbol.range))
+        }
+        return TabExpansion.expand(symbol.preview)
+    }
 
     var body: some View {
-        Text(verbatim: TabExpansion.expand(text?.string ?? symbol.preview))
+        Text(verbatim: code)
             .font(.custom(RawTextStyle.fontName, fixedSize: RawTextStyle.fontSize))
             .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -494,6 +506,10 @@ private struct SymbolCode: View {
             .contentShape(Rectangle())
             .accessibilityLabel(symbol.spokenDescription)
             .accessibilityHint(Text("Opens its page"))
+            .task(id: symbol.id) {
+                guard loaded == nil, let file = symbol.fileURL else { return }
+                loaded = await FileTextCache.shared.code(of: symbol.range, in: file)
+            }
     }
 }
 
