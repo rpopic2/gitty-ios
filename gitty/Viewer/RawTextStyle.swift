@@ -193,8 +193,11 @@ nonisolated struct CodeTextStyle: Equatable, Hashable, Sendable {
         UIFont(name: font.postScriptName, size: size) ?? .monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
-    /// Registers the bundled fonts (JetBrains Mono) for this app. Call once at launch.
+    /// Registers the bundled fonts (JetBrains Mono) for this app, at launch. Does nothing if
+    /// they're already there (SwiftUI may make the app more than once; registering again only
+    /// logs "already exists").
     static func registerBundledFonts() {
+        guard UIFont(name: CodeFont.jetBrainsMono.postScriptName, size: 12) == nil else { return }
         let urls = (Bundle.main.urls(forResourcesWithExtension: "ttf", subdirectory: nil) ?? [])
             + (Bundle.main.urls(forResourcesWithExtension: "ttf", subdirectory: "Fonts") ?? [])
         for url in urls {
