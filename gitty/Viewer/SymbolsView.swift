@@ -21,10 +21,6 @@ struct SymbolsView: View {
     let query: String
     /// False while another mode covers the list (it stays alive to keep its place).
     let isActive: Bool
-    let namespace: Namespace.ID
-    /// The open file's text, for its symbols' code at the Code level. Other files' code is
-    /// loaded by each block (see `SymbolCode`).
-    let ownText: NSString?
     /// Brings a card into view (the pager closing on another card). Each request scrolls once,
     /// even to the same card as last time.
     let scrollRequest: SymbolScrollRequest?
@@ -52,6 +48,8 @@ struct SymbolsView: View {
     @State private var zoom: ViewMode
     @State private var folded = SymbolFoldStore.standard.foldedFiles()
     @State private var groupCache = GroupCache()
+    /// The Code level's prepared code, per symbol (this list's ids).
+    @State private var codeBlocks = CodeBlockStore()
     /// This pinch has already switched the layout (one switch per pinch).
     @State private var pinchHandled = false
     /// Where the other layout should open: the symbol that was in the middle, or a tapped row.
@@ -62,8 +60,6 @@ struct SymbolsView: View {
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(symbols: [CodeSymbol], query: String, mode: Binding<ViewMode>, isActive: Bool,
-         namespace: Namespace.ID,
-         ownText: NSString?,
          scrollRequest: SymbolScrollRequest?,
          initialID: @escaping @MainActor () -> Int? = { nil },
          onCenteredSymbolChange: @escaping @MainActor (Int) -> Void,
@@ -77,8 +73,6 @@ struct SymbolsView: View {
         _mode = mode
         _zoom = State(initialValue: mode.wrappedValue.showsSymbols ? mode.wrappedValue : .files)
         self.isActive = isActive
-        self.namespace = namespace
-        self.ownText = ownText
         self.scrollRequest = scrollRequest
         self.initialID = initialID
         self.onCenteredSymbolChange = onCenteredSymbolChange
@@ -162,7 +156,6 @@ struct SymbolsView: View {
                     SymbolCard(symbol: symbol)
                 }
                 .buttonStyle(.plain)
-                .matchedTransitionSource(id: symbol.id, in: namespace)
                 // The margin is part of each scroll target, so every target spans the full
                 // width and centering one never scrolls sideways.
                 .padding(.horizontal, 16)
@@ -204,16 +197,20 @@ struct SymbolsView: View {
     /// read it. A file's own entry is just a title line before its symbols: tap it to read the
     /// whole file on its page. The text isn't selectable (it's plain `Text`, cheap to scroll
     /// through a big project); tap a symbol to open its page.
+    ///
+    /// Each symbol's code is rows of at most 30 lines, so a long function is laid out a piece at
+    /// a time as it scrolls in. The code is prepared in the background (`CodeBlockStore`), and
+    /// the next symbols' starts loading before they reach the screen.
     private var fullCode: some View {
-        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+        codeBlocks.symbols = symbols
+        codeBlocks.openFile = openFile
+        return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(symbols) { symbol in
                 Section {
                     if symbol.kind != .file {
-                        Button { onOpen(symbol) } label: {
-                            SymbolCode(symbol: symbol, ownText: symbol.fileURL == nil ? ownText : nil)
-                        }
-                        .buttonStyle(.plain)
-                        .matchedTransitionSource(id: symbol.id, in: namespace)
+                        SymbolCodeRows(block: codeBlocks.block(for: symbol),
+                                       onAppear: { codeBlocks.prefetch(after: symbol) },
+                                       onTap: { onOpen(symbol) })
                     }
                 } header: {
                     // A file's title opens its page with the whole file (as its card does);
@@ -222,7 +219,6 @@ struct SymbolsView: View {
                         SymbolTitle(symbol: symbol)
                     }
                     .buttonStyle(.plain)
-                    .modifier(TransitionSourceIfFile(symbol: symbol, namespace: namespace))
                 }
             }
         }
@@ -426,20 +422,6 @@ private struct SymbolRow: View {
     }
 }
 
-/// Zoomed in, a file's page zooms out of (and back into) its title line; a symbol's, its code.
-private struct TransitionSourceIfFile: ViewModifier {
-    let symbol: CodeSymbol
-    let namespace: Namespace.ID
-
-    func body(content: Content) -> some View {
-        if symbol.kind == .file {
-            content.matchedTransitionSource(id: symbol.id, in: namespace)
-        } else {
-            content
-        }
-    }
-}
-
 /// Zoomed in: the slim title above a symbol's code (or a file's title line, before its symbols).
 private struct SymbolTitle: View {
     let symbol: CodeSymbol
@@ -472,38 +454,120 @@ private struct SymbolTitle: View {
     }
 }
 
-/// Zoomed in: a symbol's whole code in the raw-text style. The open file's comes from its text;
-/// another file's is loaded once, by this block alone (so a load redraws nothing else), with
-/// the preview standing in until then.
-private struct SymbolCode: View {
+/// One symbol's code at the Code level: `chunks` once it's prepared (`nil` until then, when
+/// the preview stands in). Observed by that symbol's rows alone, so preparing it redraws
+/// nothing else.
+@Observable
+private final class CodeBlock {
     let symbol: CodeSymbol
-    /// The open file's text, for its own symbols.
-    let ownText: NSString?
-    @State private var loaded: String?
+    private(set) var chunks: [String]?
+    @ObservationIgnored private var isLoading = false
 
-    private var code: String {
-        if let loaded { return loaded }
-        if let ownText, NSMaxRange(symbol.range) <= ownText.length {
-            return TabExpansion.expand(ownText.substring(with: symbol.range))
+    init(symbol: CodeSymbol) {
+        self.symbol = symbol
+    }
+
+    func load(openFile: URL) {
+        guard chunks == nil, !isLoading else { return }
+        isLoading = true
+        let file = symbol.fileURL ?? openFile
+        let range = symbol.range
+        let preview = symbol.preview
+        Task {
+            chunks = await FileTextCache.shared.chunks(of: range, in: file) ?? [TabExpansion.expand(preview)]
         }
-        return TabExpansion.expand(symbol.preview)
+    }
+}
+
+/// The Code level's blocks, made as symbols scroll in and kept for this list. Not observed.
+private final class CodeBlockStore {
+    /// The list's symbols and the open file, set as the list is drawn.
+    var symbols: [CodeSymbol] = []
+    var openFile: URL?
+    private var blocks: [Int: CodeBlock] = [:]
+    /// Where each symbol is in `symbols`, for loading ahead (worked out when `symbols` changes).
+    private var positions: [Int: Int] = [:]
+    private var positionsKey: [Int?] = []
+
+    /// How many of the next symbols to prepare when one comes into view.
+    static let lookahead = 12
+
+    func block(for symbol: CodeSymbol) -> CodeBlock {
+        if let block = blocks[symbol.id] { return block }
+        let block = CodeBlock(symbol: symbol)
+        blocks[symbol.id] = block
+        return block
+    }
+
+    /// A symbol came into view: prepare it and the next few, so they rarely change height on
+    /// screen.
+    func prefetch(after symbol: CodeSymbol) {
+        guard let openFile else { return }
+        let key: [Int?] = [symbols.count, symbols.first?.id, symbols.last?.id]
+        if key != positionsKey {
+            positionsKey = key
+            positions = Dictionary(symbols.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+        guard let start = positions[symbol.id] else { return }
+        let end = min(start + Self.lookahead + 1, symbols.count)
+        for next in symbols[start..<end] where next.kind != .file {
+            block(for: next).load(openFile: openFile)
+        }
+    }
+}
+
+/// Zoomed in: one symbol's code in the raw-text style, as rows of at most 30 lines. Each row is
+/// its own item in the lazy list. The first row carries the symbol's id (as a scroll target);
+/// the others have ids that can't be a symbol's (negative), which the list ignores.
+private struct SymbolCodeRows: View {
+    let block: CodeBlock
+    let onAppear: @MainActor () -> Void
+    let onTap: @MainActor () -> Void
+
+    init(block: CodeBlock, onAppear: @escaping @MainActor () -> Void, onTap: @escaping @MainActor () -> Void) {
+        self.block = block
+        self.onAppear = onAppear
+        self.onTap = onTap
+    }
+
+    private struct Row: Identifiable {
+        let id: Int
+        let text: String
+        let isFirst: Bool
+        let isLast: Bool
+    }
+
+    private var rows: [Row] {
+        let symbol = block.symbol
+        let chunks = block.chunks ?? [TabExpansion.expand(symbol.preview)]
+        return chunks.enumerated().map { index, text in
+            Row(id: index == 0 ? symbol.id : -1 - (symbol.id * 10_000 + index),
+                text: text, isFirst: index == 0, isLast: index == chunks.count - 1)
+        }
     }
 
     var body: some View {
-        Text(verbatim: code)
-            .font(.custom(RawTextStyle.fontName, fixedSize: RawTextStyle.fontSize))
-            .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, RawTextStyle.insets.left)
-            .padding(.vertical, 8)
-            .background(Color(uiColor: RawTextStyle.backgroundColor))
-            .contentShape(Rectangle())
-            .accessibilityLabel(symbol.spokenDescription)
-            .accessibilityHint(Text("Opens its page"))
-            .task(id: symbol.id) {
-                guard loaded == nil, let file = symbol.fileURL else { return }
-                loaded = await FileTextCache.shared.code(of: symbol.range, in: file)
+        ForEach(rows) { row in
+            Button(action: onTap) {
+                Text(verbatim: row.text)
+                    .font(.custom(RawTextStyle.fontName, fixedSize: RawTextStyle.fontSize))
+                    .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, RawTextStyle.insets.left)
+                    .padding(.top, row.isFirst ? 8 : 0)
+                    .padding(.bottom, row.isLast ? 8 : 0)
+                    .background(Color(uiColor: RawTextStyle.backgroundColor))
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            // One element per symbol for VoiceOver: its first row.
+            .accessibilityLabel(block.symbol.spokenDescription)
+            .accessibilityHint(Text("Opens its page"))
+            .accessibilityHidden(!row.isFirst)
+            .onAppear {
+                if row.isFirst { onAppear() }
+            }
+        }
     }
 }
 
@@ -521,7 +585,8 @@ private final class ScrollTracking {
     private(set) lazy var centeredBinding = Binding<Int?>(
         get: { [unowned self] in self.centeredID },
         set: { [unowned self] id in
-            guard id != self.centeredID else { return }
+            // Negative ids are the Code level's later rows of a symbol, not symbols.
+            guard id != self.centeredID, (id ?? 0) >= 0 else { return }
             self.centeredID = id
             if self.isPositioned, let id { self.report?(id) }
         }

@@ -21,10 +21,9 @@ struct CodeScreen: View {
     /// Just opened: the list starts at the file's own entry, not where it was left.
     let opensAtFile: Bool
 
-    @Namespace private var symbolNamespace
     /// The symbol opened in the pager (drives the navigation push).
     @State private var openedSymbolID: Int?
-    /// The symbol on screen in the pager. The zoom back lands on its card.
+    /// The symbol on screen in the pager.
     @State private var pagerSymbolID: Int?
     /// Brings a card into view in the Symbols list (the pager closing on another symbol).
     @State private var listScrollRequest: SymbolScrollRequest?
@@ -35,8 +34,6 @@ struct CodeScreen: View {
     @State private var isSearchingSymbols = false
     /// The list hasn't started yet: when `opensAtFile`, it starts at the file's own entry.
     @State private var startsAtFile: Bool
-    /// The bar's title: the file in the middle of the list (or the open file, at first).
-    @State private var fileInView: String?
     /// Project has been shown at least once (it's kept from then on).
     @State private var hasShownProject = false
     /// The project chosen in the sidebar, for the bar in Project mode (`nil` for Files).
@@ -101,8 +98,8 @@ struct CodeScreen: View {
                 initialID: openedID,
                 currentID: $pagerSymbolID,
                 text: model.text(of:),
-                // Not on tap, which would move the card the zoom starts from. Once you page, the
-                // list (hidden behind) follows, so it's already on the card when you swipe down.
+                // Once you page, the list (hidden behind) follows, so going back lands on the
+                // symbol you were reading.
                 onPage: { listScrollRequest = SymbolScrollRequest($0) },
                 onWillClose: { listScrollRequest = SymbolScrollRequest($0) },
                 openFile: model.url,
@@ -115,7 +112,6 @@ struct CodeScreen: View {
                             inFile: symbol.fileURL)
                 }
             )
-            .navigationTransition(.zoom(sourceID: pagerSymbolID ?? -1, in: symbolNamespace))
         }
         .alert("Couldn’t Refresh", isPresented: refreshAlertIsPresented, presenting: model.refreshError) { _ in
             Button("OK", role: .cancel) {}
@@ -205,11 +201,9 @@ struct CodeScreen: View {
                 query: shownQuery,
                 mode: $mode,
                 isActive: mode.showsSymbols,
-                namespace: symbolNamespace,
-                ownText: ownText,
                 scrollRequest: listScrollRequest,
                 initialID: { savedListSymbolID() },
-                onCenteredSymbolChange: { centeredSymbolChanged($0) },
+                onCenteredSymbolChange: { saveListPosition($0) },
                 isBarCollapsed: model.isBarCollapsed,
                 barTapCount: model.barTapCount,
                 openFile: model.url,
@@ -236,13 +230,6 @@ struct CodeScreen: View {
         }
     }
 
-    /// The open file's text, for its symbols' code at the Code level (the same object until
-    /// it's refreshed).
-    private var ownText: NSString? {
-        guard case .loaded = model.phase else { return nil }
-        return model.plainText
-    }
-
     private var indexedSymbols: [CodeSymbol] {
         if case .ready(let symbols) = model.symbolIndex { symbols } else { [] }
     }
@@ -255,16 +242,6 @@ struct CodeScreen: View {
             return 0  // the open file's entry comes first
         }
         return ReadingPositionStore.standard.symbolsPosition(for: model.url)?.symbolID(in: indexedSymbols)
-    }
-
-    /// Another symbol reached the middle of the list: save the place, and name its file in the
-    /// bar (which redraws only when that file changes).
-    private func centeredSymbolChanged(_ id: Int) {
-        saveListPosition(id)
-        let symbols = indexedSymbols
-        guard symbols.indices.contains(id) else { return }
-        let name = symbols[id].fileURL?.displayFileName ?? model.fileName
-        if name != fileInView { fileInView = name }
     }
 
     /// Saves the card in the middle of the Symbols list, like File saves its place. It changes
@@ -364,9 +341,9 @@ struct CodeScreen: View {
     }
 
     /// In Project mode, the bar names the project and edits its address on github.com (Files,
-    /// which has no address, edits the open file's). Otherwise, the file in view.
+    /// which has no address, edits the open file's). Otherwise, the open file.
     private var barTitle: String {
-        guard mode == .project else { return fileInView ?? model.fileName }
+        guard mode == .project else { return model.fileName }
         return projectID.isEmpty ? String(localized: "Files") : project?.title ?? ""
     }
 

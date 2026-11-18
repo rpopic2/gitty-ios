@@ -24,9 +24,6 @@ final class CodeDocumentModel {
     var fileName: String { url.displayFileName }
 
     private(set) var phase: Phase = .loading
-    /// The loaded text as plain text, for the Code level's blocks: one object per version, so
-    /// views holding it only redraw when the text changes.
-    @ObservationIgnored private(set) var plainText: NSString?
     /// The definitions for Symbols mode and symbol search: the open file's, then (once asked for
     /// with `loadProjectSymbols()`) those of the project's other downloaded files.
     private(set) var symbolIndex: SymbolIndex = .indexing
@@ -160,7 +157,7 @@ final class CodeDocumentModel {
         }.value
         let version = UUID()
         isWebPage = WebPageDetector.isWebPage(contentType: document.metadata.contentType, data: document.data)
-        plainText = rendered.attributedString.string as NSString
+        await FileTextCache.shared.forget(url)  // the Code level reads the new text
         phase = .loaded(rendered, version: version)
         await indexSymbols(of: rendered, version: version)
     }

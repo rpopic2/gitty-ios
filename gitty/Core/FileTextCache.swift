@@ -1,7 +1,7 @@
 import Foundation
 
-/// The decoded text of downloaded files, for the Code level's blocks: each block asks for its
-/// symbol's code once and keeps it, so loading one file's text redraws only its blocks.
+/// The decoded text of downloaded files, for the Code level: each symbol's code is asked for
+/// once and kept, so loading one file's text redraws only that symbol.
 /// Recently used files are kept (least recently used go first), decoded the same way the
 /// symbols were indexed, so their ranges match.
 actor FileTextCache {
@@ -18,11 +18,12 @@ actor FileTextCache {
         self.store = store
     }
 
-    /// A symbol's code in a downloaded file, tabs expanded. `nil` if the file isn't saved.
-    func code(of range: NSRange, in file: URL) async -> String? {
-        guard let text = await text(of: file) else { return nil }
-        guard NSMaxRange(range) <= text.length else { return nil }
-        return TabExpansion.expand(text.substring(with: range))
+    /// A symbol's code in a downloaded file, tabs expanded, in pieces of at most 30 lines (see
+    /// `TabExpansion.chunks`). Worked out here, away from the main thread. `nil` if the file
+    /// isn't saved.
+    func chunks(of range: NSRange, in file: URL) async -> [String]? {
+        guard let text = await text(of: file), NSMaxRange(range) <= text.length else { return nil }
+        return TabExpansion.chunks(of: TabExpansion.expand(text.substring(with: range)))
     }
 
     /// Forgets a file's text (it was downloaded again).
