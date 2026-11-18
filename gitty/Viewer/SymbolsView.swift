@@ -12,7 +12,10 @@ import UIKit
 /// - Symbols: the cards.
 /// - Code: every symbol's whole code, edge to edge in the raw-text style, each under a slim
 ///   title that sticks to the top while you read it. Tap one to open its page.
-struct SymbolsView: View {
+///
+/// Equatable, so the bar collapsing or expanding (which redraws the screen around it, several
+/// times in a fling) doesn't redraw this list and its every symbol: use `.equatable()`.
+struct SymbolsView: View, Equatable {
     let symbols: [CodeSymbol]
     /// The symbol search the list is filtered by ("" for none). Give each search its own list
     /// (`.id(query)`): the results start at the top, and clearing the search starts a fresh full
@@ -31,7 +34,9 @@ struct SymbolsView: View {
     /// Another card reached the middle of the screen (to save the place). It's reported without
     /// redrawing anything, here or in the screen around it: that happens many times a second.
     let onCenteredSymbolChange: @MainActor (Int) -> Void
-    let isBarCollapsed: Bool
+    /// Whether the bar is collapsed now. Read as the list scrolls rather than passed in, so the
+    /// bar changing doesn't redraw the list.
+    let isBarCollapsed: @MainActor () -> Bool
     let barTapCount: Int
     /// The open file, which symbols without a `fileURL` are in (for the grouped view).
     let openFile: URL
@@ -45,6 +50,8 @@ struct SymbolsView: View {
 
     /// The zoom level, shared with the selector under the bar (Project hides this view).
     @Binding var mode: ViewMode
+    /// `mode` when this was made, for `==`.
+    private let modeValue: ViewMode
     /// The level on screen. It follows `mode`, one step behind, so the new level can open at the
     /// symbol that was in the middle (see `onChange(of: mode)`).
     @State private var zoom: ViewMode
@@ -66,7 +73,7 @@ struct SymbolsView: View {
          scrollRequest: SymbolScrollRequest?,
          initialID: @escaping @MainActor () -> Int? = { nil },
          onCenteredSymbolChange: @escaping @MainActor (Int) -> Void,
-         isBarCollapsed: Bool, barTapCount: Int, openFile: URL,
+         isBarCollapsed: @escaping @MainActor () -> Bool, barTapCount: Int, openFile: URL,
          onOpen: @escaping @MainActor (CodeSymbol) -> Void,
          onOpenFile: @escaping @MainActor (URL) -> Void,
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
@@ -74,6 +81,7 @@ struct SymbolsView: View {
         self.symbols = symbols
         self.query = query
         _mode = mode
+        modeValue = mode.wrappedValue
         _zoom = State(initialValue: mode.wrappedValue.showsSymbols ? mode.wrappedValue : .files)
         self.isActive = isActive
         self.ownText = ownText
@@ -87,6 +95,15 @@ struct SymbolsView: View {
         self.onOpenFile = onOpenFile
         self.onBarCollapsedChange = onBarCollapsedChange
         self.onCloseSearch = onCloseSearch
+    }
+
+    /// What the list shows. The closures aren't compared: they reach the screen's state and
+    /// model, which stay current.
+    nonisolated static func == (lhs: SymbolsView, rhs: SymbolsView) -> Bool {
+        lhs.symbols == rhs.symbols && lhs.query == rhs.query && lhs.modeValue == rhs.modeValue
+            && lhs.isActive == rhs.isActive && lhs.ownText === rhs.ownText
+            && lhs.scrollRequest == rhs.scrollRequest && lhs.barTapCount == rhs.barTapCount
+            && lhs.openFile == rhs.openFile && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
     }
 
     var body: some View {
@@ -305,17 +322,19 @@ struct SymbolsView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in
             scroll.isUserScrolling = phase == .interacting || phase == .decelerating
+            scroll.isCoasting = phase == .decelerating
             if phase == .interacting {
                 scroll.tracker.beginDrag(at: context.geometry.contentOffset.y)
             }
         }
         .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
-            scroll.tracker.isCollapsed = isBarCollapsed
+            scroll.tracker.isCollapsed = isBarCollapsed()
             let change = scroll.tracker.scrolled(
                 to: geometry.contentOffset.y,
                 top: -geometry.contentInsets.top,
                 bottom: geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom,
-                isUserScrolling: scroll.isUserScrolling
+                isUserScrolling: scroll.isUserScrolling,
+                isCoasting: scroll.isCoasting
             )
             if isActive, let change { onBarCollapsedChange(change) }
         }
@@ -561,6 +580,8 @@ private struct SymbolCode: View {
 private final class ScrollTracking {
     var tracker = BarCollapseTracker()
     var isUserScrolling = false
+    /// Decelerating after a fling.
+    var isCoasting = false
     /// The card in the middle of the screen.
     var centeredID: Int?
     /// The list has moved to where it starts, so `centeredID` changes are the reader's.

@@ -210,7 +210,7 @@ struct CodeScreen: View {
                 scrollRequest: listScrollRequest,
                 initialID: { savedListSymbolID() },
                 onCenteredSymbolChange: { saveListPosition($0) },
-                isBarCollapsed: model.isBarCollapsed,
+                isBarCollapsed: { model.isBarCollapsed },
                 barTapCount: model.barTapCount,
                 openFile: model.url,
                 onOpen: { symbol in
@@ -222,6 +222,8 @@ struct CodeScreen: View {
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 onCloseSearch: closeSearchAction
             )
+            // The bar collapsing redraws this screen, not the list.
+            .equatable()
             // A fresh list for each search's results, for the full list after, and for each order
             // (ids are places in the list, so they move; the list finds its symbol by name).
             .id([shownQuery, model.symbolSorting.order.rawValue, model.symbolSorting.isReversed ? "reversed" : ""])
