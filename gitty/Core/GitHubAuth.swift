@@ -5,7 +5,7 @@ import Security
 /// the device flow needs only the app's public Client ID.
 nonisolated enum GitHubAppConfig {
     /// The app's Client ID (`Iv23…`), from its settings page on GitHub.
-    static let clientID = ""
+    static let clientID = "Iv23licuF05GySwuQ0Zt"
     /// The app's URL name: the part after `github.com/apps/`.
     static let slug = ""
 
