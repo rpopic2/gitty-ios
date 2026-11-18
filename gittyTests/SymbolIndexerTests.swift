@@ -65,6 +65,17 @@ struct SymbolIndexerTests {
         ])
     }
 
+    @Test func aFileEntrySpansTheFileWithItsFirstLines() {
+        let text = "// é\n\tint a;\n3\n4\n5\n6\n7\n8"
+        let entry = SymbolIndexer.fileEntry(named: "main.c", text: text)
+        #expect(entry.kind == .file)
+        #expect(entry.name == "main.c")
+        #expect(entry.range == NSRange(location: 0, length: (text as NSString).length))
+        #expect(entry.line == 1)
+        #expect(entry.preview == "// é\n    int a;\n3\n4\n5\n6")
+        #expect(entry.lineLabel == "File")
+    }
+
     @Test func skipsPrototypes() throws {
         #expect(try symbols().filter { $0.name == "add" }.count == 1)
     }

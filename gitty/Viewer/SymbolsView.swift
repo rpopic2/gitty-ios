@@ -347,7 +347,7 @@ private struct SymbolRow: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(symbol.kind.title) \(symbol.name), line \(symbol.line)")
+        .accessibilityLabel(symbol.spokenDescription)
         .accessibilityHint(Text("Shows its card"))
     }
 }
@@ -379,13 +379,13 @@ struct SymbolResultsList: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 8)
-                    Text("Line \(symbol.line)")
+                    Text(symbol.lineLabel)
                         .font(.caption)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
             }
-            .accessibilityLabel("\(symbol.kind.title) \(symbol.name), line \(symbol.line)")
+            .accessibilityLabel(symbol.spokenDescription)
         }
         .listStyle(.plain)
         .contentMargins(.bottom, FileBarMetrics.fieldHeight + 16, for: .scrollContent)  // the search field
@@ -436,7 +436,7 @@ struct SymbolCard: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
-                Text("Line \(symbol.line)")
+                Text(symbol.lineLabel)
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -451,6 +451,6 @@ struct SymbolCard: View {
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: shape)
         .contentShape(shape)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(symbol.kind.title) \(symbol.name), line \(symbol.line)")
+        .accessibilityLabel(symbol.spokenDescription)
     }
 }

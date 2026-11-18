@@ -52,6 +52,8 @@ final class CodeDocumentModel {
     @ObservationIgnored private var progressToken = 0
     @ObservationIgnored private var trickleTask: Task<Void, Never>?
     @ObservationIgnored private var ownSymbols: SymbolIndexer.Outcome?
+    /// The open file's own entry in the list, before its symbols.
+    @ObservationIgnored private var ownFileEntry: CodeSymbol?
     @ObservationIgnored private var otherFiles: [ProjectSymbolIndex.FileSymbols] = []
     @ObservationIgnored private var isLoadingProjectSymbols = false
     /// The symbols' names, prepared for searching (built in the background for each new list).
@@ -134,11 +136,15 @@ final class CodeDocumentModel {
     /// Parses the text off the main thread once per version. A few ms for a typical file.
     private func indexSymbols(of rendered: RenderedText, version: UUID) async {
         let fileExtension = url.pathExtension
-        let outcome = await Task.detached(priority: .utility) {
-            SymbolIndexer.index(rendered.attributedString.string, fileExtension: fileExtension)
+        let name = fileName
+        let (outcome, fileEntry) = await Task.detached(priority: .utility) {
+            let text = rendered.attributedString.string
+            return (SymbolIndexer.index(text, fileExtension: fileExtension),
+                    SymbolIndexer.fileEntry(named: name, text: text))
         }.value
         guard case .loaded(_, let current) = phase, current == version else { return }  // newer text arrived
         ownSymbols = outcome
+        ownFileEntry = fileEntry
         publishSymbols()
     }
 
@@ -166,13 +172,19 @@ final class CodeDocumentModel {
         }
     }
 
-    /// One flat list: the open file's symbols in file order, then each other file's, in path
-    /// order. Ids are positions in this list.
+    /// One flat list: the open file's entry and its symbols in file order, then each other
+    /// file's entry and symbols, in path order. Ids are positions in this list.
     private func publishSymbols() {
         guard let ownSymbols else { return }
         var combined: [CodeSymbol] = []
-        if case .symbols(let own) = ownSymbols { combined = own }
+        // Each file's entry, then its symbols. (A file without symbols, such as a README, has
+        // no entry of its own: it just shows the project's.)
+        if case .symbols(let own) = ownSymbols {
+            combined = (ownFileEntry.map { [$0] } ?? []) + own
+            combined = combined.enumerated().map { $1.moved(to: $0, file: nil) }
+        }
         for file in otherFiles {
+            combined.append(file.file.moved(to: combined.count, file: file.url))
             for symbol in file.symbols {
                 combined.append(symbol.moved(to: combined.count, file: file.url))
             }

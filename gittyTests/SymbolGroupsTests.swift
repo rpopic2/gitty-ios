@@ -28,6 +28,16 @@ struct SymbolGroupsTests {
         #expect(groups.first?.symbols.map(\.name) == ["c1", "c2"])  // best first within the file
     }
 
+    @Test func filesEntriesAreHeadersNotRows() {
+        let file = CodeSymbol(id: 0, name: "a.c", kind: .file, range: NSRange(location: 0, length: 9),
+                              line: 1, preview: "")
+        let otherFile = CodeSymbol(id: 2, name: "b.c", kind: .file, range: NSRange(location: 0, length: 9),
+                                   line: 1, preview: "", fileURL: other)
+        let groups = SymbolFileGroup.groups(of: [file, symbol(1, "main"), otherFile], openFile: open)
+        #expect(groups.map(\.file) == [open, other])
+        #expect(groups.map { $0.symbols.map(\.name) } == [["main"], []])  // b.c matched by name only
+    }
+
     @Test func noSymbolsNoGroups() {
         #expect(SymbolFileGroup.groups(of: [], openFile: open).isEmpty)
     }

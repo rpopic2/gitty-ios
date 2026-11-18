@@ -178,11 +178,14 @@ private struct SymbolCaption: View {
             Text(symbol.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            // From another file of the project: which one, since tapping opens it.
-            Text(symbol.fileURL.map { "· \($0.lastPathComponent):\(symbol.line)" } ?? "· Line \(symbol.line)")
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            // From another file of the project: which one, since tapping opens it. A file's own
+            // page needs nothing more than its name.
+            if symbol.kind != .file {
+                Text(symbol.fileURL.map { "· \($0.lastPathComponent):\(symbol.line)" } ?? "· Line \(symbol.line)")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
         .font(.subheadline)
         .padding(.horizontal, 16)

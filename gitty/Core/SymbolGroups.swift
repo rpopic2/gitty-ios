@@ -10,6 +10,8 @@ nonisolated struct SymbolFileGroup: Identifiable, Sendable {
     /// Groups symbols by file. Files come in the order of their first symbol in the list: the
     /// open file first, then the project's in path order, or, for search results (best first),
     /// the file with the best match first. Each file's symbols keep their order in the list.
+    /// Files' own entries aren't rows: the header stands for the file (a search that only
+    /// matches a file's name still lists the file, with no rows).
     /// - Parameter openFile: the file that symbols without a `fileURL` are in.
     static func groups(of symbols: [CodeSymbol], openFile: URL) -> [SymbolFileGroup] {
         var order: [URL] = []
@@ -17,7 +19,7 @@ nonisolated struct SymbolFileGroup: Identifiable, Sendable {
         for symbol in symbols {
             let file = symbol.fileURL ?? openFile
             if byFile[file] == nil { order.append(file) }
-            byFile[file, default: []].append(symbol)
+            byFile[file, default: []].append(contentsOf: symbol.kind == .file ? [] : [symbol])
         }
         return order.map { SymbolFileGroup(file: $0, symbols: byFile[$0] ?? []) }
     }

@@ -6,14 +6,16 @@ import Foundation
 actor ProjectSymbolIndex {
     static let shared = ProjectSymbolIndex()
 
-    /// One file's symbols, ids in file order.
+    /// One file's entry (see `SymbolIndexer.fileEntry`) and its symbols, ids in file order.
     nonisolated struct FileSymbols: Sendable {
         let url: URL
+        let file: CodeSymbol
         let symbols: [CodeSymbol]
     }
 
     private struct Entry {
         let fetchedAt: Date
+        let file: CodeSymbol
         let symbols: [CodeSymbol]
     }
 
@@ -62,15 +64,17 @@ actor ProjectSymbolIndex {
         for metadata in files {
             guard !Task.isCancelled else { break }
             if let entry = cache[metadata.url], entry.fetchedAt == metadata.fetchedAt {
-                if !entry.symbols.isEmpty { result.append(FileSymbols(url: metadata.url, symbols: entry.symbols)) }
+                result.append(FileSymbols(url: metadata.url, file: entry.file, symbols: entry.symbols))
                 continue
             }
             guard let document = await store.cached(metadata.url) else { continue }
             let text = RawTextDecoder.decode(document.data, contentType: document.metadata.contentType)
             guard case .symbols(let symbols) = SymbolIndexer.index(text, fileExtension: metadata.url.pathExtension)
             else { continue }
-            cache[metadata.url] = Entry(fetchedAt: metadata.fetchedAt, symbols: symbols)
-            if !symbols.isEmpty { result.append(FileSymbols(url: metadata.url, symbols: symbols)) }
+            // Listed even without symbols: the file itself is an entry.
+            let file = SymbolIndexer.fileEntry(named: metadata.url.lastPathComponent, text: text)
+            cache[metadata.url] = Entry(fetchedAt: metadata.fetchedAt, file: file, symbols: symbols)
+            result.append(FileSymbols(url: metadata.url, file: file, symbols: symbols))
         }
         return result
     }

@@ -16,6 +16,22 @@ nonisolated enum SymbolIndexer {
 
     static let previewLineCount = 6
 
+    /// A file's own entry in the list, before its symbols: named after the file, spanning the
+    /// whole text (its page is the file), with its first lines as the preview.
+    static func fileEntry(named name: String, text: String) -> CodeSymbol {
+        CodeSymbol(id: 0, name: name, kind: .file,
+                   range: NSRange(location: 0, length: (text as NSString).length),
+                   line: 1, preview: preview(of: text))
+    }
+
+    /// The first `previewLineCount` lines, tabs as four spaces.
+    static func preview<Lines: StringProtocol>(of text: Lines) -> String {
+        text.split(separator: "\n", maxSplits: previewLineCount, omittingEmptySubsequences: false)
+            .prefix(previewLineCount)
+            .map { $0.replacingOccurrences(of: "\t", with: "    ").replacingOccurrences(of: "\r", with: "") }
+            .joined(separator: "\n")
+    }
+
     static func index(_ text: String, fileExtension: String) -> Outcome {
         guard let language = SymbolLanguage.forExtension(fileExtension) else { return .unsupportedLanguage }
         let original = text as NSString
@@ -198,10 +214,6 @@ nonisolated private struct SymbolBuilder {
     }
 
     private func preview(of range: NSRange) -> String {
-        text.substring(with: range)
-            .split(separator: "\n", maxSplits: SymbolIndexer.previewLineCount, omittingEmptySubsequences: false)
-            .prefix(SymbolIndexer.previewLineCount)
-            .map { $0.replacingOccurrences(of: "\t", with: "    ").replacingOccurrences(of: "\r", with: "") }
-            .joined(separator: "\n")
+        SymbolIndexer.preview(of: text.substring(with: range))
     }
 }

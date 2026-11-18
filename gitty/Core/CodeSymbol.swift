@@ -6,6 +6,8 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
         case function, type, macro, global
         /// Members of types (C# and similar).
         case method, property, field, enumMember
+        /// A whole file: its entry in the list comes before its symbols.
+        case file
 
         var title: String {
             switch self {
@@ -17,6 +19,7 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
             case .property: "Property"
             case .field: "Field"
             case .enumMember: "Enum Case"
+            case .file: "File"
             }
         }
 
@@ -30,6 +33,7 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
             case .property: "p.square"
             case .field: "f.square"
             case .enumMember: "e.square"
+            case .file: "doc.text"
             }
         }
     }
@@ -47,6 +51,16 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
     let preview: String
     /// The file it's in, when that isn't the open file (Symbols shows the whole project).
     var fileURL: URL? = nil
+
+    /// "Line 12", or "File" for a file's own entry.
+    var lineLabel: String {
+        kind == .file ? String(localized: "File") : String(localized: "Line \(line)")
+    }
+
+    /// For VoiceOver: "Function draw, line 12", or "File main.c".
+    var spokenDescription: String {
+        kind == .file ? "\(kind.title) \(name)" : "\(kind.title) \(name), line \(line)"
+    }
 
     /// The same symbol at another place in a combined list, from `file`.
     func moved(to id: Int, file: URL?) -> CodeSymbol {
