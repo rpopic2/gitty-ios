@@ -5,6 +5,9 @@ import UIKit
 /// Tapping a card zooms into that symbol (see `SymbolPager`).
 struct SymbolsView: View {
     let symbols: [CodeSymbol]
+    /// The symbol search the list is filtered by ("" for none). Clearing it brings back the
+    /// place from before the search.
+    let query: String
     /// False while another mode covers the list (it stays alive to keep its place).
     let isActive: Bool
     let namespace: Namespace.ID
@@ -16,8 +19,9 @@ struct SymbolsView: View {
     let barTapCount: Int
     let onOpen: @MainActor (CodeSymbol) -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
-    /// While searching: pulling the cards down past their top closes the search field.
-    let onPullDown: (@MainActor () -> Void)?
+    /// While searching: pulling the cards down past their top, or tapping between or below
+    /// them, closes the search field.
+    let onCloseSearch: (@MainActor () -> Void)?
 
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
@@ -28,13 +32,15 @@ struct SymbolsView: View {
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(symbols: [CodeSymbol], isActive: Bool, namespace: Namespace.ID, scrolledID: Binding<Int?>,
+    init(symbols: [CodeSymbol], query: String, isActive: Bool, namespace: Namespace.ID,
+         scrolledID: Binding<Int?>,
          initialID: @escaping @MainActor () -> Int? = { nil },
          isBarCollapsed: Bool, barTapCount: Int,
          onOpen: @escaping @MainActor (CodeSymbol) -> Void,
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
-         onPullDown: (@MainActor () -> Void)? = nil) {
+         onCloseSearch: (@MainActor () -> Void)? = nil) {
         self.symbols = symbols
+        self.query = query
         self.isActive = isActive
         self.namespace = namespace
         _scrolledID = scrolledID
@@ -43,7 +49,7 @@ struct SymbolsView: View {
         self.barTapCount = barTapCount
         self.onOpen = onOpen
         self.onBarCollapsedChange = onBarCollapsedChange
-        self.onPullDown = onPullDown
+        self.onCloseSearch = onCloseSearch
     }
 
     var body: some View {
@@ -56,6 +62,14 @@ struct SymbolsView: View {
                     if let target { reader.scrollTo(target, anchor: .center) }
                     position = target
                     isPositioned = true
+                }
+                .onChange(of: query) { _, query in
+                    // Cleared: back to where the list was before the search. Chosen here rather
+                    // than left to `scrollPosition`, which would chase the card that was in the
+                    // middle of the results through the much longer list.
+                    guard query.isEmpty, let target = initialID() else { return }
+                    reader.scrollTo(target, anchor: .center)
+                    position = target
                 }
         }
         .onChange(of: position) { _, id in
@@ -78,16 +92,20 @@ struct SymbolsView: View {
                     }
                     .buttonStyle(.plain)
                     .matchedTransitionSource(id: symbol.id, in: namespace)
+                    // The margin is part of each scroll target, so every target spans the full
+                    // width and centering one never scrolls sideways.
+                    .padding(.horizontal, 16)
                 }
             }
-            .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .scrollTargetLayout()
         }
         .scrollPosition(id: $position, anchor: .center)
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .scrollDisabled(!isActive)  // hidden: stays put, and leaves status-bar taps to File
-        .modifier(OnPullDownPastTop(action: isActive ? onPullDown : nil))
+        .modifier(OnPullDownPastTop(action: isActive ? onCloseSearch : nil))
+        .modifier(OnTapEmptySpace(action: isActive ? onCloseSearch : nil))
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .background(Color(uiColor: .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in
@@ -115,14 +133,14 @@ struct SymbolsView: View {
 /// Symbol search results over File: a compact list (kind, name, line), best matches first.
 struct SymbolResultsList: View {
     let symbols: [CodeSymbol]
-    /// Pulling the list down past its top closes the search.
-    let onPullDown: @MainActor () -> Void
+    /// Pulling the list down past its top, or tapping it, closes the search.
+    let onCloseSearch: @MainActor () -> Void
     let onOpen: @MainActor (CodeSymbol) -> Void
 
-    init(symbols: [CodeSymbol], onPullDown: @escaping @MainActor () -> Void,
+    init(symbols: [CodeSymbol], onCloseSearch: @escaping @MainActor () -> Void,
          onOpen: @escaping @MainActor (CodeSymbol) -> Void) {
         self.symbols = symbols
-        self.onPullDown = onPullDown
+        self.onCloseSearch = onCloseSearch
         self.onOpen = onOpen
     }
 
@@ -149,8 +167,27 @@ struct SymbolResultsList: View {
         }
         .listStyle(.plain)
         .contentMargins(.bottom, FileBarMetrics.fieldHeight + 16, for: .scrollContent)  // the search field
-        .modifier(OnPullDownPastTop(action: onPullDown))
+        .modifier(OnPullDownPastTop(action: onCloseSearch))
+        // A List's rows aren't SwiftUI buttons that win over a tap on the list, so this tap also
+        // sees taps on rows. That's fine here: opening a result closes the search too.
+        .simultaneousGesture(TapGesture().onEnded { onCloseSearch() })
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
+    }
+}
+
+/// Tapping the empty space around the cards runs `action`. Taps on a card go to the card: a
+/// child's button wins over a tap gesture on its parent. `nil` turns it off. The gesture stays
+/// attached either way, so turning it on and off doesn't rebuild the list.
+struct OnTapEmptySpace: ViewModifier {
+    let action: (@MainActor () -> Void)?
+
+    init(action: (@MainActor () -> Void)?) {
+        self.action = action
+    }
+
+    func body(content: Content) -> some View {
+        content.gesture(TapGesture().onEnded { action?() },
+                        including: action == nil ? .subviews : .all)
     }
 }
 

@@ -208,36 +208,34 @@ private struct BarTextField: UIViewRepresentable {
     }
 }
 
-/// Searching symbols, in Symbols mode: the bar becomes a search field above the keyboard. The
-/// list filters as you type; Done (or Search) keeps the filter, and the field's clear button
-/// clears it.
+/// Searching symbols: the bar becomes a search field above the keyboard, and the list filters as
+/// you type. The keyboard's Search key, a swipe down, or a tap on the empty space above closes it
+/// and keeps the filter; the field's clear button clears it.
 struct SymbolSearchEditor: View {
     @Binding var query: String
-    let onDone: @MainActor () -> Void
+    let onClose: @MainActor () -> Void
 
-    init(query: Binding<String>, onDone: @escaping @MainActor () -> Void) {
+    init(query: Binding<String>, onClose: @escaping @MainActor () -> Void) {
         _query = query
-        self.onDone = onDone
+        self.onClose = onClose
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                BarTextField(style: .search, text: $query, onSubmit: onDone)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: FileBarMetrics.fieldHeight)
-            .modifier(FieldBackground())
-            Button("Done") { onDone() }
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            BarTextField(style: .search, text: $query, onSubmit: onClose)
         }
+        .padding(.horizontal, 14)
+        .frame(height: FileBarMetrics.fieldHeight)
+        .modifier(FieldBackground())
         .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
         .padding(.vertical, 8)
         .modifier(EditorBarBackground())
-        // Swiping down on the search bar closes the search, like Done (the filter stays).
-        .modifier(OnSwipeDown { onDone() })
+        // Swiping down on the search bar closes the search (the filter stays).
+        .modifier(OnSwipeDown { onClose() })
+        .accessibilityAction(.escape) { onClose() }
     }
 }
 

@@ -75,13 +75,20 @@ struct CodeScreen: View {
             if needsProjectSymbols { model.loadProjectSymbols() }
         }
         .onChange(of: listSymbolID) { saveListPosition() }
+        .onChange(of: isSearchingSymbols) { _, isSearching in
+            // Closing the search brings the bar back expanded and keeps it so through the rest of
+            // the swipe that closed it. (The list bouncing back could otherwise collapse it.)
+            if !isSearching { model.expandBarFromTap() }
+        }
         .navigationDestination(item: $openedSymbolID) { openedID in
             SymbolPager(
                 symbols: pagerSymbols,
                 initialID: openedID,
                 currentID: $pagerSymbolID,
                 text: model.text(of:),
-                // Not on tap: center the card only when heading back, so it zooms back into view.
+                // Not on tap, which would move the card the zoom starts from. Once you page, the
+                // list (hidden behind) follows, so it's already on the card when you swipe down.
+                onPage: { listSymbolID = $0 },
                 onWillClose: { listSymbolID = $0 },
                 onShowInFile: { showInFile($0) },
                 symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
@@ -173,11 +180,12 @@ struct CodeScreen: View {
     private var symbols: some View {
         switch model.symbolIndex {
         case _ where !model.projectSymbolsLoaded:
-            placeholder { ProgressView() }  // the project's other files are being indexed
+            // The project's other files are being indexed.
+            placeholder(onTap: closeSearchAction) { ProgressView() }
         case .indexing:
-            placeholder { ProgressView() }
+            placeholder(onTap: closeSearchAction) { ProgressView() }
         case .ready(let symbols) where symbols.isEmpty:
-            placeholder {
+            placeholder(onTap: closeSearchAction) {
                 ContentUnavailableView(
                     "No Symbols",
                     systemImage: "function",
@@ -185,10 +193,11 @@ struct CodeScreen: View {
                 )
             }
         case .ready where shownSymbols.isEmpty:
-            placeholder { ContentUnavailableView.search(text: symbolQuery) }
+            placeholder(onTap: closeSearchAction) { ContentUnavailableView.search(text: symbolQuery) }
         case .ready:
             SymbolsView(
                 symbols: shownSymbols,
+                query: symbolQuery,
                 isActive: mode == .symbols,
                 namespace: symbolNamespace,
                 scrolledID: $listSymbolID,
@@ -201,7 +210,7 @@ struct CodeScreen: View {
                     openedSymbolID = symbol.id
                 },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
-                onPullDown: closeSearchOnPullDown
+                onCloseSearch: closeSearchAction
             )
         case .unsupportedLanguage:
             placeholder {
@@ -238,11 +247,15 @@ struct CodeScreen: View {
         SymbolSearch.matches(symbolQuery, in: indexedSymbols)
     }
 
-    /// Full-screen, opaque, so the hidden file text never shows through.
-    private func placeholder<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    /// Full-screen, opaque, so the hidden file text never shows through. `onTap`: a tap anywhere
+    /// on it (while searching, closes the search).
+    private func placeholder<Content: View>(onTap: (@MainActor () -> Void)? = nil,
+                                            @ViewBuilder _ content: () -> Content) -> some View {
         content()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(uiColor: .systemGroupedBackground))
+            .contentShape(Rectangle())
+            .gesture(TapGesture().onEnded { onTap?() }, including: onTap == nil ? .subviews : .all)
     }
 
     /// The address editor or the symbol search while editing, otherwise the bar with the mode
@@ -250,7 +263,7 @@ struct CodeScreen: View {
     @ViewBuilder
     private var bottom: some View {
         if isSearchingSymbols && barSearchesSymbols {
-            SymbolSearchEditor(query: $symbolQuery, onDone: { isSearchingSymbols = false })
+            SymbolSearchEditor(query: $symbolQuery, onClose: { isSearchingSymbols = false })
         } else if isEditingAddress {
             AddressEditor(
                 initialText: rejectedAddress ?? model.url.absoluteString,
@@ -314,14 +327,14 @@ struct CodeScreen: View {
 
     /// Searching symbols in File mode: the matches above the search field (every symbol until
     /// you type). Tapping one opens its page, paging through the matches; swiping down comes
-    /// back to File.
+    /// back to File, and so does a tap on the empty space.
     @ViewBuilder
     private var fileSearchResults: some View {
         switch model.symbolIndex {
         case .indexing:
-            placeholder { ProgressView() }
+            placeholder(onTap: closeSearchAction) { ProgressView() }
         case .unsupportedLanguage:
-            placeholder {
+            placeholder(onTap: closeSearchAction) {
                 ContentUnavailableView(
                     "No Symbols for This File Type",
                     systemImage: "doc.questionmark",
@@ -329,7 +342,7 @@ struct CodeScreen: View {
                 )
             }
         case .ready where shownSymbols.isEmpty:
-            placeholder {
+            placeholder(onTap: closeSearchAction) {
                 if symbolQuery.isEmpty {
                     ContentUnavailableView("No Symbols", systemImage: "function")
                 } else {
@@ -337,7 +350,7 @@ struct CodeScreen: View {
                 }
             }
         case .ready:
-            SymbolResultsList(symbols: shownSymbols, onPullDown: { isSearchingSymbols = false }) { symbol in
+            SymbolResultsList(symbols: shownSymbols, onCloseSearch: { isSearchingSymbols = false }) { symbol in
                 isSearchingSymbols = false
                 pagerSymbols = shownSymbols
                 pagerSymbolID = symbol.id
@@ -346,8 +359,9 @@ struct CodeScreen: View {
         }
     }
 
-    /// While searching in Symbols mode, pulling the cards down past their top closes the search.
-    private var closeSearchOnPullDown: (@MainActor () -> Void)? {
+    /// While searching, pulling the results down past their top, or tapping the empty space
+    /// around them, closes the search.
+    private var closeSearchAction: (@MainActor () -> Void)? {
         guard isSearchingSymbols else { return nil }
         return { isSearchingSymbols = false }
     }

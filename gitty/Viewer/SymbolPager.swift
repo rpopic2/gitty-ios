@@ -11,6 +11,8 @@ struct SymbolPager: View {
     /// The symbol on screen. Reported only after the pager has opened on `initialID`.
     @Binding var currentID: Int?
     let text: @MainActor (CodeSymbol) -> NSAttributedString?
+    /// Called with each symbol paged to, once you've paged away from the tapped one.
+    let onPage: @MainActor (Int) -> Void
     /// Called with the symbol on screen when the pager starts to close (the swipe down begins).
     let onWillClose: @MainActor (Int) -> Void
     /// Tapping the caption: close the pager and show the symbol in File.
@@ -23,6 +25,8 @@ struct SymbolPager: View {
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
+    /// Paged away from the tapped symbol at least once.
+    @State private var hasPaged = false
     /// Swiping from the right edge pages here, so it doesn't open the sidebar.
     @Environment(SideBarState.self) private var sideBar: SideBarState?
 
@@ -30,6 +34,7 @@ struct SymbolPager: View {
     // doesn't warn about converting it to `@Sendable`.
     init(symbols: [CodeSymbol], initialID: Int, currentID: Binding<Int?>,
          text: @escaping @MainActor (CodeSymbol) -> NSAttributedString?,
+         onPage: @escaping @MainActor (Int) -> Void,
          onWillClose: @escaping @MainActor (Int) -> Void,
          onShowInFile: @escaping @MainActor (CodeSymbol) -> Void,
          symbolSearchTerm: @escaping @MainActor (String) -> String?,
@@ -39,6 +44,7 @@ struct SymbolPager: View {
         self.initialID = initialID
         _currentID = currentID
         self.text = text
+        self.onPage = onPage
         self.onWillClose = onWillClose
         self.onShowInFile = onShowInFile
         self.symbolSearchTerm = symbolSearchTerm
@@ -57,8 +63,9 @@ struct SymbolPager: View {
         // screen's safe area here and hand it to each page.
         GeometryReader { proxy in
             let safeArea = proxy.safeAreaInsets
+            // The top is kept out of the page instead (see below), so no inset there.
             let pageInsets = EdgeInsets(
-                top: safeArea.top,
+                top: 0,
                 leading: safeArea.leading,
                 bottom: safeArea.bottom + SymbolCaption.reservedHeight,
                 trailing: safeArea.trailing
@@ -80,6 +87,9 @@ struct SymbolPager: View {
                                     onSearchSymbols: onSearchSymbols,
                                     onComment: { onComment(symbol, $0) }
                                 )
+                                // The text starts below the status bar and never scrolls under
+                                // it: just the page's background shows there.
+                                .padding(.top, safeArea.top)
                                 .containerRelativeFrame([.horizontal, .vertical])
                             }
                         }
@@ -113,6 +123,8 @@ struct SymbolPager: View {
             // Until the pager is on the tapped symbol, don't let the first layout overwrite it.
             guard isPositioned, let id else { return }
             currentID = id
+            if id != initialID { hasPaged = true }
+            if hasPaged { onPage(id) }
         }
     }
 }
@@ -192,7 +204,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
     let text: NSAttributedString
     /// Text is replaced only when this changes.
     let textID: Int
-    /// Safe area (plus room for the caption at the bottom) to keep the text clear of.
+    /// Safe area (plus room for the caption at the bottom) to keep the text clear of. The page
+    /// itself starts below the status bar, so `top` is normally 0.
     let insets: EdgeInsets
     /// Only the page on screen answers a tap on the status bar.
     let isCurrent: Bool
@@ -207,6 +220,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
         let textView = UITextView(usingTextLayoutManager: false)
         RawTextStyle.configure(textView)
         textView.contentInsetAdjustmentBehavior = .never  // insets come from `insets` instead
+        if #available(iOS 26.0, *) {
+            textView.topEdgeEffect.isHidden = true  // nothing covers the top of a page
+        }
         textView.delegate = context.coordinator
         return textView
     }
