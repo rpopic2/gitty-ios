@@ -519,11 +519,11 @@ private final class ScrollTracking {
 
     /// `centeredID` for `scrollPosition`, made once.
     private(set) lazy var centeredBinding = Binding<Int?>(
-        get: { [unowned self] in centeredID },
+        get: { [unowned self] in self.centeredID },
         set: { [unowned self] id in
-            guard id != centeredID else { return }
-            centeredID = id
-            if isPositioned, let id { report?(id) }
+            guard id != self.centeredID else { return }
+            self.centeredID = id
+            if self.isPositioned, let id { self.report?(id) }
         }
     )
 }
