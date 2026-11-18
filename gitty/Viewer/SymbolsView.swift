@@ -6,9 +6,9 @@ import UIKit
 ///
 /// Pinching zooms in and out, like Photos, through the levels of `ViewMode` (the selector under
 /// the bar follows):
-/// - Files: one-line rows, grouped under a sticky header per file (its name and count; tap to
-///   fold it, or show it in Code). Tapping a row zooms back in to its card. Zooming out from
-///   here goes to Project.
+/// - Files: each file's declarations, one line per symbol like a C header, under a sticky header
+///   (its name and count; tap to fold it, or show it in Code). Tapping a line goes to its card.
+///   Zooming out from here goes to Project.
 /// - Symbols: the cards.
 /// - Code: every symbol's whole code, edge to edge in the raw-text style, each under a slim
 ///   title that sticks to the top while you read it. Tap one to open its page.
@@ -126,7 +126,7 @@ struct SymbolsView: View, Equatable {
             }
             .onChange(of: scrollRequest) { _, request in
                 guard let request else { return }
-                reader.scrollTo(request.id, anchor: anchor)
+                reader.scrollTo(scrollTarget(for: request.id), anchor: anchor)
             }
         }
         .onChange(of: mode) { _, mode in
@@ -141,6 +141,13 @@ struct SymbolsView: View, Equatable {
         .accessibilityAction(named: "Zoom Out") { zoomOut() }
     }
 
+    /// What to scroll to for a symbol: itself, except at the Files level, where a whole file is
+    /// one item (its declarations), so the file's.
+    private func scrollTarget(for id: Int) -> Int {
+        guard zoom == .files || zoom == .project else { return id }
+        return groupCache.anchor(for: id, in: symbols, openFile: openFile, query: query) ?? id
+    }
+
     /// Where a symbol lands when it's brought into view: zoomed in, a symbol can be taller than
     /// the screen, so its start goes to the top; otherwise it's centered.
     private var anchor: UnitPoint {
@@ -151,7 +158,7 @@ struct SymbolsView: View, Equatable {
     /// first item, so move to the start explicitly: after a pinch, the symbol that was in the
     /// middle; otherwise the saved place. Search results start at the top, with the best match.
     private func moveToStart(_ reader: ScrollViewProxy) {
-        let target = switchAnchor ?? (query.isEmpty ? initialID() ?? scroll.centeredID : nil)
+        let target = (switchAnchor ?? (query.isEmpty ? initialID() ?? scroll.centeredID : nil)).map(scrollTarget(for:))
         switchAnchor = nil
         if let target { reader.scrollTo(target, anchor: anchor) }
         scroll.centeredID = target
@@ -186,18 +193,16 @@ struct SymbolsView: View, Equatable {
         .scrollTargetLayout()
     }
 
+    /// One item per file, not per symbol: the file's declarations are a single block, so the
+    /// lazy list has a file's worth of items to deal with, not a project's worth of symbols.
     private var groupedRows: some View {
         LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(groupCache.groups(of: symbols, openFile: openFile, query: query)) { group in
                 let isFolded = folded.contains(group.file)
                 Section {
-                    if !isFolded {
-                        ForEach(group.symbols) { symbol in
-                            Button { showCard(symbol) } label: {
-                                SymbolRow(symbol: symbol)
-                            }
-                            .buttonStyle(.plain)
-                        }
+                    if !isFolded, !group.symbols.isEmpty {
+                        FileDeclarations(symbols: group.symbols) { showCard($0) }
+                            .id(group.anchorID ?? -1)  // the file as a scroll target (never -1 here)
                     }
                 } header: {
                     SymbolFileHeader(
@@ -350,12 +355,26 @@ private final class GroupCache {
     private var key: (query: String, count: Int, first: Int?, last: Int?)?
     private var groups: [SymbolFileGroup] = []
 
+    /// Each symbol's file's anchor (see `SymbolFileGroup.anchorID`), made with `groups`.
+    private var anchors: [Int: Int] = [:]
+
     func groups(of symbols: [CodeSymbol], openFile: URL, query: String) -> [SymbolFileGroup] {
         let key = (query: query, count: symbols.count, first: symbols.first?.id, last: symbols.last?.id)
         if let old = self.key, old == key { return groups }
         self.key = key
         groups = SymbolFileGroup.groups(of: symbols, openFile: openFile)
+        anchors = [:]
+        for group in groups {
+            guard let anchor = group.anchorID else { continue }
+            if let entry = group.entryID { anchors[entry] = anchor }
+            for symbol in group.symbols { anchors[symbol.id] = anchor }
+        }
         return groups
+    }
+
+    func anchor(for id: Int, in symbols: [CodeSymbol], openFile: URL, query: String) -> Int? {
+        _ = groups(of: symbols, openFile: openFile, query: query)
+        return anchors[id]
     }
 }
 
@@ -412,36 +431,46 @@ private struct SymbolFileHeader: View {
     }
 }
 
-/// A symbol in the grouped view: its kind, name and line, on one line.
-private struct SymbolRow: View {
-    let symbol: CodeSymbol
+/// A file's symbols at the Files level, like a C header: each one's declaration (the first line
+/// of its definition), with its kind's icon, long ones wrapped. One view for the whole file;
+/// tapping a line goes to that symbol's card.
+private struct FileDeclarations: View {
+    let symbols: [CodeSymbol]
+    let onTap: @MainActor (CodeSymbol) -> Void
+
+    init(symbols: [CodeSymbol], onTap: @escaping @MainActor (CodeSymbol) -> Void) {
+        self.symbols = symbols
+        self.onTap = onTap
+    }
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: symbol.kind.systemImage)
-                .foregroundStyle(.tint)
-                .frame(width: 22)
-                .accessibilityHidden(true)
-            Text(symbol.name)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 8)
-            Text("Line \(symbol.line)")
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(symbols) { symbol in
+                (Text(Image(systemName: symbol.kind.systemImage)).foregroundStyle(.tint)
+                    + Text(verbatim: " " + Self.declaration(of: symbol)))
+                    .font(.custom(RawTextStyle.fontName, fixedSize: RawTextStyle.fontSize))
+                    .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onTap(symbol) }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(symbol.spokenDescription)
+                    .accessibilityHint(Text("Shows its card"))
+                    .accessibilityAddTraits(.isButton)
+            }
         }
         .padding(.horizontal, 16)
-        .frame(minHeight: 44)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .overlay(alignment: .bottom) {
-            Divider().padding(.leading, 48)
-        }
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(symbol.spokenDescription)
-        .accessibilityHint(Text("Shows its card"))
+    }
+
+    /// The first line of the definition (the preview starts at it, after any comment), without
+    /// the spaces around it; the name if there's none.
+    static func declaration(of symbol: CodeSymbol) -> String {
+        let line = symbol.preview.prefix { $0 != "\n" }.trimmingCharacters(in: .whitespaces)
+        return line.isEmpty ? symbol.name : line
     }
 }
 

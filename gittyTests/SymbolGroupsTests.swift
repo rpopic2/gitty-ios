@@ -17,6 +17,7 @@ struct SymbolGroupsTests {
         let list = [symbol(0, "main"), symbol(1, "helper"), symbol(2, "b1", in: other), symbol(3, "c1", in: third)]
         let groups = SymbolFileGroup.groups(of: list, openFile: open)
         #expect(groups.map(\.file) == [open, other, third])
+        #expect(groups.map(\.anchorID) == [0, 2, 3])  // no entries here: each file's first symbol
         #expect(groups.map { $0.symbols.map(\.name) } == [["main", "helper"], ["b1"], ["c1"]])
     }
 
@@ -36,6 +37,8 @@ struct SymbolGroupsTests {
         let groups = SymbolFileGroup.groups(of: [file, symbol(1, "main"), otherFile], openFile: open)
         #expect(groups.map(\.file) == [open, other])
         #expect(groups.map { $0.symbols.map(\.name) } == [["main"], []])  // b.c matched by name only
+        // Each file is one item at the Files level, scrolled to by its entry's id.
+        #expect(groups.map(\.anchorID) == [0, 2])
     }
 
     @Test func noSymbolsNoGroups() {

@@ -4,8 +4,14 @@ import Foundation
 nonisolated struct SymbolFileGroup: Identifiable, Sendable {
     let file: URL
     let symbols: [CodeSymbol]
+    /// The file's own entry in the list, when it's there (always, without a search).
+    var entryID: Int? = nil
 
     var id: URL { file }
+
+    /// The id that stands for the whole file in the Files level (a scroll target): its entry's,
+    /// else its first symbol's.
+    var anchorID: Int? { entryID ?? symbols.first?.id }
 
     /// Groups symbols by file. Files come in the order of their first symbol in the list: the
     /// open file first, then the project's in path order, or, for search results (best first),
@@ -16,12 +22,18 @@ nonisolated struct SymbolFileGroup: Identifiable, Sendable {
     static func groups(of symbols: [CodeSymbol], openFile: URL) -> [SymbolFileGroup] {
         var order: [URL] = []
         var byFile: [URL: [CodeSymbol]] = [:]
+        var entries: [URL: Int] = [:]
         for symbol in symbols {
             let file = symbol.fileURL ?? openFile
             if byFile[file] == nil { order.append(file) }
-            byFile[file, default: []].append(contentsOf: symbol.kind == .file ? [] : [symbol])
+            if symbol.kind == .file {
+                entries[file] = symbol.id
+                byFile[file, default: []].append(contentsOf: [])
+            } else {
+                byFile[file, default: []].append(symbol)
+            }
         }
-        return order.map { SymbolFileGroup(file: $0, symbols: byFile[$0] ?? []) }
+        return order.map { SymbolFileGroup(file: $0, symbols: byFile[$0] ?? [], entryID: entries[$0]) }
     }
 }
 
