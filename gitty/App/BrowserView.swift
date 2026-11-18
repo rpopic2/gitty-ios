@@ -114,6 +114,8 @@ private struct StartScreen: View {
     let rejectedAddress: String?
     let onOpen: @MainActor (URL) -> Void
     let onPasteAndGo: @MainActor () -> Void
+    /// The project chosen in the sidebar, for the bar (`nil` for Files).
+    @State private var project: ProjectInfo?
 
     init(projectID: String, isEditingAddress: Binding<Bool>, rejectedAddress: String?,
          onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void) {
@@ -128,23 +130,33 @@ private struct StartScreen: View {
         ZStack(alignment: .bottom) {
             ProjectView(projectID: projectID, onOpen: onOpen)
             if isEditingAddress {
-                AddressEditor(initialText: rejectedAddress ?? "", showsInitialError: rejectedAddress != nil,
+                AddressEditor(initialText: rejectedAddress ?? projectAddress,
+                              showsInitialError: rejectedAddress != nil,
                               onOpen: onOpen, onCancel: { isEditingAddress = false })
                     .id(rejectedAddress)  // a new rejected share restarts the editor with it
             } else {
                 BottomBarStack(
-                    title: "",
+                    title: project?.title ?? "",  // empty: "Enter URL"
                     isCollapsed: false,
                     progressFraction: 0,
                     isProgressVisible: false,
                     mode: nil,
                     onExpand: {},
                     onEdit: { isEditingAddress = true },
+                    copyText: project == nil ? nil : projectAddress,
                     onPasteAndGo: onPasteAndGo
                 )
             }
         }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear { isEditingAddress = projectID.isEmpty }  // a project to browse keeps the keyboard down
+        .task(id: projectID) {
+            project = projectID.isEmpty ? nil : await ProjectStore.shared.project(id: projectID)
+        }
+    }
+
+    /// The project's address on github.com, or nothing (Files).
+    private var projectAddress: String {
+        project?.link.webURL?.absoluteString ?? ""
     }
 }

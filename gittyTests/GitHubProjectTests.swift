@@ -24,6 +24,9 @@ struct GitHubProjectTests {
     @Test func projectIDs() {
         #expect(RepoLink(owner: "o", repo: "r").id == "o/r")
         #expect(RepoLink(owner: "o", repo: "r", treePath: ["main", "Sources"]).id == "o/r/tree/main/Sources")
+        #expect(RepoLink(owner: "o", repo: "r").webURL?.absoluteString == "https://github.com/o/r")
+        #expect(RepoLink(owner: "o", repo: "r", treePath: ["main", "My Folder"]).webURL?.absoluteString
+                    == "https://github.com/o/r/tree/main/My%20Folder")
     }
 
     @Test func rawURLs() {

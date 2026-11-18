@@ -15,6 +15,15 @@ nonisolated struct RepoLink: Hashable, Codable, Sendable {
         ([owner, repo] + (treePath.isEmpty ? [] : ["tree"] + treePath)).joined(separator: "/")
     }
 
+    /// The repository (or folder) on github.com: `https://github.com/owner/repo/tree/…`.
+    var webURL: URL? {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "github.com"
+        components.path = "/" + id
+        return components.url
+    }
+
     init(owner: String, repo: String, treePath: [String] = []) {
         self.owner = owner
         self.repo = repo

@@ -35,6 +35,8 @@ struct CodeScreen: View {
     /// Symbols has been shown at least once. The list is built then, with the whole project's
     /// symbols, so it can come back to where it was left.
     @State private var hasShownSymbols = false
+    /// The project chosen in the sidebar, for the bar in Project mode (`nil` for Files).
+    @State private var project: ProjectInfo?
     /// The review that Comment adds to.
     @Environment(ReviewDraft.self) private var review
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
@@ -64,6 +66,9 @@ struct CodeScreen: View {
         .overlay(alignment: .top) { StatusBarBackdrop() }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }
+        .task(id: projectID) {
+            project = projectID.isEmpty ? nil : await ProjectStore.shared.project(id: projectID)
+        }
         .onChange(of: mode) {
             model.setBarCollapsed(false)
             isSearchingSymbols = false
@@ -257,7 +262,7 @@ struct CodeScreen: View {
             SymbolSearchEditor(query: $symbolQuery, onClose: { isSearchingSymbols = false })
         } else if isEditingAddress {
             AddressEditor(
-                initialText: rejectedAddress ?? model.url.absoluteString,
+                initialText: rejectedAddress ?? barAddress,
                 showsInitialError: rejectedAddress != nil,
                 onOpen: onOpen,
                 onCancel: { isEditingAddress = false }
@@ -265,7 +270,7 @@ struct CodeScreen: View {
             .id(rejectedAddress)  // a new rejected share restarts the editor with it
         } else {
             BottomBarStack(
-                title: model.fileName,
+                title: barTitle,
                 isCollapsed: model.isBarCollapsed,
                 progressFraction: model.progressFraction,
                 isProgressVisible: model.isProgressVisible,
@@ -276,7 +281,7 @@ struct CodeScreen: View {
                     // anywhere when there's nothing to search).
                     if barSearchesSymbols { isSearchingSymbols = true } else { isEditingAddress = true }
                 },
-                copyText: model.url.absoluteString,
+                copyText: barAddress,
                 onPasteAndGo: onPasteAndGo,
                 onOpenInBrowser: openInBrowserAction,
                 // Symbols shows the active search in the bar; File shows the file name (and
@@ -285,6 +290,20 @@ struct CodeScreen: View {
                 onClearSearch: { symbolQuery = "" }
             )
         }
+    }
+
+    /// In Project mode, the bar names the project and edits its address on github.com (Files,
+    /// which has no address, edits the open file's). Otherwise, the open file.
+    private var barTitle: String {
+        guard mode == .project else { return model.fileName }
+        return projectID.isEmpty ? String(localized: "Files") : project?.title ?? ""
+    }
+
+    private var barAddress: String {
+        guard mode == .project, let address = project?.link.webURL?.absoluteString else {
+            return model.url.absoluteString
+        }
+        return address
     }
 
     /// "This is a web page." at the top of File mode, until dismissed. Like the bottom bar, it
