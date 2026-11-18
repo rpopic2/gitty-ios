@@ -25,7 +25,7 @@ struct CodeScreen: View {
     /// The card the Symbols list keeps in view.
     @State private var listSymbolID: Int?
     /// The symbols the pager pages through: the list's (search results) when a card was tapped,
-    /// all of them after Jump to Definition from File.
+    /// all of them after Search from File.
     @State private var pagerSymbols: [CodeSymbol] = []
     /// Show in File: where File should scroll to.
     @State private var fileScrollRequest: FileScrollRequest?
@@ -338,15 +338,14 @@ struct CodeScreen: View {
         return { isSearchingSymbols = false }
     }
 
-    /// Jump to Definition: the selected name, if it finds at least one symbol.
+    /// Search in the text menu: what to search for, for any selection. `nil` (no menu item) only
+    /// when this file has no symbols to search.
     private func symbolSearchTerm(forSelection selection: String) -> String? {
-        guard let term = SymbolSearch.searchTerm(fromSelection: selection),
-              !SymbolSearch.matches(term, in: indexedSymbols).isEmpty
-        else { return nil }
-        return term
+        if case .unsupportedLanguage = model.symbolIndex { return nil }
+        return SymbolSearch.query(fromSelection: selection)
     }
 
-    /// Jump to Definition (from File or a symbol's page): put the name in the symbol search and
+    /// Search (from File or a symbol's page): put the selection in the symbol search and
     /// focus it. In File the matches list above the field; from a symbol's page, the page
     /// closes and the Symbols cards filter.
     private func searchSymbols(for name: String) {

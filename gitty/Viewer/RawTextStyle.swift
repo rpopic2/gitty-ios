@@ -82,18 +82,21 @@ nonisolated enum RawTextStyle {
         return [action]
     }
 
-    /// "Jump to Definition" for a selected name: searches symbols for it. Empty when the selection
-    /// isn't a name or finds nothing (`searchTerm` decides).
+    /// "Search" for any selection: searches symbols for it. Empty only when there's nothing to
+    /// search with (`searchTerm` decides: no symbols for this file, or only spaces selected).
     @MainActor
-    static func jumpToDefinitionItems(
+    static func searchItems(
         for range: NSRange, in textView: UITextView,
         searchTerm: (@MainActor (String) -> String?)?, onSearch: (@MainActor (String) -> Void)?
     ) -> [UIMenuElement] {
-        guard let searchTerm, let onSearch, range.length > 0, range.length <= 200,
-              NSMaxRange(range) <= textView.textStorage.length,
-              let term = searchTerm(textView.textStorage.attributedSubstring(from: range).string)
+        guard let searchTerm, let onSearch, range.length > 0,
+              NSMaxRange(range) <= textView.textStorage.length
         else { return [] }
-        let action = UIAction(title: String(localized: "Jump to Definition"),
+        // A long selection searches with its start; a query is never that long.
+        let head = NSRange(location: range.location, length: min(range.length, 500))
+        guard let term = searchTerm(textView.textStorage.attributedSubstring(from: head).string)
+        else { return [] }
+        let action = UIAction(title: String(localized: "Search"),
                               image: UIImage(systemName: "magnifyingglass")) { _ in onSearch(term) }
         return [action]
     }

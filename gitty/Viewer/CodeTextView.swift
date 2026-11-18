@@ -31,8 +31,7 @@ struct CodeTextView: UIViewRepresentable {
     /// False while another mode (Symbols) covers the file. The view stays alive to keep its place.
     var isActive = true
     var positionStore: ReadingPositionStore = .standard
-    /// Jump to Definition in the text menu: the search term for a selected name (`nil` hides the
-    /// item)…
+    /// Search in the text menu: the search for a selection (`nil` hides the item)…
     var symbolSearchTerm: (@MainActor (String) -> String?)? = nil
     /// …and searching symbols for it.
     var onSearchSymbols: (@MainActor (String) -> Void)? = nil
@@ -260,9 +259,9 @@ struct CodeTextView: UIViewRepresentable {
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
             let extra = RawTextStyle.commentItems(for: range, onComment: onComment)
-                + RawTextStyle.jumpToDefinitionItems(for: range, in: textView,
-                                                     searchTerm: symbolSearchTerm,
-                                                     onSearch: onSearchSymbols)
+                + RawTextStyle.searchItems(for: range, in: textView,
+                                           searchTerm: symbolSearchTerm,
+                                           onSearch: onSearchSymbols)
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
         }
 

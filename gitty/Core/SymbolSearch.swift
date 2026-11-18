@@ -134,9 +134,19 @@ nonisolated enum SymbolSearch {
         return assign(0)
     }
 
-    // MARK: - Jump to Definition
+    // MARK: - Searching for a selection
 
-    /// The symbol a selected name refers to, for Jump to Definition: a symbol whose full name is
+    /// What Search in the text menu searches for: a selected name without the punctuation around
+    /// it (`read_regable(` → `read_regable`), otherwise the selected text with its spaces and line
+    /// breaks collapsed (`read  regable` → `read regable`). `nil` when only spaces are selected.
+    static func query(fromSelection selection: String) -> String? {
+        if let name = searchTerm(fromSelection: selection) { return name }
+        let words = selection.split(whereSeparator: \.isWhitespace)
+        guard !words.isEmpty else { return nil }
+        return String(words.joined(separator: " ").prefix(100))
+    }
+
+    /// The symbol a selected name refers to: a symbol whose full name is
     /// the name (`Circle` the type) first, otherwise the first one in file order whose own name is
     /// (`Circle.draw` for `draw`, `struct point` for `point`, `Pi, Tau` for `Tau`). Surrounding
     /// punctuation is ignored; text with spaces or no letters isn't a name.
@@ -146,7 +156,7 @@ nonisolated enum SymbolSearch {
         return symbols.first { definedNames(in: $0.name).contains(name) }
     }
 
-    /// The name in a text selection, for Jump to Definition: punctuation around it trimmed
+    /// The name in a text selection: punctuation around it trimmed
     /// (`read_regable(` → `read_regable`). `nil` when it isn't a single name (spaces, no letters).
     static func searchTerm(fromSelection selection: String) -> String? {
         let name = selection.trimmingCharacters(in: CharacterSet.alphanumerics.union(["_"]).inverted)

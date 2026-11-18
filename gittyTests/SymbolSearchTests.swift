@@ -85,6 +85,13 @@ struct SymbolSearchTests {
         #expect(SymbolSearch.searchTerm(fromSelection: "();") == nil)
     }
 
+    @Test func searchQueryFromAnySelection() {
+        #expect(SymbolSearch.query(fromSelection: " read_regable(") == "read_regable")
+        #expect(SymbolSearch.query(fromSelection: "read  regable\n") == "read regable")
+        #expect(SymbolSearch.query(fromSelection: "();") == "();")
+        #expect(SymbolSearch.query(fromSelection: " \n ") == nil)
+    }
+
     @Test func memberNameIsTheLastPart() {
         #expect(SymbolSearch.memberName("list.icollection<t>.isreadonly") == "isreadonly")
         #expect(SymbolSearch.memberName("main") == "main")

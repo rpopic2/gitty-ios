@@ -15,7 +15,7 @@ struct SymbolPager: View {
     let onWillClose: @MainActor (Int) -> Void
     /// Tapping the caption: close the pager and show the symbol in File.
     let onShowInFile: @MainActor (CodeSymbol) -> Void
-    /// Jump to Definition in a page's text menu: close the pager and search symbols.
+    /// Search in a page's text menu: close the pager and search symbols.
     let symbolSearchTerm: @MainActor (String) -> String?
     let onSearchSymbols: @MainActor (String) -> Void
     /// Comment in a page's text menu, with the range in the symbol's text.
@@ -191,7 +191,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
     let insets: EdgeInsets
     /// Only the page on screen answers a tap on the status bar.
     let isCurrent: Bool
-    /// Jump to Definition in the text menu (see `CodeTextView`).
+    /// Search in the text menu (see `CodeTextView`).
     var symbolSearchTerm: (@MainActor (String) -> String?)? = nil
     var onSearchSymbols: (@MainActor (String) -> Void)? = nil
     var onComment: (@MainActor (NSRange) -> Void)? = nil
@@ -240,9 +240,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
             let extra = RawTextStyle.commentItems(for: range, onComment: onComment)
-                + RawTextStyle.jumpToDefinitionItems(for: range, in: textView,
-                                                     searchTerm: symbolSearchTerm,
-                                                     onSearch: onSearchSymbols)
+                + RawTextStyle.searchItems(for: range, in: textView,
+                                           searchTerm: symbolSearchTerm,
+                                           onSearch: onSearchSymbols)
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
         }
     }
