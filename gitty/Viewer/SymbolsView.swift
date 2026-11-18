@@ -19,8 +19,8 @@ struct SymbolsView: View {
     let barTapCount: Int
     let onOpen: @MainActor (CodeSymbol) -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
-    /// While searching: pulling the cards down past their top, or tapping between or below
-    /// them, closes the search field.
+    /// While searching: scrolling the cards closes the search field (the filter stays), like
+    /// scrolling a page in Safari ends editing the address.
     let onCloseSearch: (@MainActor () -> Void)?
 
     /// Not observed: updated every scroll frame without redrawing anything.
@@ -104,14 +104,15 @@ struct SymbolsView: View {
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .scrollDisabled(!isActive)  // hidden: stays put, and leaves status-bar taps to File
-        .modifier(OnPullDownPastTop(action: isActive ? onCloseSearch : nil))
-        .modifier(OnTapEmptySpace(action: isActive ? onCloseSearch : nil))
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .background(Color(uiColor: .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in
             scroll.isUserScrolling = phase == .interacting || phase == .decelerating
             if phase == .interacting {
                 scroll.tracker.beginDrag(at: context.geometry.contentOffset.y)
+                // The drag hides the keyboard; without it the search field would stay, alone,
+                // in place of the bar and the mode selector.
+                if isActive { onCloseSearch?() }
             }
         }
         .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
@@ -133,7 +134,7 @@ struct SymbolsView: View {
 /// Symbol search results over File: a compact list (kind, name, line), best matches first.
 struct SymbolResultsList: View {
     let symbols: [CodeSymbol]
-    /// Pulling the list down past its top, or tapping it, closes the search.
+    /// Pulling the list down past its top closes the search.
     let onCloseSearch: @MainActor () -> Void
     let onOpen: @MainActor (CodeSymbol) -> Void
 
@@ -168,26 +169,7 @@ struct SymbolResultsList: View {
         .listStyle(.plain)
         .contentMargins(.bottom, FileBarMetrics.fieldHeight + 16, for: .scrollContent)  // the search field
         .modifier(OnPullDownPastTop(action: onCloseSearch))
-        // A List's rows aren't SwiftUI buttons that win over a tap on the list, so this tap also
-        // sees taps on rows. That's fine here: opening a result closes the search too.
-        .simultaneousGesture(TapGesture().onEnded { onCloseSearch() })
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
-    }
-}
-
-/// Tapping the empty space around the cards runs `action`. Taps on a card go to the card: a
-/// child's button wins over a tap gesture on its parent. `nil` turns it off. The gesture stays
-/// attached either way, so turning it on and off doesn't rebuild the list.
-struct OnTapEmptySpace: ViewModifier {
-    let action: (@MainActor () -> Void)?
-
-    init(action: (@MainActor () -> Void)?) {
-        self.action = action
-    }
-
-    func body(content: Content) -> some View {
-        content.gesture(TapGesture().onEnded { action?() },
-                        including: action == nil ? .subviews : .all)
     }
 }
 

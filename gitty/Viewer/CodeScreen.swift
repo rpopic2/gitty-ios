@@ -75,11 +75,6 @@ struct CodeScreen: View {
             if needsProjectSymbols { model.loadProjectSymbols() }
         }
         .onChange(of: listSymbolID) { saveListPosition() }
-        .onChange(of: isSearchingSymbols) { _, isSearching in
-            // Closing the search brings the bar back expanded and keeps it so through the rest of
-            // the swipe that closed it. (The list bouncing back could otherwise collapse it.)
-            if !isSearching { model.expandBarFromTap() }
-        }
         .navigationDestination(item: $openedSymbolID) { openedID in
             SymbolPager(
                 symbols: pagerSymbols,
@@ -181,11 +176,11 @@ struct CodeScreen: View {
         switch model.symbolIndex {
         case _ where !model.projectSymbolsLoaded:
             // The project's other files are being indexed.
-            placeholder(onTap: closeSearchAction) { ProgressView() }
+            placeholder { ProgressView() }
         case .indexing:
-            placeholder(onTap: closeSearchAction) { ProgressView() }
+            placeholder { ProgressView() }
         case .ready(let symbols) where symbols.isEmpty:
-            placeholder(onTap: closeSearchAction) {
+            placeholder {
                 ContentUnavailableView(
                     "No Symbols",
                     systemImage: "function",
@@ -193,7 +188,7 @@ struct CodeScreen: View {
                 )
             }
         case .ready where shownSymbols.isEmpty:
-            placeholder(onTap: closeSearchAction) { ContentUnavailableView.search(text: symbolQuery) }
+            placeholder { ContentUnavailableView.search(text: symbolQuery) }
         case .ready:
             SymbolsView(
                 symbols: shownSymbols,
@@ -247,15 +242,11 @@ struct CodeScreen: View {
         SymbolSearch.matches(symbolQuery, in: indexedSymbols)
     }
 
-    /// Full-screen, opaque, so the hidden file text never shows through. `onTap`: a tap anywhere
-    /// on it (while searching, closes the search).
-    private func placeholder<Content: View>(onTap: (@MainActor () -> Void)? = nil,
-                                            @ViewBuilder _ content: () -> Content) -> some View {
+    /// Full-screen, opaque, so the hidden file text never shows through.
+    private func placeholder<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(uiColor: .systemGroupedBackground))
-            .contentShape(Rectangle())
-            .gesture(TapGesture().onEnded { onTap?() }, including: onTap == nil ? .subviews : .all)
     }
 
     /// The address editor or the symbol search while editing, otherwise the bar with the mode
@@ -327,14 +318,14 @@ struct CodeScreen: View {
 
     /// Searching symbols in File mode: the matches above the search field (every symbol until
     /// you type). Tapping one opens its page, paging through the matches; swiping down comes
-    /// back to File, and so does a tap on the empty space.
+    /// back to File.
     @ViewBuilder
     private var fileSearchResults: some View {
         switch model.symbolIndex {
         case .indexing:
-            placeholder(onTap: closeSearchAction) { ProgressView() }
+            placeholder { ProgressView() }
         case .unsupportedLanguage:
-            placeholder(onTap: closeSearchAction) {
+            placeholder {
                 ContentUnavailableView(
                     "No Symbols for This File Type",
                     systemImage: "doc.questionmark",
@@ -342,7 +333,7 @@ struct CodeScreen: View {
                 )
             }
         case .ready where shownSymbols.isEmpty:
-            placeholder(onTap: closeSearchAction) {
+            placeholder {
                 if symbolQuery.isEmpty {
                     ContentUnavailableView("No Symbols", systemImage: "function")
                 } else {
@@ -359,8 +350,7 @@ struct CodeScreen: View {
         }
     }
 
-    /// While searching, pulling the results down past their top, or tapping the empty space
-    /// around them, closes the search.
+    /// While searching in Symbols mode, scrolling the cards closes the search.
     private var closeSearchAction: (@MainActor () -> Void)? {
         guard isSearchingSymbols else { return nil }
         return { isSearchingSymbols = false }
