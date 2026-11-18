@@ -11,15 +11,18 @@ struct ProjectView: View {
     /// False while another mode covers it: it stays alive (and keeps its place) without
     /// loading anything, and catches up on saved files when it shows again.
     let isActive: Bool
+    /// The project's order (the sort button beside the mode selector). Files has its own.
+    let sorting: ListSorting
     let onOpen: @MainActor (URL) -> Void
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(projectID: String, currentURL: URL? = nil, isActive: Bool = true,
-         onOpen: @escaping @MainActor (URL) -> Void) {
+         sorting: ListSorting = ListSorting(), onOpen: @escaping @MainActor (URL) -> Void) {
         self.projectID = projectID
         self.currentURL = currentURL
         self.isActive = isActive
+        self.sorting = sorting
         self.onOpen = onOpen
     }
 
@@ -27,7 +30,8 @@ struct ProjectView: View {
         if projectID.isEmpty {
             LooseFilesView(currentURL: currentURL, isActive: isActive, onOpen: onOpen)
         } else {
-            ProjectFilesView(projectID: projectID, currentURL: currentURL, isActive: isActive, onOpen: onOpen)
+            ProjectFilesView(projectID: projectID, currentURL: currentURL, isActive: isActive,
+                             sorting: sorting, onOpen: onOpen)
                 .id(projectID)  // another project starts fresh
         }
     }

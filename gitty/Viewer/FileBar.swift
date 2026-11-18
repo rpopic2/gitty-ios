@@ -286,6 +286,8 @@ struct BottomBarStack: View {
     let onOpenInBrowser: (@MainActor () -> Void)?
     let searchQuery: String?
     let onClearSearch: (@MainActor () -> Void)?
+    /// The sort button beside the mode selector (`nil`: none, as in File mode).
+    let sorting: Binding<ListSorting>?
     /// A review set aside shows above the bar, like a minimized Mail draft.
     @Environment(ReviewDraft.self) private var review: ReviewDraft?
 
@@ -296,11 +298,13 @@ struct BottomBarStack: View {
          onExpand: @escaping @MainActor () -> Void, onEdit: @escaping @MainActor () -> Void,
          copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
-         searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil) {
+         searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
+         sorting: Binding<ListSorting>? = nil) {
         self.title = title
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
         self.isProgressVisible = isProgressVisible
+        self.sorting = sorting
         self.mode = mode
         self.onExpand = onExpand
         self.onEdit = onEdit
@@ -322,10 +326,20 @@ struct BottomBarStack: View {
                     copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                     searchQuery: searchQuery, onClearSearch: onClearSearch)
             if !isCollapsed, let mode {
-                ModeSelector(mode: mode)
-                    .padding(.bottom, FileBarMetrics.selectorBottomPadding)
-                    .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                HStack(spacing: 8) {
+                    if let sorting {
+                        ListSortMenu(sorting: sorting)
+                            .transition(.opacity)
+                    }
+                    ModeSelector(mode: mode)
+                    if sorting != nil {
+                        // As wide as the button, so the selector stays centered.
+                        Color.clear.frame(width: ListSortMenu.size, height: 1)
+                    }
+                }
+                .padding(.bottom, FileBarMetrics.selectorBottomPadding)
+                .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
 

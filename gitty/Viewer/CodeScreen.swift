@@ -39,6 +39,8 @@ struct CodeScreen: View {
     @State private var hasShownProject = false
     /// The project chosen in the sidebar, for the bar in Project mode (`nil` for Files).
     @State private var project: ProjectInfo?
+    /// The Project tab's order for that project (the sort button beside the mode selector).
+    @State private var projectSorting = ListSorting()
     /// The review that Comment adds to.
     @Environment(ReviewDraft.self) private var review
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
@@ -70,6 +72,7 @@ struct CodeScreen: View {
         .task { await model.load() }
         .task(id: projectID) {
             project = projectID.isEmpty ? nil : await ProjectStore.shared.project(id: projectID)
+            projectSorting = ListSortingStore.standard.sorting(for: .project, projectID: projectID)
         }
         .onChange(of: mode) {
             model.setBarCollapsed(false)
@@ -121,7 +124,8 @@ struct CodeScreen: View {
             // Built on first use, then kept (hidden) like File and Symbols, so switching back is
             // instant: it doesn't read and group the project's files again.
             if hasShownProject {
-                ProjectView(projectID: projectID, currentURL: model.url, isActive: mode == .project) { url in
+                ProjectView(projectID: projectID, currentURL: model.url, isActive: mode == .project,
+                            sorting: projectSorting) { url in
                     mode = .file  // opening a file shows it
                     onOpen(url)
                 }
@@ -225,7 +229,9 @@ struct CodeScreen: View {
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 onCloseSearch: closeSearchAction
             )
-            .id(shownQuery)  // a fresh list for each search's results, and for the full list after
+            // A fresh list for each search's results, for the full list after, and for each order
+            // (ids are places in the list, so they move; the list finds its symbol by name).
+            .id([shownQuery, model.symbolSorting.order.rawValue, model.symbolSorting.isReversed ? "reversed" : ""])
         case .unsupportedLanguage:
             placeholder {
                 ContentUnavailableView(
@@ -318,8 +324,26 @@ struct CodeScreen: View {
                 // Symbols shows the active search in the bar; File shows the file name (and
                 // searches when tapped); Project edits the address.
                 searchQuery: barSearchesSymbols ? (mode == .symbols ? symbolQuery : "") : nil,
-                onClearSearch: { symbolQuery = "" }
+                onClearSearch: { symbolQuery = "" },
+                sorting: barSorting
             )
+        }
+    }
+
+    /// The sort button beside the mode selector: the project's files in Project mode, and the
+    /// project's files in Symbols. None in File mode, for Files (it has its own order), or for a
+    /// file outside a project.
+    private var barSorting: Binding<ListSorting>? {
+        switch mode {
+        case .project where !projectID.isEmpty:
+            return Binding(get: { projectSorting }, set: { sorting in
+                projectSorting = sorting
+                ListSortingStore.standard.save(sorting, for: .project, projectID: projectID)
+            })
+        case .symbols where model.symbolsProjectID != nil:
+            return Binding(get: { model.symbolSorting }, set: { model.setSymbolSorting($0) })
+        default:
+            return nil
         }
     }
 

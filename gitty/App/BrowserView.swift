@@ -86,6 +86,7 @@ struct BrowserView: View {
             return
         }
         RecentFilesStore.standard.add(url)
+        Task { await OpenHistory.shared.recordOpen(url) }  // for recently opened order
         currentURLString = url.absoluteString  // the same URL keeps its screen: no reload
     }
 

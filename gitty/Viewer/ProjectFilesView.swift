@@ -4,13 +4,16 @@ import UIKit
 /// The open project in the Project tab: every file, grouped under a header per directory, code
 /// files first in each. Tap a file to open it in File mode. Pull to refresh the file list;
 /// Download All saves every file for offline reading. The filter under the header (`*.cs *.md`,
-/// see `FileFilter`) narrows the list, Download All, and the project's symbols.
+/// see `FileFilter`) narrows the list, Download All, and the project's symbols. In recently
+/// opened order (the sort button beside the mode selector) the files are one flat list instead.
 struct ProjectFilesView: View {
     let projectID: String
     /// The file on screen, marked in the list.
     let currentURL: URL?
     /// False while File or Symbols covers it (see `ProjectView`).
     let isActive: Bool
+    /// Name (directory headers) or recently opened (one flat list), and reversed or not.
+    let sorting: ListSorting
     let onOpen: @MainActor (URL) -> Void
 
     @State private var state: LoadState = .loading
@@ -30,8 +33,21 @@ struct ProjectFilesView: View {
 
     private enum LoadState {
         case loading
-        case loaded(ProjectInfo, ProjectTree, [ProjectTree.Directory])
+        case loaded(ProjectInfo, ProjectTree, Layout)
         case failed(any Error)
+    }
+
+    /// The files as listed: under directory headers (name order), or flat (recently opened).
+    private nonisolated enum Layout: Sendable {
+        case directories([ProjectTree.Directory])
+        case flat([ProjectTree.Entry])
+
+        var fileCount: Int {
+            switch self {
+            case .directories(let directories): directories.reduce(0) { $0 + $1.files.count }
+            case .flat(let files): files.count
+            }
+        }
     }
 
     private struct DownloadProgress {
@@ -55,10 +71,12 @@ struct ProjectFilesView: View {
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(projectID: String, currentURL: URL?, isActive: Bool, onOpen: @escaping @MainActor (URL) -> Void) {
+    init(projectID: String, currentURL: URL?, isActive: Bool, sorting: ListSorting,
+         onOpen: @escaping @MainActor (URL) -> Void) {
         self.projectID = projectID
         self.currentURL = currentURL
         self.isActive = isActive
+        self.sorting = sorting
         self.onOpen = onOpen
     }
 
@@ -68,6 +86,7 @@ struct ProjectFilesView: View {
             .onChange(of: isActive) { _, isActive in
                 if isActive { Task { await catchUp() } }
             }
+            .onChange(of: sorting) { Task { await rearrange() } }
             .sheet(isPresented: $isSigningIn) {
                 GitHubSignInView {
                     isSigningIn = false
@@ -94,35 +113,46 @@ struct ProjectFilesView: View {
                 failureActions(for: error)
             }
             .background(Color(uiColor: .systemGroupedBackground))
-        case .loaded(let project, let tree, let directories):
-            list(project: project, tree: tree, directories: directories)
+        case .loaded(let project, let tree, let layout):
+            list(project: project, tree: tree, layout: layout)
         }
     }
 
-    private func list(project: ProjectInfo, tree: ProjectTree, directories: [ProjectTree.Directory]) -> some View {
+    private func list(project: ProjectInfo, tree: ProjectTree, layout: Layout) -> some View {
         List {
             Section {
                 header(project: project, tree: tree)
                 filterRow
             } footer: {
-                headerFooter(tree: tree, directories: directories)
+                headerFooter(tree: tree, layout: layout)
             }
-            if directories.isEmpty && !filter.isEmpty {
+            if layout.fileCount == 0 && !filter.isEmpty {
                 Section {
                     Text("No files match this filter.")
                         .foregroundStyle(.secondary)
                 }
             }
-            ForEach(directories) { directory in
+            switch layout {
+            case .directories(let directories):
+                ForEach(directories) { directory in
+                    Section {
+                        ForEach(directory.files, id: \.path) { entry in
+                            row(for: entry, in: project)
+                        }
+                    } header: {
+                        Text(directory.path.isEmpty ? project.title : directory.path)
+                            .textCase(nil)  // paths keep their case
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                }
+            case .flat(let files):
                 Section {
-                    ForEach(directory.files, id: \.path) { entry in
-                        row(for: entry, in: project)
+                    ForEach(files, id: \.path) { entry in
+                        row(for: entry, in: project, showsFolder: true)
                     }
                 } header: {
-                    Text(directory.path.isEmpty ? project.title : directory.path)
-                        .textCase(nil)  // paths keep their case
-                        .lineLimit(1)
-                        .truncationMode(.head)
+                    Text(sorting.isReversed ? "Opened Longest Ago" : "Recently Opened")
                 }
             }
         }
@@ -130,7 +160,7 @@ struct ProjectFilesView: View {
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .overlay {
-            if directories.isEmpty && filter.isEmpty {
+            if layout.fileCount == 0 && filter.isEmpty {
                 ContentUnavailableView("No Files", systemImage: "folder")
                     .allowsHitTesting(false)
             }
@@ -191,10 +221,10 @@ struct ProjectFilesView: View {
     }
 
     @ViewBuilder
-    private func headerFooter(tree: ProjectTree, directories: [ProjectTree.Directory]) -> some View {
+    private func headerFooter(tree: ProjectTree, layout: Layout) -> some View {
         let lines = [
             filter.isEmpty ? nil
-                : "Showing \(directories.reduce(0) { $0 + $1.files.count }) of \(fileCount) files.",
+                : "Showing \(layout.fileCount) of \(fileCount) files.",
             tree.truncated ? "This repository is very large, so GitHub listed only some of its files." : nil,
         ].compactMap { $0 }
         if !lines.isEmpty {
@@ -208,28 +238,61 @@ struct ProjectFilesView: View {
         let new = FileFilter(filterText.trimmingCharacters(in: .whitespaces))
         guard new != filter else { return }
         filter = new
-        guard case .loaded(let project, let tree, _) = state else { return }
+        guard case .loaded = state else { return }
         Task {
-            let directories = await Self.group(tree, under: project.folder ?? "", matching: new)
-            guard filter == new else { return }  // typed again meanwhile
-            state = .loaded(project, tree, directories)
+            await rearrange()
             updatePending()
+        }
+    }
+
+    /// Lists the files again for the filter and the sorting, away from the main thread.
+    private func rearrange() async {
+        guard case .loaded(let project, let tree, _) = state else { return }
+        let layout = await arrange(project: project, tree: tree)
+        guard let layout else { return }  // changed meanwhile: a newer arrangement follows
+        state = .loaded(project, tree, layout)
+    }
+
+    /// The files for the current filter and sorting, `nil` if either changed meanwhile.
+    private func arrange(project: ProjectInfo, tree: ProjectTree) async -> Layout? {
+        let filter = filter, sorting = sorting, folder = project.folder ?? ""
+        let history = sorting.order == .recentlyOpened ? await OpenHistory.shared.snapshot() : [:]
+        let layout = await Task.detached(priority: .userInitiated) {
+            Self.layout(of: tree, project: project, folder: folder, filter: filter,
+                        sorting: sorting, history: history)
+        }.value
+        guard filter == self.filter, sorting == self.sorting else { return nil }
+        return layout
+    }
+
+    /// Grouping and sorting a big repository's paths takes long enough to stutter, so this runs
+    /// in the background.
+    nonisolated private static func layout(of tree: ProjectTree, project: ProjectInfo, folder: String,
+                                           filter: FileFilter, sorting: ListSorting,
+                                           history: [String: Date]) -> Layout {
+        switch sorting.order {
+        case .name:
+            let directories = tree.directories(under: folder, matching: filter)
+            guard sorting.isReversed else { return .directories(directories) }
+            return .directories(directories.reversed().map {
+                ProjectTree.Directory(path: $0.path, files: $0.files.reversed())
+            })
+        case .recentlyOpened:
+            let files = tree.files(under: folder, matching: filter)
+            return .flat(sorting.arrange(files, key: { project.rawURL(for: $0.path)?.absoluteString },
+                                         name: { $0.path }, history: history))
         }
     }
 
     /// Groups the files by directory away from the main thread: sorting a big repository's
     /// paths takes long enough to stutter.
-    nonisolated private static func group(_ tree: ProjectTree, under folder: String,
-                                          matching filter: FileFilter) async -> [ProjectTree.Directory] {
-        await Task.detached(priority: .userInitiated) {
-            tree.directories(under: folder, matching: filter)
-        }.value
-    }
 
     /// Shown again after File or Symbols: only the saved marks can have changed (opening a
     /// file saves it). The list itself is kept; pull to refresh fetches it again.
     private func catchUp() async {
         guard case .loaded = state else { return }
+        // Opening files changes recently opened order.
+        if sorting.order == .recentlyOpened { await rearrange() }
         let now = Set(await DocumentStore.shared.savedDocuments().map(\.url))
         guard now != saved else { return }
         saved = now
@@ -245,12 +308,13 @@ struct ProjectFilesView: View {
     }
 
     @ViewBuilder
-    private func row(for entry: ProjectTree.Entry, in project: ProjectInfo) -> some View {
+    private func row(for entry: ProjectTree.Entry, in project: ProjectInfo, showsFolder: Bool = false) -> some View {
         if let url = project.rawURL(for: entry.path) {
             let isCurrent = url == currentURL
             let isSaved = saved.contains(url)
             Button { onOpen(url) } label: {
-                FileEntryRow(entry: entry, isSaved: isSaved)
+                FileEntryRow(entry: entry, isSaved: isSaved,
+                             folder: showsFolder ? folder(of: entry, in: project) : nil)
             }
             .swipeActions {
                 if isSaved {
@@ -267,6 +331,14 @@ struct ProjectFilesView: View {
                 : Color(uiColor: .secondarySystemGroupedBackground))
             .accessibilityAddTraits(isCurrent ? .isSelected : [])
         }
+    }
+
+    /// The folder a file is in, inside the project (the project's name at its top).
+    private func folder(of entry: ProjectTree.Entry, in project: ProjectInfo) -> String {
+        let prefix = (project.folder ?? "").isEmpty ? "" : (project.folder ?? "") + "/"
+        let relative = entry.path.dropFirst(prefix.count)
+        guard let slash = relative.lastIndex(of: "/") else { return project.title }
+        return String(relative[..<slash])
     }
 
     // MARK: Failure
@@ -306,9 +378,10 @@ struct ProjectFilesView: View {
                 hasLoadedFilter = true
             }
             // Grouping a big repository takes a moment: once here, not on every redraw.
-            let directories = await Self.group(tree, under: project.folder ?? "", matching: filter)
+            var layout = await arrange(project: project, tree: tree)
+            if layout == nil { layout = await arrange(project: project, tree: tree) }  // sorting changed meanwhile
             fileCount = tree.files(under: project.folder ?? "").count
-            state = .loaded(project, tree, directories)
+            state = .loaded(project, tree, layout ?? .directories([]))
             updatePending()
         } catch {
             if case .loaded = state, refresh { return }  // keep the list; the pull just ends
@@ -414,6 +487,8 @@ struct ProjectFilesView: View {
 private struct FileEntryRow: View {
     let entry: ProjectTree.Entry
     let isSaved: Bool
+    /// In the flat (recently opened) list: the folder it's in, under its name.
+    var folder: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -421,10 +496,19 @@ private struct FileEntryRow: View {
                 .foregroundStyle(ProjectTree.isCode(entry) ? Color.accentColor : Color.secondary)
                 .frame(width: 24)
                 .accessibilityHidden(true)
-            Text(entry.name)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let folder {
+                    Text(folder)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+            }
             Spacer(minLength: 8)
             if let size = entry.size {
                 Text(Int64(size), format: .byteCount(style: .file))

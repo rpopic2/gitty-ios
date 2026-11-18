@@ -32,6 +32,12 @@ final class CodeDocumentModel {
     private(set) var resultsQuery = ""
     /// A search is still going through the symbols.
     private(set) var isSearching = false
+    /// The project the open file is in (once the project's symbols are loaded), whose Symbols
+    /// order `symbolSorting` is. `nil` for a file that isn't in a project.
+    private(set) var symbolsProjectID: String?
+    /// The order of the project's other files in Symbols (the open file always comes first;
+    /// each file's symbols stay in file order).
+    private(set) var symbolSorting = ListSorting()
     /// Other files' text, for their symbols' pages. Loaded when a page needs it; a few are kept.
     private var otherTexts: [URL: NSAttributedString] = [:]
     /// The download is a web page (raw HTML), so the viewer offers to open it in the browser.
@@ -62,6 +68,8 @@ final class CodeDocumentModel {
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     /// The latest search asked for, run again when the symbols change.
     @ObservationIgnored private var wantedQuery = ""
+    /// When files were last opened, for recently opened order.
+    @ObservationIgnored private var openDates: [String: Date] = [:]
     /// The project filter the other files were indexed with.
     @ObservationIgnored private var loadedFilter: FileFilter?
     @ObservationIgnored private var loadingTexts: Set<URL> = []
@@ -157,6 +165,11 @@ final class CodeDocumentModel {
         Task {
             let projects = await ProjectStore.shared.projects()
             let project = ProjectSymbolIndex.project(containing: url, in: projects)
+            if let project, symbolsProjectID != project.id {
+                symbolsProjectID = project.id
+                symbolSorting = ListSortingStore.standard.sorting(for: .symbols, projectID: project.id)
+            }
+            openDates = await OpenHistory.shared.snapshot()
             let filter = project.map { ProjectFilterStore.standard.filter(for: $0.id) } ?? .none
             if projectSymbolsLoaded, filter == loadedFilter {
                 isLoadingProjectSymbols = false
@@ -183,7 +196,9 @@ final class CodeDocumentModel {
             combined = (ownFileEntry.map { [$0] } ?? []) + own
             combined = combined.enumerated().map { $1.moved(to: $0, file: nil) }
         }
-        for file in otherFiles {
+        let files = symbolSorting.arrange(otherFiles, key: { $0.url.absoluteString },
+                                          name: { $0.url.absoluteString }, history: openDates)
+        for file in files {
             combined.append(file.file.moved(to: combined.count, file: file.url))
             for symbol in file.symbols {
                 combined.append(symbol.moved(to: combined.count, file: file.url))
@@ -195,6 +210,17 @@ final class CodeDocumentModel {
             symbolIndex = .ready(combined)
         }
         prepareSearch(for: combined)
+    }
+
+    /// The sort button in Symbols: reorders the project's other files and saves the choice for
+    /// the project.
+    func setSymbolSorting(_ sorting: ListSorting) {
+        guard sorting != symbolSorting else { return }
+        symbolSorting = sorting
+        if let symbolsProjectID {
+            ListSortingStore.standard.save(sorting, for: .symbols, projectID: symbolsProjectID)
+        }
+        publishSymbols()
     }
 
     // MARK: - Symbol search
