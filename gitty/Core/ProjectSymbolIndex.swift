@@ -40,15 +40,21 @@ actor ProjectSymbolIndex {
             .0
     }
 
-    /// The symbols of every downloaded file in `project` except `excluded`, files in path order.
-    /// Files in languages without symbols are skipped. Stops early when the task is cancelled.
-    func symbols(in project: ProjectInfo, excluding excluded: URL) async -> [FileSymbols] {
+    /// The symbols of every downloaded file in `project` except `excluded`, files in path order,
+    /// only from files the project's filter lets through. Files in languages without symbols
+    /// are skipped. Stops early when the task is cancelled.
+    func symbols(in project: ProjectInfo, excluding excluded: URL,
+                 matching filter: FileFilter = .none) async -> [FileSymbols] {
         guard let prefix = Self.prefix(of: project) else { return [] }
         let files = await store.savedDocuments()
             .filter { metadata in
-                metadata.url != excluded
-                    && metadata.url.absoluteString.hasPrefix(prefix)
-                    && SymbolLanguage.extensionHasSymbols(metadata.url.pathExtension)
+                let address = metadata.url.absoluteString
+                guard metadata.url != excluded, address.hasPrefix(prefix),
+                      SymbolLanguage.extensionHasSymbols(metadata.url.pathExtension)
+                else { return false }
+                guard !filter.isEmpty else { return true }
+                let relative = String(address.dropFirst(prefix.count))
+                return filter.matches(relative.removingPercentEncoding ?? relative)
             }
             .sorted { $0.url.absoluteString.localizedStandardCompare($1.url.absoluteString) == .orderedAscending }
 

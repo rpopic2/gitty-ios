@@ -102,11 +102,14 @@ nonisolated struct ProjectTree: Codable, Sendable {
     /// Every file inside `folder` ("" for the whole repository), grouped by directory: the top
     /// first, then directories in path order (`Sources` before `Sources/Inner` before `Tests`).
     /// In each directory, code files (those with symbols) come first, then other files, A–Z.
-    func directories(under folder: String) -> [Directory] {
+    /// With a filter, only the files it lets through (paths inside `folder`), and only the
+    /// directories that still have some.
+    func directories(under folder: String, matching filter: FileFilter = .none) -> [Directory] {
         let prefix = folder.isEmpty ? "" : folder + "/"
         var groups: [String: [Entry]] = [:]
         for entry in entries where entry.kind == .file && entry.path.hasPrefix(prefix) {
             let relative = entry.path.dropFirst(prefix.count)
+            guard filter.matches(String(relative)) else { continue }
             let directory = relative.lastIndex(of: "/").map { String(relative[..<$0]) } ?? ""
             groups[directory, default: []].append(entry)
         }
@@ -115,10 +118,13 @@ nonisolated struct ProjectTree: Codable, Sendable {
         }
     }
 
-    /// Every file inside `folder`, at any depth.
-    func files(under folder: String) -> [Entry] {
+    /// Every file inside `folder`, at any depth, that the filter lets through.
+    func files(under folder: String, matching filter: FileFilter = .none) -> [Entry] {
         let prefix = folder.isEmpty ? "" : folder + "/"
-        return entries.filter { $0.kind == .file && $0.path.hasPrefix(prefix) }
+        return entries.filter {
+            $0.kind == .file && $0.path.hasPrefix(prefix)
+                && filter.matches(String($0.path.dropFirst(prefix.count)))
+        }
     }
 
     static func isCode(_ entry: Entry) -> Bool {

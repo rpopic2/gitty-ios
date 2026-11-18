@@ -270,6 +270,7 @@ struct SideBarView: View {
     /// Removes the project from the list. Its saved files stay on the device.
     private func delete(_ project: ProjectInfo) {
         projects.removeAll { $0.id == project.id }
+        ProjectFilterStore.standard.remove(for: project.id)
         onDelete(project.id)
         Task { await ProjectStore.shared.remove(id: project.id) }
     }

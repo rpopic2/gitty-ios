@@ -3,7 +3,8 @@ import UIKit
 
 /// The open project in the Project tab: every file, grouped under a header per directory, code
 /// files first in each. Tap a file to open it in File mode. Pull to refresh the file list;
-/// Download All saves every file for offline reading.
+/// Download All saves every file for offline reading. The filter under the header (`*.cs *.md`,
+/// see `FileFilter`) narrows the list, Download All, and the project's symbols.
 struct ProjectFilesView: View {
     let projectID: String
     /// The file on screen, marked in the list.
@@ -16,6 +17,13 @@ struct ProjectFilesView: View {
     @State private var download: DownloadProgress?
     @State private var isSignedIn = false
     @State private var isSigningIn = false
+    /// The filter as typed. It's applied (and saved) when editing ends.
+    @State private var filterText = ""
+    @State private var filter = FileFilter.none
+    @FocusState private var isEditingFilter: Bool
+    @State private var hasLoadedFilter = false
+    /// The project's files before filtering.
+    @State private var fileCount = 0
     @Environment(\.openURL) private var openURL
 
     private enum LoadState {
@@ -78,9 +86,14 @@ struct ProjectFilesView: View {
         List {
             Section {
                 header(project: project, tree: tree)
+                filterRow
             } footer: {
-                if tree.truncated {
-                    Text("This repository is very large, so GitHub listed only some of its files.")
+                headerFooter(tree: tree, directories: directories)
+            }
+            if directories.isEmpty && !filter.isEmpty {
+                Section {
+                    Text("No files match this filter.")
+                        .foregroundStyle(.secondary)
                 }
             }
             ForEach(directories) { directory in
@@ -100,8 +113,9 @@ struct ProjectFilesView: View {
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .overlay {
-            if directories.isEmpty {
+            if directories.isEmpty && filter.isEmpty {
                 ContentUnavailableView("No Files", systemImage: "folder")
+                    .allowsHitTesting(false)
             }
         }
         .refreshable { await load(refresh: true) }
@@ -126,6 +140,58 @@ struct ProjectFilesView: View {
             Spacer(minLength: 8)
             downloadButton(project: project, tree: tree)
         }
+    }
+
+    /// Tap to edit; applied when you press Done or leave the field.
+    private var filterRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .foregroundStyle(filter.isEmpty ? Color.secondary : Color.accentColor)
+                .accessibilityHidden(true)
+            TextField("Filter, like *.cs *.md", text: $filterText)
+                .font(.body.monospaced())
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .focused($isEditingFilter)
+                .onSubmit { applyFilter() }
+                .accessibilityLabel("Filter")
+                .accessibilityHint("Space-separated patterns such as *.cs. Start one with ! to leave files out.")
+            if !filterText.isEmpty {
+                Button("Clear Filter", systemImage: "xmark.circle.fill") {
+                    filterText = ""
+                    applyFilter()
+                }
+                .labelStyle(.iconOnly)
+                .foregroundStyle(.secondary)
+                .buttonStyle(.borderless)  // only the button, not the whole row
+            }
+        }
+        .onChange(of: isEditingFilter) { _, isEditing in
+            if !isEditing { applyFilter() }
+        }
+    }
+
+    @ViewBuilder
+    private func headerFooter(tree: ProjectTree, directories: [ProjectTree.Directory]) -> some View {
+        let lines = [
+            filter.isEmpty ? nil
+                : "Showing \(directories.reduce(0) { $0 + $1.files.count }) of \(fileCount) files.",
+            tree.truncated ? "This repository is very large, so GitHub listed only some of its files." : nil,
+        ].compactMap { $0 }
+        if !lines.isEmpty {
+            Text(lines.joined(separator: " "))
+        }
+    }
+
+    /// Saves the filter and lists again with it, if it changed.
+    private func applyFilter() {
+        ProjectFilterStore.standard.save(filterText, for: projectID)
+        let new = FileFilter(filterText.trimmingCharacters(in: .whitespaces))
+        guard new != filter else { return }
+        filter = new
+        guard case .loaded(let project, let tree, _) = state else { return }
+        state = .loaded(project, tree, tree.directories(under: project.folder ?? "", matching: new))
     }
 
     @ViewBuilder
@@ -174,8 +240,14 @@ struct ProjectFilesView: View {
         do {
             let (project, tree) = try await ProjectStore.shared.tree(for: projectID, refresh: refresh)
             saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
+            if !hasLoadedFilter {  // the saved filter, once
+                filterText = ProjectFilterStore.standard.text(for: projectID)
+                filter = FileFilter(filterText)
+                hasLoadedFilter = true
+            }
             // Grouping a big repository takes a moment: do it once here, not on every redraw.
-            let directories = tree.directories(under: project.folder ?? "")
+            let directories = tree.directories(under: project.folder ?? "", matching: filter)
+            fileCount = tree.files(under: project.folder ?? "").count
             state = .loaded(project, tree, directories)
         } catch {
             if case .loaded = state, refresh { return }  // keep the list; the pull just ends
@@ -210,9 +282,9 @@ struct ProjectFilesView: View {
         }
     }
 
-    /// The project's files that aren't saved yet.
+    /// The project's files that the filter lets through and that aren't saved yet.
     private func missingFiles(project: ProjectInfo, tree: ProjectTree) -> [URL] {
-        tree.files(under: project.folder ?? "")
+        tree.files(under: project.folder ?? "", matching: filter)
             .filter { ($0.size ?? 0) <= Self.downloadAllSizeLimit }
             .compactMap { project.rawURL(for: $0.path) }
             .filter { !saved.contains($0) }

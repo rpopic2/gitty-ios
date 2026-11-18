@@ -67,6 +67,18 @@ struct GitHubProjectTests {
         #expect(tree.directories(under: "").map(\.path) == ["a", "a/b", "a.b", "c"])
     }
 
+    @Test func aFilterNarrowsTheListAndDropsEmptyDirectories() {
+        let groups = tree.directories(under: "", matching: FileFilter("*.swift *.c"))
+        #expect(groups.map(\.path) == ["", "Sources", "Sources/Inner"])
+        #expect(groups.map { $0.files.map(\.name) } == [["Package.swift"], ["b.swift"], ["c.c"]])
+        #expect(tree.directories(under: "", matching: FileFilter("*.md")).map(\.path) == [""])
+    }
+
+    @Test func filterPathsAreInsideTheProjectFolder() {
+        #expect(tree.files(under: "Sources", matching: FileFilter("Inner/")).map(\.path) == ["Sources/Inner/c.c"])
+        #expect(tree.files(under: "", matching: FileFilter("!Sources/")).map(\.path) == ["README.md", "Package.swift"])
+    }
+
     @Test func filesUnderAFolderAtAnyDepth() {
         #expect(Set(tree.files(under: "Sources").map(\.path)) == ["Sources/b.swift", "Sources/a.png", "Sources/Inner/c.c"])
         #expect(tree.files(under: "").count == 5)

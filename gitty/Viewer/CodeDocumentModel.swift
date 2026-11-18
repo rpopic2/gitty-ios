@@ -47,6 +47,8 @@ final class CodeDocumentModel {
     @ObservationIgnored private var ownSymbols: SymbolIndexer.Outcome?
     @ObservationIgnored private var otherFiles: [ProjectSymbolIndex.FileSymbols] = []
     @ObservationIgnored private var isLoadingProjectSymbols = false
+    /// The project filter the other files were indexed with.
+    @ObservationIgnored private var loadedFilter: FileFilter?
     @ObservationIgnored private var loadingTexts: Set<URL> = []
     @ObservationIgnored private var textOrder: [URL] = []
 
@@ -127,16 +129,24 @@ final class CodeDocumentModel {
         publishSymbols()
     }
 
-    /// Indexes the project's other downloaded files, once per opened file. Only when Symbols or
-    /// a search needs them, so reading a file costs nothing extra.
+    /// Indexes the project's other downloaded files that its filter lets through: once per
+    /// opened file, and again if the filter has changed since. Only when Symbols or a search
+    /// needs them, so reading a file costs nothing extra. The open file is always included.
     func loadProjectSymbols() {
-        guard !projectSymbolsLoaded, !isLoadingProjectSymbols else { return }
+        guard !isLoadingProjectSymbols else { return }
         isLoadingProjectSymbols = true
         Task {
             let projects = await ProjectStore.shared.projects()
-            if let project = ProjectSymbolIndex.project(containing: url, in: projects) {
-                otherFiles = await ProjectSymbolIndex.shared.symbols(in: project, excluding: url)
+            let project = ProjectSymbolIndex.project(containing: url, in: projects)
+            let filter = project.map { ProjectFilterStore.standard.filter(for: $0.id) } ?? .none
+            if projectSymbolsLoaded, filter == loadedFilter {
+                isLoadingProjectSymbols = false
+                return
             }
+            if let project {
+                otherFiles = await ProjectSymbolIndex.shared.symbols(in: project, excluding: url, matching: filter)
+            }
+            loadedFilter = filter
             isLoadingProjectSymbols = false
             projectSymbolsLoaded = true
             publishSymbols()
