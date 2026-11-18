@@ -76,17 +76,25 @@ actor DocumentStore {
         return StoredDocument(url: url, data: data, metadata: metadata)
     }
 
-    /// What's saved on the device, newest download first. Reads the small metadata files only.
+    /// What's saved on the device, newest download first. Reads the small metadata files the
+    /// first time, then answers from memory: this store is the only thing that changes them.
     func savedDocuments() -> [DocumentMetadata] {
+        if let savedList { return savedList }
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        return files
+        let list = files
             .filter { $0.pathExtension == "json" }
             .compactMap { try? JSONDecoder().decode(DocumentMetadata.self, from: Data(contentsOf: $0)) }
             .sorted { $0.fetchedAt > $1.fetchedAt }
+        savedList = list
+        return list
     }
+
+    /// `savedDocuments()`, once read. Cleared whenever a saved copy changes.
+    private var savedList: [DocumentMetadata]?
 
     /// Deletes the saved copy of `url`, if there is one. Opening it again downloads it.
     func delete(_ url: URL) {
+        savedList = nil
         let paths = paths(for: url)
         try? FileManager.default.removeItem(at: paths.metadata)
         try? FileManager.default.removeItem(at: paths.data)
@@ -108,6 +116,7 @@ actor DocumentStore {
 
     /// Deletes every saved copy. Files download again when they're opened.
     func deleteAll() {
+        savedList = nil
         try? FileManager.default.removeItem(at: directory)
         directoryReady = false
     }
@@ -168,6 +177,7 @@ actor DocumentStore {
     // MARK: - Disk
 
     private func save(_ data: Data, metadata: DocumentMetadata, for url: URL) throws {
+        savedList = nil
         try ensureDirectory()
         let paths = paths(for: url)
         try data.write(to: paths.data, options: .atomic)

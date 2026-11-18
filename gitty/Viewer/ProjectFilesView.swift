@@ -9,6 +9,8 @@ struct ProjectFilesView: View {
     let projectID: String
     /// The file on screen, marked in the list.
     let currentURL: URL?
+    /// False while File or Symbols covers it (see `ProjectView`).
+    let isActive: Bool
     let onOpen: @MainActor (URL) -> Void
 
     @State private var state: LoadState = .loading
@@ -41,26 +43,31 @@ struct ProjectFilesView: View {
     /// (and aren't too big), and their size. Worked out when the list, the filter or the saved
     /// files change, not on every redraw.
     @State private var pending = PendingDownload()
+    @State private var pendingTask: Task<Void, Never>?
 
-    private struct PendingDownload {
+    private nonisolated struct PendingDownload: Sendable {
         var urls: [URL] = []
         var bytes: Int64 = 0
     }
 
     /// Files bigger than this are left out of Download All (they still open one by one).
-    private static let downloadAllSizeLimit = 5_000_000
+    nonisolated private static let downloadAllSizeLimit = 5_000_000
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(projectID: String, currentURL: URL?, onOpen: @escaping @MainActor (URL) -> Void) {
+    init(projectID: String, currentURL: URL?, isActive: Bool, onOpen: @escaping @MainActor (URL) -> Void) {
         self.projectID = projectID
         self.currentURL = currentURL
+        self.isActive = isActive
         self.onOpen = onOpen
     }
 
     var body: some View {
         content
-            .task { await load(refresh: false) }
+            .task { await load(refresh: false) }  // once: switching modes keeps this view
+            .onChange(of: isActive) { _, isActive in
+                if isActive { Task { await catchUp() } }
+            }
             .sheet(isPresented: $isSigningIn) {
                 GitHubSignInView {
                     isSigningIn = false
@@ -129,6 +136,7 @@ struct ProjectFilesView: View {
             }
         }
         .refreshable { await load(refresh: true) }
+        .scrollDisabled(!isActive)  // hidden: leaves status-bar taps to the mode on screen
     }
 
     /// The project's name, owner · branch, and Download All.
@@ -201,7 +209,30 @@ struct ProjectFilesView: View {
         guard new != filter else { return }
         filter = new
         guard case .loaded(let project, let tree, _) = state else { return }
-        state = .loaded(project, tree, tree.directories(under: project.folder ?? "", matching: new))
+        Task {
+            let directories = await Self.group(tree, under: project.folder ?? "", matching: new)
+            guard filter == new else { return }  // typed again meanwhile
+            state = .loaded(project, tree, directories)
+            updatePending()
+        }
+    }
+
+    /// Groups the files by directory away from the main thread: sorting a big repository's
+    /// paths takes long enough to stutter.
+    nonisolated private static func group(_ tree: ProjectTree, under folder: String,
+                                          matching filter: FileFilter) async -> [ProjectTree.Directory] {
+        await Task.detached(priority: .userInitiated) {
+            tree.directories(under: folder, matching: filter)
+        }.value
+    }
+
+    /// Shown again after File or Symbols: only the saved marks can have changed (opening a
+    /// file saves it). The list itself is kept; pull to refresh fetches it again.
+    private func catchUp() async {
+        guard case .loaded = state else { return }
+        let now = Set(await DocumentStore.shared.savedDocuments().map(\.url))
+        guard now != saved else { return }
+        saved = now
         updatePending()
     }
 
@@ -274,8 +305,8 @@ struct ProjectFilesView: View {
                 filter = FileFilter(filterText)
                 hasLoadedFilter = true
             }
-            // Grouping a big repository takes a moment: do it once here, not on every redraw.
-            let directories = tree.directories(under: project.folder ?? "", matching: filter)
+            // Grouping a big repository takes a moment: once here, not on every redraw.
+            let directories = await Self.group(tree, under: project.folder ?? "", matching: filter)
             fileCount = tree.files(under: project.folder ?? "").count
             state = .loaded(project, tree, directories)
             updatePending()
@@ -325,18 +356,31 @@ struct ProjectFilesView: View {
     /// Works out what Download All would fetch: the files the filter lets through that aren't
     /// saved yet and aren't too big.
     private func updatePending() {
+        pendingTask?.cancel()
         guard case .loaded(let project, let tree, _) = state else {
             pending = PendingDownload()
             return
         }
+        let filter = filter, saved = saved
+        pendingTask = Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Self.pendingDownload(project: project, tree: tree, filter: filter, saved: saved)
+            }.value
+            guard !Task.isCancelled else { return }
+            pending = result
+        }
+    }
+
+    nonisolated private static func pendingDownload(project: ProjectInfo, tree: ProjectTree,
+                                                    filter: FileFilter, saved: Set<URL>) -> PendingDownload {
         var result = PendingDownload()
         for entry in tree.files(under: project.folder ?? "", matching: filter)
-        where (entry.size ?? 0) <= Self.downloadAllSizeLimit {
+        where (entry.size ?? 0) <= downloadAllSizeLimit {
             guard let url = project.rawURL(for: entry.path), !saved.contains(url) else { continue }
             result.urls.append(url)
             result.bytes += Int64(entry.size ?? 0)
         }
-        pending = result
+        return result
     }
 
     /// Downloads a few files at a time. Each lands in the saved copies, like opening it would.

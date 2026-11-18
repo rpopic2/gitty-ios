@@ -35,6 +35,8 @@ struct CodeScreen: View {
     /// Symbols has been shown at least once. The list is built then, with the whole project's
     /// symbols, so it can come back to where it was left.
     @State private var hasShownSymbols = false
+    /// Project has been shown at least once (it's kept from then on).
+    @State private var hasShownProject = false
     /// The project chosen in the sidebar, for the bar in Project mode (`nil` for Files).
     @State private var project: ProjectInfo?
     /// The review that Comment adds to.
@@ -75,6 +77,7 @@ struct CodeScreen: View {
         }
         .onChange(of: mode, initial: true) {
             if mode == .symbols { hasShownSymbols = true }
+            if mode == .project { hasShownProject = true }
         }
         .onChange(of: needsProjectSymbols, initial: true) {
             if needsProjectSymbols { model.loadProjectSymbols() }
@@ -114,11 +117,16 @@ struct CodeScreen: View {
             document
                 .accessibilityHidden(mode == .project)
             // Project lists files, so it doesn't depend on this file loading (or failing with a 404).
-            if mode == .project {
-                ProjectView(projectID: projectID, currentURL: model.url) { url in
+            // Built on first use, then kept (hidden) like File and Symbols, so switching back is
+            // instant: it doesn't read and group the project's files again.
+            if hasShownProject {
+                ProjectView(projectID: projectID, currentURL: model.url, isActive: mode == .project) { url in
                     mode = .file  // opening a file shows it
                     onOpen(url)
                 }
+                .opacity(mode == .project ? 1 : 0)
+                .allowsHitTesting(mode == .project)
+                .accessibilityHidden(mode != .project)
             }
         }
     }

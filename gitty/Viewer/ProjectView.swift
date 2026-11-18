@@ -8,21 +8,26 @@ struct ProjectView: View {
     let projectID: String
     /// The file on screen, marked in the list.
     let currentURL: URL?
+    /// False while another mode covers it: it stays alive (and keeps its place) without
+    /// loading anything, and catches up on saved files when it shows again.
+    let isActive: Bool
     let onOpen: @MainActor (URL) -> Void
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(projectID: String, currentURL: URL? = nil, onOpen: @escaping @MainActor (URL) -> Void) {
+    init(projectID: String, currentURL: URL? = nil, isActive: Bool = true,
+         onOpen: @escaping @MainActor (URL) -> Void) {
         self.projectID = projectID
         self.currentURL = currentURL
+        self.isActive = isActive
         self.onOpen = onOpen
     }
 
     var body: some View {
         if projectID.isEmpty {
-            LooseFilesView(currentURL: currentURL, onOpen: onOpen)
+            LooseFilesView(currentURL: currentURL, isActive: isActive, onOpen: onOpen)
         } else {
-            ProjectFilesView(projectID: projectID, currentURL: currentURL, onOpen: onOpen)
+            ProjectFilesView(projectID: projectID, currentURL: currentURL, isActive: isActive, onOpen: onOpen)
                 .id(projectID)  // another project starts fresh
         }
     }
@@ -33,14 +38,16 @@ struct ProjectView: View {
 /// open it, swipe one to delete it and its saved copy.
 private struct LooseFilesView: View {
     let currentURL: URL?
+    let isActive: Bool
     let onOpen: @MainActor (URL) -> Void
 
     @State private var projectPrefixes: [String] = []
     @State private var recents: [URL] = []
     @State private var saved: [URL] = []
 
-    init(currentURL: URL?, onOpen: @escaping @MainActor (URL) -> Void) {
+    init(currentURL: URL?, isActive: Bool, onOpen: @escaping @MainActor (URL) -> Void) {
         self.currentURL = currentURL
+        self.isActive = isActive
         self.onOpen = onOpen
     }
 
@@ -81,6 +88,7 @@ private struct LooseFilesView: View {
         .listStyle(.insetGrouped)
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
+        .scrollDisabled(!isActive)  // hidden: leaves status-bar taps to the mode on screen
         .overlay {
             if files.isEmpty {
                 ContentUnavailableView(
@@ -90,7 +98,9 @@ private struct LooseFilesView: View {
                 )
             }
         }
-        .task { await reload() }  // every time the list appears
+        .task(id: isActive) {  // each time it shows
+            if isActive { await reload() }
+        }
     }
 
     private func reload() async {

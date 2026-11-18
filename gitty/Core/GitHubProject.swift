@@ -221,6 +221,7 @@ actor ProjectStore {
     }
 
     func remove(id: String) {
+        trees[id] = nil
         saveIndex(loadIndex().filter { $0.id != id })
         try? FileManager.default.removeItem(at: treeURL(for: id))
     }
@@ -363,12 +364,20 @@ actor ProjectStore {
         saveIndex(loadIndex().map { $0.id == project.id ? project : $0 })
     }
 
+    /// Trees already read from disk (a big repository's takes a moment to decode).
+    private var trees: [String: ProjectTree] = [:]
+
     private func savedTree(for id: String) -> ProjectTree? {
-        guard let data = try? Data(contentsOf: treeURL(for: id)) else { return nil }
-        return try? JSONDecoder().decode(ProjectTree.self, from: data)
+        if let tree = trees[id] { return tree }
+        guard let data = try? Data(contentsOf: treeURL(for: id)),
+              let tree = try? JSONDecoder().decode(ProjectTree.self, from: data)
+        else { return nil }
+        trees[id] = tree
+        return tree
     }
 
     private func saveTree(_ tree: ProjectTree, for id: String) {
+        trees[id] = tree
         ensureDirectory()
         if let data = try? JSONEncoder().encode(tree) { try? data.write(to: treeURL(for: id), options: .atomic) }
     }

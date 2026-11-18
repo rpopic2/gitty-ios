@@ -85,8 +85,13 @@ struct DocumentStoreTests {
         StubURLProtocol.reset(handler: ok("hello"))
         let store = makeStore()
         _ = try await store.fetch(url)
+        #expect(await store.savedDocuments().map(\.url) == [url])  // read once, then kept
         await store.delete(url)
         #expect(await store.cached(url) == nil)
+        #expect(await store.savedDocuments().isEmpty)
+        _ = try await store.fetch(url)
+        #expect(await store.savedDocuments().map(\.url) == [url])
+        await store.deleteAll()
         #expect(await store.savedDocuments().isEmpty)
     }
 
