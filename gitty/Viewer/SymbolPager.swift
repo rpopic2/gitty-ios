@@ -68,9 +68,12 @@ struct SymbolPager: View {
                     ScrollView(.horizontal) {
                         LazyHStack(spacing: 0) {
                             ForEach(symbols) { symbol in
+                                // Another file's text may still be loading: the page fills in
+                                // once it's there (a different id makes the view take the text).
+                                let pageText = text(symbol)
                                 ReadOnlyTextView(
-                                    text: text(symbol) ?? NSAttributedString(),
-                                    textID: symbol.id,
+                                    text: pageText ?? NSAttributedString(),
+                                    textID: pageText == nil ? -1 - symbol.id : symbol.id,
                                     insets: pageInsets,
                                     isCurrent: symbol.id == visibleID,
                                     symbolSearchTerm: symbolSearchTerm,
@@ -163,9 +166,11 @@ private struct SymbolCaption: View {
             Text(symbol.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Text("· Line \(symbol.line)")
+            // From another file of the project: which one, since tapping opens it.
+            Text(symbol.fileURL.map { "· \($0.lastPathComponent):\(symbol.line)" } ?? "· Line \(symbol.line)")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
         .font(.subheadline)
         .padding(.horizontal, 16)

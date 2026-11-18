@@ -20,8 +20,13 @@ final class CodeDocumentModel {
     var fileName: String { url.displayFileName }
 
     private(set) var phase: Phase = .loading
-    /// Top-level definitions of the text on screen, for Symbols mode.
+    /// The definitions for Symbols mode and symbol search: the open file's, then (once asked for
+    /// with `loadProjectSymbols()`) those of the project's other downloaded files.
     private(set) var symbolIndex: SymbolIndex = .indexing
+    /// The project's other files have been indexed (or the file isn't in a project).
+    private(set) var projectSymbolsLoaded = false
+    /// Other files' text, for their symbols' pages. Loaded when a page needs it; a few are kept.
+    private var otherTexts: [URL: NSAttributedString] = [:]
     /// The download is a web page (raw HTML), so the viewer offers to open it in the browser.
     private(set) var isWebPage = false
     private(set) var isBarCollapsed = false
@@ -39,6 +44,11 @@ final class CodeDocumentModel {
     @ObservationIgnored private var isFetching = false
     @ObservationIgnored private var progressToken = 0
     @ObservationIgnored private var trickleTask: Task<Void, Never>?
+    @ObservationIgnored private var ownSymbols: SymbolIndexer.Outcome?
+    @ObservationIgnored private var otherFiles: [ProjectSymbolIndex.FileSymbols] = []
+    @ObservationIgnored private var isLoadingProjectSymbols = false
+    @ObservationIgnored private var loadingTexts: Set<URL> = []
+    @ObservationIgnored private var textOrder: [URL] = []
 
     init(url: URL, store: DocumentStore) {
         self.url = url
@@ -113,18 +123,77 @@ final class CodeDocumentModel {
             SymbolIndexer.index(rendered.attributedString.string, fileExtension: fileExtension)
         }.value
         guard case .loaded(_, let current) = phase, current == version else { return }  // newer text arrived
-        switch outcome {
-        case .symbols(let symbols): symbolIndex = .ready(symbols)
-        case .unsupportedLanguage: symbolIndex = .unsupportedLanguage
+        ownSymbols = outcome
+        publishSymbols()
+    }
+
+    /// Indexes the project's other downloaded files, once per opened file. Only when Symbols or
+    /// a search needs them, so reading a file costs nothing extra.
+    func loadProjectSymbols() {
+        guard !projectSymbolsLoaded, !isLoadingProjectSymbols else { return }
+        isLoadingProjectSymbols = true
+        Task {
+            let projects = await ProjectStore.shared.projects()
+            if let project = ProjectSymbolIndex.project(containing: url, in: projects) {
+                otherFiles = await ProjectSymbolIndex.shared.symbols(in: project, excluding: url)
+            }
+            isLoadingProjectSymbols = false
+            projectSymbolsLoaded = true
+            publishSymbols()
         }
     }
 
-    /// The text of one symbol, styled like the file.
+    /// One flat list: the open file's symbols in file order, then each other file's, in path
+    /// order. Ids are positions in this list.
+    private func publishSymbols() {
+        guard let ownSymbols else { return }
+        var combined: [CodeSymbol] = []
+        if case .symbols(let own) = ownSymbols { combined = own }
+        for file in otherFiles {
+            for symbol in file.symbols {
+                combined.append(symbol.moved(to: combined.count, file: file.url))
+            }
+        }
+        if case .unsupportedLanguage = ownSymbols, combined.isEmpty {
+            symbolIndex = .unsupportedLanguage
+        } else {
+            symbolIndex = .ready(combined)
+        }
+    }
+
+    /// The text of one symbol, styled like the file. `nil` while another file's text is loading.
     func text(of symbol: CodeSymbol) -> NSAttributedString? {
-        guard case .loaded(let rendered, _) = phase else { return nil }
-        let full = rendered.attributedString
-        guard NSMaxRange(symbol.range) <= full.length else { return nil }
+        guard let full = fullText(of: symbol.fileURL), NSMaxRange(symbol.range) <= full.length else { return nil }
         return full.attributedSubstring(from: symbol.range)
+    }
+
+    /// The whole text of the open file (`nil` or its URL) or of another project file. Another
+    /// file's text is loaded on first use: this returns `nil` until it's ready.
+    func fullText(of file: URL?) -> NSAttributedString? {
+        guard let file, file != url else {
+            guard case .loaded(let rendered, _) = phase else { return nil }
+            return rendered.attributedString
+        }
+        if let text = otherTexts[file] { return text }
+        loadText(of: file)
+        return nil
+    }
+
+    private func loadText(of file: URL) {
+        guard !loadingTexts.contains(file) else { return }
+        loadingTexts.insert(file)
+        Task {
+            defer { loadingTexts.remove(file) }
+            guard let document = await store.cached(file) else { return }
+            let rendered = await Task.detached(priority: .userInitiated) {
+                RawTextStyle.render(document)
+            }.value
+            // Pages show a few files at a time; keep the last few, not the whole project.
+            textOrder.removeAll { $0 == file }
+            textOrder.append(file)
+            if textOrder.count > 6 { otherTexts[textOrder.removeFirst()] = nil }
+            otherTexts[file] = rendered.attributedString
+        }
     }
 
     // MARK: - Bottom bar

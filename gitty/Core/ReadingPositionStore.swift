@@ -19,21 +19,25 @@ nonisolated struct ReadingPosition: Codable, Equatable, Sendable {
 nonisolated struct SymbolsPosition: Codable, Equatable, Sendable {
     var name: String
     var characterIndex: Int
+    /// The file the symbol is in, when it isn't the open file (Symbols shows the whole project).
+    var file: URL?
 
-    init(name: String, characterIndex: Int) {
+    init(name: String, characterIndex: Int, file: URL? = nil) {
         self.name = name
         self.characterIndex = characterIndex
+        self.file = file
     }
 
     init(_ symbol: CodeSymbol) {
-        self.init(name: symbol.name, characterIndex: symbol.range.location)
+        self.init(name: symbol.name, characterIndex: symbol.range.location, file: symbol.fileURL)
     }
 
-    /// The symbol to bring back: the one with this name nearest the saved place, or, if it's gone,
-    /// whichever symbol starts nearest the saved place.
+    /// The symbol to bring back, from the same file: the one with this name nearest the saved
+    /// place, or, if it's gone, whichever symbol starts nearest the saved place.
     func symbolID(in symbols: [CodeSymbol]) -> Int? {
-        let sameName = symbols.filter { $0.name == name }
-        let candidates = sameName.isEmpty ? symbols : sameName
+        let inFile = symbols.filter { $0.fileURL == file }
+        let sameName = inFile.filter { $0.name == name }
+        let candidates = sameName.isEmpty ? inFile : sameName
         return candidates.min { lhs, rhs in
             abs(lhs.range.location - characterIndex) < abs(rhs.range.location - characterIndex)
         }?.id

@@ -32,6 +32,9 @@ struct CodeScreen: View {
     /// Symbol search in Symbols mode. Stays until it's cleared or another file is opened.
     @State private var symbolQuery = ""
     @State private var isSearchingSymbols = false
+    /// Symbols has been shown at least once. The list is built then, with the whole project's
+    /// symbols, so it can come back to where it was left.
+    @State private var hasShownSymbols = false
     /// The review that Comment adds to.
     @Environment(ReviewDraft.self) private var review
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
@@ -65,6 +68,12 @@ struct CodeScreen: View {
             model.setBarCollapsed(false)
             isSearchingSymbols = false
         }
+        .onChange(of: mode, initial: true) {
+            if mode == .symbols { hasShownSymbols = true }
+        }
+        .onChange(of: needsProjectSymbols, initial: true) {
+            if needsProjectSymbols { model.loadProjectSymbols() }
+        }
         .onChange(of: listSymbolID) { saveListPosition() }
         .navigationDestination(item: $openedSymbolID) { openedID in
             SymbolPager(
@@ -79,7 +88,8 @@ struct CodeScreen: View {
                 onSearchSymbols: { searchSymbols(for: $0) },
                 // The page shows the symbol's own text, which starts where the symbol does.
                 onComment: { symbol, range in
-                    comment(on: NSRange(location: symbol.range.location + range.location, length: range.length))
+                    comment(on: NSRange(location: symbol.range.location + range.location, length: range.length),
+                            inFile: symbol.fileURL)
                 }
             )
             .navigationTransition(.zoom(sourceID: pagerSymbolID ?? -1, in: symbolNamespace))
@@ -129,7 +139,7 @@ struct CodeScreen: View {
                     isActive: mode == .file,
                     symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
                     onSearchSymbols: { searchSymbols(for: $0) },
-                    onComment: { comment(on: $0) },
+                    onComment: { comment(on: $0, inFile: nil) },
                     scrollRequest: fileScrollRequest
                 )
                 .ignoresSafeArea()
@@ -141,10 +151,12 @@ struct CodeScreen: View {
                 // you come back from File or Project. (Rebuilding it and restoring the position
                 // with `scrollPosition(id:)` isn't reliable: SwiftUI often ignores the starting
                 // value on a view's first layout.)
-                symbols
-                    .opacity(mode == .symbols ? 1 : 0)
-                    .allowsHitTesting(mode == .symbols)
-                    .accessibilityHidden(mode != .symbols)
+                if hasShownSymbols {
+                    symbols
+                        .opacity(mode == .symbols ? 1 : 0)
+                        .allowsHitTesting(mode == .symbols)
+                        .accessibilityHidden(mode != .symbols)
+                }
             }
         case .failed(let message):
             ContentUnavailableView {
@@ -160,6 +172,8 @@ struct CodeScreen: View {
     @ViewBuilder
     private var symbols: some View {
         switch model.symbolIndex {
+        case _ where !model.projectSymbolsLoaded:
+            placeholder { ProgressView() }  // the project's other files are being indexed
         case .indexing:
             placeholder { ProgressView() }
         case .ready(let symbols) where symbols.isEmpty:
@@ -167,7 +181,7 @@ struct CodeScreen: View {
                 ContentUnavailableView(
                     "No Symbols",
                     systemImage: "function",
-                    description: Text("No top-level definitions were found in this file.")
+                    description: Text("No definitions were found in this file or the project’s downloaded files.")
                 )
             }
         case .ready where shownSymbols.isEmpty:
@@ -355,13 +369,15 @@ struct CodeScreen: View {
     }
 
     /// Comment on a range of the file: add it to the end of the review and open the review.
-    private func comment(on range: NSRange) {
-        guard case .loaded(let rendered, _) = model.phase else { return }
-        let text = rendered.attributedString.string as NSString
+    /// - Parameter file: the file the range is in, when it isn't the open file (a symbol's page
+    ///   from elsewhere in the project).
+    private func comment(on range: NSRange, inFile file: URL?) {
+        guard let full = model.fullText(of: file) else { return }
+        let text = full.string as NSString
         guard range.length > 0, NSMaxRange(range) <= text.length else { return }
         let lines = ReviewText.lines(of: range, in: text)
         let code = text.substring(with: range)
-        let url = model.url
+        let url = file ?? model.url
         let format = reviewFormat
         let review = review
         Task {
@@ -376,10 +392,23 @@ struct CodeScreen: View {
     }
 
     /// The pager's Show in File: close it, switch to File and put the symbol at the top.
+    /// A symbol from another file opens that file, at the symbol (as its reading position).
     private func showInFile(_ symbol: CodeSymbol) {
         openedSymbolID = nil
         mode = .file
+        if let file = symbol.fileURL, file != model.url {
+            ReadingPositionStore.standard.save(ReadingPosition(characterIndex: symbol.range.location, lineOffset: 0),
+                                               for: file)
+            onOpen(file)
+            return
+        }
         fileScrollRequest = FileScrollRequest(characterIndex: symbol.range.location)
+    }
+
+    /// Symbols and symbol search cover the whole project, so its files are indexed once either
+    /// is used.
+    private var needsProjectSymbols: Bool {
+        mode == .symbols || isSearchingSymbols
     }
 
     /// Hands the URL to the default browser.

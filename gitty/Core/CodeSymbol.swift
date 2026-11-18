@@ -34,7 +34,8 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// Position in file order. Stable for one version of the document.
+    /// Position in the list: file order, the open file first, then the project's other files.
+    /// Stable for one version of the list.
     let id: Int
     let name: String
     let kind: Kind
@@ -44,4 +45,11 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
     let line: Int
     /// The first few lines of the definition, for the card.
     let preview: String
+    /// The file it's in, when that isn't the open file (Symbols shows the whole project).
+    var fileURL: URL? = nil
+
+    /// The same symbol at another place in a combined list, from `file`.
+    func moved(to id: Int, file: URL?) -> CodeSymbol {
+        CodeSymbol(id: id, name: name, kind: kind, range: range, line: line, preview: preview, fileURL: file)
+    }
 }
