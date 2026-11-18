@@ -65,9 +65,15 @@ struct CodeScreen: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             content
+            // Only the bar (and the banner) animate when it collapses or expands: the list keeps
+            // scrolling undisturbed.
             bottom
+                .animation(.smooth(duration: 0.3), value: model.isBarCollapsed)
         }
-        .overlay(alignment: .top) { webPageBanner }
+        .overlay(alignment: .top) {
+            webPageBanner
+                .animation(.smooth(duration: 0.3), value: model.isBarCollapsed)
+        }
         .overlay(alignment: .top) { StatusBarBackdrop() }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }

@@ -328,9 +328,11 @@ final class CodeDocumentModel {
         setBarCollapsed(false)
     }
 
+    /// Not animated here: the bar animates itself (`CodeScreen`). An animation around this
+    /// change would run through the whole screen, the scrolling list included, and stop a fling.
     func setBarCollapsed(_ collapsed: Bool) {
         guard collapsed != isBarCollapsed else { return }
-        withAnimation(.smooth(duration: 0.3)) { isBarCollapsed = collapsed }
+        isBarCollapsed = collapsed
     }
 
     // MARK: - Progress line (Safari-style)

@@ -146,17 +146,11 @@ struct SymbolsView: View {
     /// The card in the middle, for `scrollPosition`: kept in the unobserved `scroll`, so a new
     /// card reaching the middle redraws nothing, and reported to `onCenteredSymbolChange` once
     /// the list has moved to where it starts (its first layout, on the first card, isn't).
+    /// It's the same binding on every redraw: a new one makes SwiftUI apply the position again,
+    /// which stops a fling dead (as the bar collapsing redraws this view mid-fling).
     private var centeredID: Binding<Int?> {
-        let scroll = scroll
-        let report = onCenteredSymbolChange
-        return Binding(
-            get: { scroll.centeredID },
-            set: { id in
-                guard id != scroll.centeredID else { return }
-                scroll.centeredID = id
-                if scroll.isPositioned, let id { report(id) }
-            }
-        )
+        scroll.report = onCenteredSymbolChange
+        return scroll.centeredBinding
     }
 
     // MARK: Layouts
@@ -520,6 +514,18 @@ private final class ScrollTracking {
     var centeredID: Int?
     /// The list has moved to where it starts, so `centeredID` changes are the reader's.
     var isPositioned = false
+    /// Told about each new card in the middle (the latest closure from the view).
+    var report: (@MainActor (Int) -> Void)?
+
+    /// `centeredID` for `scrollPosition`, made once.
+    private(set) lazy var centeredBinding = Binding<Int?>(
+        get: { [unowned self] in centeredID },
+        set: { [unowned self] id in
+            guard id != centeredID else { return }
+            centeredID = id
+            if isPositioned, let id { report?(id) }
+        }
+    )
 }
 
 /// A request to bring a card into view in Symbols. A new request (a new `token`) scrolls
