@@ -57,6 +57,7 @@ struct CodeScreen: View {
             model.setBarCollapsed(false)
             isSearchingSymbols = false
         }
+        .onChange(of: listSymbolID) { saveListPosition() }
         .navigationDestination(item: $openedSymbolID) { openedID in
             SymbolPager(
                 symbols: pagerSymbols,
@@ -164,6 +165,7 @@ struct CodeScreen: View {
                 isActive: mode == .symbols,
                 namespace: symbolNamespace,
                 scrolledID: $listSymbolID,
+                initialID: { savedListSymbolID() },
                 isBarCollapsed: model.isBarCollapsed,
                 barTapCount: model.barTapCount,
                 onOpen: { symbol in
@@ -187,6 +189,21 @@ struct CodeScreen: View {
 
     private var indexedSymbols: [CodeSymbol] {
         if case .ready(let symbols) = model.symbolIndex { symbols } else { [] }
+    }
+
+    /// Where the Symbols list was left last time this file was open.
+    private func savedListSymbolID() -> Int? {
+        ReadingPositionStore.standard.symbolsPosition(for: model.url)?.symbolID(in: indexedSymbols)
+    }
+
+    /// Saves the card in the middle of the Symbols list, like File saves its place. It changes
+    /// only when another card reaches the middle (a few times a second at most), and the save is
+    /// a few bytes. Not while searching: a search reorders the cards, and isn't kept.
+    private func saveListPosition() {
+        guard symbolQuery.isEmpty, let id = listSymbolID,
+              let symbol = indexedSymbols.first(where: { $0.id == id })
+        else { return }
+        ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), for: model.url)
     }
 
     /// The symbols matching the search, best first; all of them in file order without one.

@@ -6,7 +6,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 
 - **Safari's raw-text look:** Courier 13pt, wrapped lines, Safari's margins, light and dark mode.
 - **Works offline, never expires:** downloaded files stay on the device and open without the network. They are downloaded again only when you pull to refresh, and an unchanged file costs just an HTTP 304.
-- **Picks up where you left off:** the reading position of each file is saved when scrolling stops and when the app goes to the background. It is stored as a text position, so it survives rotation and refreshes.
+- **Picks up where you left off:** the reading position of each file is saved when scrolling stops and when the app goes to the background. It is stored as a text position, so it survives rotation and refreshes. The Symbols list remembers its place too: the card in the middle of the screen, found again by name after a refresh.
 - **Smooth, exact scrolling:** every line's height is known up front, so the scroll bar and text never jump.
 - **Safari-style bottom bar:** shows the file name, collapses while you scroll down, and shows a thin loading line only while downloading. Liquid Glass on iOS 26+, the Safari 18 style on iOS 18.
 - **Photos-style mode selector** under the bar: **Project**, **File** (the raw file) and **Symbols**.
@@ -68,7 +68,7 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/Core/WebPageDetector.swift` | Whether a download is a web page (served as HTML) |
 | `gitty/Viewer/AddressEditor.swift` | Editing the address: URL field above the keyboard, Paste and Go |
 | `gitty/Core/DocumentStore.swift` | Saved copies on disk and the network fetch: never expires, conditional refresh |
-| `gitty/Core/ReadingPositionStore.swift` | Saved reading position per file (UserDefaults) |
+| `gitty/Core/ReadingPositionStore.swift` | Saved reading position per file, in File and the Symbols list (UserDefaults) |
 | `gitty/Core/SymbolIndexer.swift` | Generic symbol engine: runs a language's query, keeps top-level definitions |
 | `gitty/Core/SymbolLanguage.swift` | Languages for Symbols mode: grammar, file extensions, query, body and container node types (C, C#, Swift) |
 | `gitty/Core/CMacroBlanking.swift` | C-only pass before parsing: blanks top-level macro calls such as `OPT_GENERIC(i64)` |

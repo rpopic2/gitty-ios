@@ -12,6 +12,34 @@ nonisolated struct ReadingPosition: Codable, Equatable, Sendable {
     static let top = ReadingPosition(characterIndex: 0, lineOffset: 0)
 }
 
+/// Where the reader left off in a file's Symbols list: the card in the middle of the screen.
+///
+/// Symbol ids are only positions in one version of the file, so it's stored as the symbol's name
+/// and where it starts. After a refresh it finds the same symbol even if code above it changed.
+nonisolated struct SymbolsPosition: Codable, Equatable, Sendable {
+    var name: String
+    var characterIndex: Int
+
+    init(name: String, characterIndex: Int) {
+        self.name = name
+        self.characterIndex = characterIndex
+    }
+
+    init(_ symbol: CodeSymbol) {
+        self.init(name: symbol.name, characterIndex: symbol.range.location)
+    }
+
+    /// The symbol to bring back: the one with this name nearest the saved place, or, if it's gone,
+    /// whichever symbol starts nearest the saved place.
+    func symbolID(in symbols: [CodeSymbol]) -> Int? {
+        let sameName = symbols.filter { $0.name == name }
+        let candidates = sameName.isEmpty ? symbols : sameName
+        return candidates.min { lhs, rhs in
+            abs(lhs.range.location - characterIndex) < abs(rhs.range.location - characterIndex)
+        }?.id
+    }
+}
+
 /// Saves reading positions per file URL in `UserDefaults`: a few bytes per file, cheap to
 /// write each time scrolling stops.
 nonisolated struct ReadingPositionStore: @unchecked Sendable {
@@ -33,11 +61,27 @@ nonisolated struct ReadingPositionStore: @unchecked Sendable {
         defaults.set(data, forKey: key(for: url))
     }
 
+    func symbolsPosition(for url: URL) -> SymbolsPosition? {
+        guard let data = defaults.data(forKey: symbolsKey(for: url)) else { return nil }
+        return try? JSONDecoder().decode(SymbolsPosition.self, from: data)
+    }
+
+    func saveSymbolsPosition(_ position: SymbolsPosition, for url: URL) {
+        guard let data = try? JSONEncoder().encode(position) else { return }
+        defaults.set(data, forKey: symbolsKey(for: url))
+    }
+
+    /// Forgets both places in the file: File's and the Symbols list's.
     func remove(for url: URL) {
         defaults.removeObject(forKey: key(for: url))
+        defaults.removeObject(forKey: symbolsKey(for: url))
     }
 
     private func key(for url: URL) -> String {
         "readingPosition:" + url.absoluteString
+    }
+
+    private func symbolsKey(for url: URL) -> String {
+        "symbolsPosition:" + url.absoluteString
     }
 }

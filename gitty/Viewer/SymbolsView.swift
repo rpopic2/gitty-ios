@@ -8,8 +8,10 @@ struct SymbolsView: View {
     /// False while another mode covers the list (it stays alive to keep its place).
     let isActive: Bool
     let namespace: Namespace.ID
-    /// The card scrolled into view. Set it to bring a card back on screen.
+    /// The card in the middle of the screen. Set it to bring a card back on screen.
     @Binding var scrolledID: Int?
+    /// Where to start when `scrolledID` is still `nil`: the saved place in the list.
+    let initialID: @MainActor () -> Int?
     let isBarCollapsed: Bool
     let barTapCount: Int
     let onOpen: @MainActor (CodeSymbol) -> Void
@@ -19,10 +21,15 @@ struct SymbolsView: View {
 
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
+    /// The list's own scroll position. It's passed on to `scrolledID` only once the list has
+    /// moved to where it should start, so the first layout (on the first card) can't overwrite it.
+    @State private var position: Int?
+    @State private var isPositioned = false
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(symbols: [CodeSymbol], isActive: Bool, namespace: Namespace.ID, scrolledID: Binding<Int?>,
+         initialID: @escaping @MainActor () -> Int? = { nil },
          isBarCollapsed: Bool, barTapCount: Int,
          onOpen: @escaping @MainActor (CodeSymbol) -> Void,
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
@@ -31,6 +38,7 @@ struct SymbolsView: View {
         self.isActive = isActive
         self.namespace = namespace
         _scrolledID = scrolledID
+        self.initialID = initialID
         self.isBarCollapsed = isBarCollapsed
         self.barTapCount = barTapCount
         self.onOpen = onOpen
@@ -39,6 +47,29 @@ struct SymbolsView: View {
     }
 
     var body: some View {
+        ScrollViewReader { reader in
+            list
+                .onAppear {
+                    // `scrollPosition(id:)` ignores a starting value during the first layout and
+                    // opens on the first card. Move to the saved card explicitly.
+                    let target = scrolledID ?? initialID()
+                    if let target { reader.scrollTo(target, anchor: .center) }
+                    position = target
+                    isPositioned = true
+                }
+        }
+        .onChange(of: position) { _, id in
+            guard isPositioned, let id, id != scrolledID else { return }
+            scrolledID = id
+        }
+        .onChange(of: scrolledID) { _, id in
+            // Set from outside (the pager closing on another card): bring that card into view.
+            guard let id, id != position else { return }
+            position = id
+        }
+    }
+
+    private var list: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 ForEach(symbols) { symbol in
@@ -53,7 +84,7 @@ struct SymbolsView: View {
             .padding(.vertical, 12)
             .scrollTargetLayout()
         }
-        .scrollPosition(id: $scrolledID, anchor: .center)
+        .scrollPosition(id: $position, anchor: .center)
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .scrollDisabled(!isActive)  // hidden: stays put, and leaves status-bar taps to File
         .modifier(OnPullDownPastTop(action: isActive ? onPullDown : nil))
