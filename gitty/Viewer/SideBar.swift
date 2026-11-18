@@ -5,13 +5,21 @@ import UIKit
 /// screen can turn the edge swipe off (a symbol's page uses that swipe to page).
 @Observable
 final class SideBarState {
-    /// How much of the sidebar shows, 0 (closed) to `width` (open).
-    var reveal: CGFloat = 0
+    /// How much of the sidebar shows, 0 (closed) to `width` (open). It changes on every frame
+    /// of a swipe: only the offsets read it (`SideBarSlide`), so nothing else redraws.
+    var reveal: CGFloat = 0 {
+        didSet {
+            let isOpen = reveal > 0
+            if isOpen != self.isOpen { self.isOpen = isOpen }
+        }
+    }
     var width: CGFloat = 320
     /// The swipe from the right edge opens it. Off while a screen needs that swipe.
     var isEdgeSwipeEnabled = true
 
-    var isOpen: Bool { reveal > 0 }
+    /// Any of it shows. Stored, not worked out from `reveal`, so reading it only redraws when
+    /// it flips, not on every frame of a swipe.
+    private(set) var isOpen = false
 
     func open() {
         withAnimation(Self.animation) { reveal = width }
@@ -51,21 +59,22 @@ struct SideBarContainer<Content: View, SideBar: View>: View {
         self.sideBar = sideBar
     }
 
+    // This body reads none of `state`: if it did, it would run again when that changes (on
+    // every frame of a swipe, for `reveal`) and build the whole app's views again each time.
+    // Small modifiers read it instead (`SideBarSlide`, `SideBarDim`), and SwiftUI redraws
+    // just them.
     var body: some View {
         ZStack(alignment: .topTrailing) {
             content()
-                .overlay { if state.isOpen { closeArea } }
-                .offset(x: -state.reveal)
-                .accessibilityHidden(state.isOpen)
+                .overlay { SideBarDim(state: state) }
+                .modifier(SideBarSlide(state: state, isSideBar: false))
                 .accessibilityAction(named: "Show Projects") { state.open() }
 
-            // Built only while it shows: nothing to keep up to date while it's closed.
-            if state.isOpen {
-                sideBar()
-                    .frame(width: state.width)
-                    .offset(x: state.width - state.reveal)
-                    .accessibilityAction(.escape) { state.close() }
-            }
+            // Built ahead of time, off screen, so the first frame of a swipe doesn't have to
+            // build its list.
+            sideBar()
+                .modifier(SideBarSlide(state: state, isSideBar: true))
+                .accessibilityAction(.escape) { state.close() }
         }
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.width
@@ -76,14 +85,42 @@ struct SideBarContainer<Content: View, SideBar: View>: View {
         .background(ScreenEdgePan(state: state))
     }
 
-    /// The content still showing while the sidebar slides: dimmed, and a tap puts it back.
-    /// (Swiping right is the window's pan, in `ScreenEdgePan`.)
-    private var closeArea: some View {
+}
+
+/// Moves the content (left) or the sidebar (in from the right) with `reveal`, and leaves
+/// touches and VoiceOver to whichever shows. As a modifier, its body is all that runs again
+/// while the finger moves: the views it moves aren't rebuilt.
+private struct SideBarSlide: ViewModifier {
+    let state: SideBarState
+    let isSideBar: Bool
+
+    func body(content: Content) -> some View {
+        if isSideBar {
+            content
+                .frame(width: state.width)
+                .offset(x: state.width - state.reveal)
+                .allowsHitTesting(state.isOpen)
+                .accessibilityHidden(!state.isOpen)
+        } else {
+            content
+                .offset(x: -state.reveal)
+                .accessibilityHidden(state.isOpen)
+        }
+    }
+}
+
+/// The content still showing while the sidebar slides: dimmed, and a tap puts it back.
+/// (Swiping right is the window's pan, in `ScreenEdgePan`.)
+private struct SideBarDim: View {
+    let state: SideBarState
+
+    var body: some View {
         Color.black
             .opacity(0.15 * state.reveal / max(state.width, 1))
             .ignoresSafeArea()
             .contentShape(Rectangle())
             .onTapGesture { state.close() }
+            .allowsHitTesting(state.isOpen)
     }
 }
 
@@ -196,6 +233,8 @@ struct SideBarView: View {
     let onSettings: @MainActor () -> Void
 
     @State private var projects: [ProjectInfo] = []
+    /// Whether it shows: it's built ahead of time, and loads the projects each time it opens.
+    @Environment(SideBarState.self) private var state: SideBarState?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -236,7 +275,10 @@ struct SideBarView: View {
         .listStyle(.insetGrouped)
         .safeAreaInset(edge: .bottom, spacing: 0) { settingsButton }
         .background(Color(uiColor: .systemGroupedBackground))
-        .task { projects = await ProjectStore.shared.projects() }  // each time it opens
+        .scrollDisabled(!(state?.isOpen ?? true))  // off screen: leaves status-bar taps alone
+        .task(id: state?.isOpen ?? true) {  // each time it opens
+            if state?.isOpen ?? true { projects = await ProjectStore.shared.projects() }
+        }
     }
 
     /// A row that's tapped to choose it, gray while it's the open one.
