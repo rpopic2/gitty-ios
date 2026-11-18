@@ -83,6 +83,7 @@ struct CodeScreen: View {
             if needsProjectSymbols { model.loadProjectSymbols() }
         }
         .onChange(of: listSymbolID) { saveListPosition() }
+        .onChange(of: symbolQuery, initial: true) { model.search(symbolQuery) }
         .navigationDestination(item: $openedSymbolID) { openedID in
             SymbolPager(
                 symbols: pagerSymbols,
@@ -200,12 +201,14 @@ struct CodeScreen: View {
                     description: Text("No definitions were found in this file or the project’s downloaded files.")
                 )
             }
+        case .ready where shownSymbols.isEmpty && isSearchPending:
+            placeholder { ProgressView() }  // nothing found yet
         case .ready where shownSymbols.isEmpty:
             placeholder { ContentUnavailableView.search(text: symbolQuery) }
         case .ready:
             SymbolsView(
                 symbols: shownSymbols,
-                query: symbolQuery,
+                query: shownQuery,
                 isActive: mode == .symbols,
                 namespace: symbolNamespace,
                 scrolledID: $listSymbolID,
@@ -251,8 +254,24 @@ struct CodeScreen: View {
     }
 
     /// The symbols matching the search, best first; all of them in file order without one.
+    /// The search runs in the background (`CodeDocumentModel.search`): these are the matches so
+    /// far, which fill in while it runs.
     private var shownSymbols: [CodeSymbol] {
-        SymbolSearch.matches(symbolQuery, in: indexedSymbols)
+        hasSymbolQuery ? model.searchResults : indexedSymbols
+    }
+
+    /// The search `shownSymbols` are for: "" while the full list shows.
+    private var shownQuery: String {
+        hasSymbolQuery ? model.resultsQuery : ""
+    }
+
+    private var hasSymbolQuery: Bool {
+        !symbolQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The search hasn't finished going through the symbols (or hasn't started on this query).
+    private var isSearchPending: Bool {
+        hasSymbolQuery && (model.isSearching || model.resultsQuery != symbolQuery)
     }
 
     /// Full-screen, opaque, so the hidden file text never shows through.
@@ -267,7 +286,8 @@ struct CodeScreen: View {
     @ViewBuilder
     private var bottom: some View {
         if isSearchingSymbols && barSearchesSymbols {
-            SymbolSearchEditor(query: $symbolQuery, onClose: { isSearchingSymbols = false })
+            SymbolSearchEditor(query: $symbolQuery, isSearching: isSearchPending,
+                               onClose: { isSearchingSymbols = false })
         } else if isEditingAddress {
             AddressEditor(
                 initialText: rejectedAddress ?? barAddress,
@@ -359,6 +379,8 @@ struct CodeScreen: View {
                     description: Text("Symbols are available for C, C# and Swift files for now.")
                 )
             }
+        case .ready where shownSymbols.isEmpty && isSearchPending:
+            placeholder { ProgressView() }  // nothing found yet
         case .ready where shownSymbols.isEmpty:
             placeholder {
                 if symbolQuery.isEmpty {

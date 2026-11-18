@@ -213,10 +213,13 @@ private struct BarTextField: UIViewRepresentable {
 /// a swipe on the cards, in Symbols); the field's clear button clears it.
 struct SymbolSearchEditor: View {
     @Binding var query: String
+    /// Results are still coming in: a small spinner at the end of the field.
+    let isSearching: Bool
     let onClose: @MainActor () -> Void
 
-    init(query: Binding<String>, onClose: @escaping @MainActor () -> Void) {
+    init(query: Binding<String>, isSearching: Bool = false, onClose: @escaping @MainActor () -> Void) {
         _query = query
+        self.isSearching = isSearching
         self.onClose = onClose
     }
 
@@ -226,6 +229,11 @@ struct SymbolSearchEditor: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             BarTextField(style: .search, text: $query, onSubmit: onClose)
+            if isSearching {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Searching")
+            }
         }
         .padding(.horizontal, 14)
         .frame(height: FileBarMetrics.fieldHeight)

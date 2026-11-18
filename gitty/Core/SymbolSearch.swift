@@ -8,30 +8,130 @@ import Foundation
 /// name, where names split at `_`, `.`, other punctuation and camelCase.
 nonisolated enum SymbolSearch {
     /// The symbols that match `query`, best first. Equally good matches keep file order.
-    /// An empty query matches everything, in file order.
+    /// An empty query matches everything, in file order. (Synchronous; the app uses `stream`.)
     static func matches(_ query: String, in symbols: [CodeSymbol]) -> [CodeSymbol] {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return symbols }
+        let query = Query(query)
+        guard !query.text.isEmpty else { return symbols }
+        let index = Index(symbols)
+        var found: [Ranked] = []
+        collect(query, in: index, index.entries.indices, into: &found)
+        return snapshot(found)
+    }
 
-        let queryWords = query.split(whereSeparator: \.isWhitespace).flatMap { words(of: String($0)) }
-        let hasSpaces = query.contains(where: \.isWhitespace)
+    // MARK: - Searching in the background
 
-        var ranked: [Ranked] = []
-        for symbol in symbols {
-            let score = hasSpaces
-                ? rank(words: queryWords, query, symbol.name)
-                : rank(query, symbol.name)
-            if let score {
-                ranked.append(Ranked(symbol: symbol, rank: score))
+    /// The names of a list of symbols, prepared once for searching: lowercased, with their
+    /// member names and words, so a search doesn't work them out again on every keystroke.
+    nonisolated struct Index: Sendable {
+        let symbols: [CodeSymbol]
+        let entries: [Entry]
+
+        init(_ symbols: [CodeSymbol]) {
+            self.symbols = symbols
+            entries = symbols.map { Entry($0.name) }
+        }
+
+        nonisolated struct Entry: Sendable {
+            let full: String
+            let member: String
+            let fullWords: [String]
+            let memberWords: [String]
+
+            init(_ name: String) {
+                full = name.lowercased()
+                member = SymbolSearch.memberName(full)
+                fullWords = SymbolSearch.words(of: name)
+                memberWords = SymbolSearch.words(of: SymbolSearch.memberName(name))
             }
         }
-        ranked.sort(by: Ranked.isBetter)
-        return ranked.map { (match: Ranked) -> CodeSymbol in match.symbol }
+    }
+
+    /// How many names are ranked between checks for a newer search and snapshots.
+    static let chunkSize = 2_000
+
+    /// The search, in the background: snapshots of the matches found so far, best first (equal
+    /// matches in list order), each one including all the earlier ones. The first comes after
+    /// the first few thousand names (even if empty, so the previous search's results go), then
+    /// one at most every 50 ms while new matches turn up, and the complete list last. Stop
+    /// listening (cancel the task that's iterating) and the search stops too. An empty query
+    /// gives every symbol, in one snapshot.
+    static func stream(_ text: String, in index: Index) -> AsyncStream<[CodeSymbol]> {
+        let query = Query(text)
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let producer = Task.detached(priority: .userInitiated) {
+                guard !query.text.isEmpty else {
+                    continuation.yield(index.symbols)
+                    continuation.finish()
+                    return
+                }
+                let count = index.entries.count
+                var found: [Ranked] = []
+                var start = 0
+                var hasYielded = false
+                var hasNew = false
+                var lastYield = ContinuousClock.now
+                repeat {
+                    guard !Task.isCancelled else {
+                        continuation.finish()
+                        return
+                    }
+                    let end = min(start + chunkSize, count)
+                    let before = found.count
+                    collect(query, in: index, start..<end, into: &found)
+                    hasNew = hasNew || found.count > before
+                    start = end
+                    let now = ContinuousClock.now
+                    if start < count, !hasYielded || (hasNew && now - lastYield >= .milliseconds(50)) {
+                        continuation.yield(snapshot(found))
+                        hasYielded = true
+                        hasNew = false
+                        lastYield = now
+                    }
+                } while start < count
+                if !Task.isCancelled { continuation.yield(snapshot(found)) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in producer.cancel() }
+        }
+    }
+
+    /// What was typed, prepared once per search.
+    nonisolated struct Query: Sendable {
+        /// Lowercased, without spaces at the ends.
+        let text: String
+        let hasSpaces: Bool
+        /// With spaces: the words of each typed word.
+        let words: [String]
+        /// With spaces: the typed words, and all of them run together.
+        let typed: [String]
+        let joined: String
+
+        init(_ raw: String) {
+            text = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            hasSpaces = text.contains(where: \.isWhitespace)
+            typed = text.split(whereSeparator: \.isWhitespace).map(String.init)
+            words = typed.flatMap { SymbolSearch.words(of: $0) }
+            joined = typed.joined()
+        }
+    }
+
+    /// Ranks the names at `positions`, adding the matches to `found`.
+    private static func collect<Positions: Sequence<Int>>(_ query: Query, in index: Index, _ positions: Positions,
+                                                          into found: inout [Ranked]) {
+        for position in positions {
+            if let rank = rank(query, index.entries[position]) {
+                found.append(Ranked(symbol: index.symbols[position], rank: rank))
+            }
+        }
+    }
+
+    private static func snapshot(_ found: [Ranked]) -> [CodeSymbol] {
+        found.sorted(by: Ranked.isBetter).map { (match: Ranked) -> CodeSymbol in match.symbol }
     }
 
     /// A match and how good it is. (Spelled out instead of a tuple: a chain of closures over
     /// tuples was too slow for the type checker.)
-    nonisolated private struct Ranked {
+    nonisolated private struct Ranked: Sendable {
         let symbol: CodeSymbol
         let rank: Int
 
@@ -42,44 +142,46 @@ nonisolated enum SymbolSearch {
         }
     }
 
+    // MARK: - Ranking
+
     /// Lower is better; `nil` means no match.
-    /// 0 the member name is the query, 1 the full name is, 2 the member name starts with it,
-    /// 3 the full name does, 4 the member name contains it, 5 the full name does,
+    ///
+    /// Without spaces: 0 the member name is the query, 1 the full name is, 2 the member name
+    /// starts with it, 3 the full name does, 4 the member name contains it, 5 the full name does,
     /// 6 its letters appear in order in the member name, 7 in the full name.
-    static func rank(_ query: String, _ name: String) -> Int? {
-        let full = name.lowercased()
-        let member = memberName(full)
-        if member == query { return 0 }
-        if full == query { return 1 }
-        if member.hasPrefix(query) { return 2 }
-        if full.hasPrefix(query) { return 3 }
-        if member.contains(query) { return 4 }
-        if full.contains(query) { return 5 }
-        if isSubsequence(query, of: member) { return 6 }
-        if isSubsequence(query, of: full) { return 7 }
+    ///
+    /// With spaces: 0 the member name's words are the search's, 1 the full name's are, 2 the
+    /// words start words of the member name in order, 3 of the full name in order, 4 of the
+    /// member name in any order, 5 of the full name in any order, 6 every word appears in the
+    /// name, 7 all the letters appear in order.
+    static func rank(_ query: Query, _ entry: Index.Entry) -> Int? {
+        guard query.hasSpaces else {
+            let text = query.text
+            if entry.member == text { return 0 }
+            if entry.full == text { return 1 }
+            if entry.member.hasPrefix(text) { return 2 }
+            if entry.full.hasPrefix(text) { return 3 }
+            if entry.member.contains(text) { return 4 }
+            if entry.full.contains(text) { return 5 }
+            if isSubsequence(text, of: entry.member) { return 6 }
+            if isSubsequence(text, of: entry.full) { return 7 }
+            return nil
+        }
+        guard !query.words.isEmpty else { return nil }
+        if entry.memberWords == query.words { return 0 }
+        if entry.fullWords == query.words { return 1 }
+        if startsWordsInOrder(query.words, entry.memberWords) { return 2 }
+        if startsWordsInOrder(query.words, entry.fullWords) { return 3 }
+        if startsWordsInAnyOrder(query.words, entry.memberWords) { return 4 }
+        if startsWordsInAnyOrder(query.words, entry.fullWords) { return 5 }
+        if query.typed.allSatisfy({ entry.full.contains($0) }) { return 6 }
+        if isSubsequence(query.joined, of: entry.full) { return 7 }
         return nil
     }
 
-    /// Like `rank(_:_:)`, for a search with spaces. Lower is better; `nil` means no match.
-    /// 0 the member name's words are the search's, 1 the full name's are, 2 the words start
-    /// words of the member name in order, 3 of the full name in order, 4 of the member name in
-    /// any order, 5 of the full name in any order, 6 every word appears in the name,
-    /// 7 all the letters appear in order.
-    static func rank(words query: [String], _ rawQuery: String, _ name: String) -> Int? {
-        guard !query.isEmpty else { return nil }
-        let fullWords = words(of: name)
-        let memberWords = words(of: memberName(name))
-        if memberWords == query { return 0 }
-        if fullWords == query { return 1 }
-        if startsWordsInOrder(query, memberWords) { return 2 }
-        if startsWordsInOrder(query, fullWords) { return 3 }
-        if startsWordsInAnyOrder(query, memberWords) { return 4 }
-        if startsWordsInAnyOrder(query, fullWords) { return 5 }
-        let full = name.lowercased()
-        let typed = rawQuery.split(whereSeparator: \.isWhitespace).map(String.init)
-        if typed.allSatisfy({ full.contains($0) }) { return 6 }
-        if isSubsequence(typed.joined(), of: full) { return 7 }
-        return nil
+    /// `rank` for one query (lowercased, without spaces) and one name.
+    static func rank(_ query: String, _ name: String) -> Int? {
+        rank(Query(query), Index.Entry(name))
     }
 
     /// The words of a name, lowercased: split at anything that isn't a letter or digit and at

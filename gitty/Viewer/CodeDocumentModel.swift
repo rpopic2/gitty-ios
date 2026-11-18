@@ -25,6 +25,13 @@ final class CodeDocumentModel {
     private(set) var symbolIndex: SymbolIndex = .indexing
     /// The project's other files have been indexed (or the file isn't in a project).
     private(set) var projectSymbolsLoaded = false
+    /// The symbol search's matches so far, best first (every symbol, in order, without a search).
+    /// They fill in while `isSearching`; see `search(_:)`.
+    private(set) var searchResults: [CodeSymbol] = []
+    /// The search `searchResults` are for.
+    private(set) var resultsQuery = ""
+    /// A search is still going through the symbols.
+    private(set) var isSearching = false
     /// Other files' text, for their symbols' pages. Loaded when a page needs it; a few are kept.
     private var otherTexts: [URL: NSAttributedString] = [:]
     /// The download is a web page (raw HTML), so the viewer offers to open it in the browser.
@@ -47,6 +54,12 @@ final class CodeDocumentModel {
     @ObservationIgnored private var ownSymbols: SymbolIndexer.Outcome?
     @ObservationIgnored private var otherFiles: [ProjectSymbolIndex.FileSymbols] = []
     @ObservationIgnored private var isLoadingProjectSymbols = false
+    /// The symbols' names, prepared for searching (built in the background for each new list).
+    @ObservationIgnored private var searchIndex: SymbolSearch.Index?
+    @ObservationIgnored private var indexTask: Task<Void, Never>?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    /// The latest search asked for, run again when the symbols change.
+    @ObservationIgnored private var wantedQuery = ""
     /// The project filter the other files were indexed with.
     @ObservationIgnored private var loadedFilter: FileFilter?
     @ObservationIgnored private var loadingTexts: Set<URL> = []
@@ -168,6 +181,47 @@ final class CodeDocumentModel {
             symbolIndex = .unsupportedLanguage
         } else {
             symbolIndex = .ready(combined)
+        }
+        prepareSearch(for: combined)
+    }
+
+    // MARK: - Symbol search
+
+    /// Searches the symbols in the background. Matches fill `searchResults` as they're found
+    /// (the open file's first, since its symbols come first), and a newer search replaces this
+    /// one, which stops. An empty search shows every symbol at once.
+    func search(_ query: String) {
+        wantedQuery = query
+        searchTask?.cancel()
+        searchTask = nil
+        guard let index = searchIndex else { return }  // runs once the index is built
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            searchResults = index.symbols
+            resultsQuery = query
+            isSearching = false
+            return
+        }
+        isSearching = true
+        searchTask = Task {
+            for await snapshot in SymbolSearch.stream(query, in: index) {
+                guard !Task.isCancelled else { return }
+                searchResults = snapshot
+                resultsQuery = query
+            }
+            guard !Task.isCancelled else { return }
+            isSearching = false
+        }
+    }
+
+    /// Builds the search index for a new list of symbols, away from the main thread, then runs
+    /// the current search on it.
+    private func prepareSearch(for symbols: [CodeSymbol]) {
+        indexTask?.cancel()
+        indexTask = Task {
+            let index = await Task.detached(priority: .userInitiated) { SymbolSearch.Index(symbols) }.value
+            guard !Task.isCancelled else { return }
+            searchIndex = index
+            search(wantedQuery)
         }
     }
 

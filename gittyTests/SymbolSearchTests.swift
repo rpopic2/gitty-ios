@@ -97,4 +97,54 @@ struct SymbolSearchTests {
         #expect(SymbolSearch.memberName("main") == "main")
         #expect(SymbolSearch.memberName("c.==") == "==")
     }
+
+    // MARK: Streaming
+
+    /// A big list: names like `Module12.readValue34`, with a few that match "rdval" exactly.
+    private func manySymbols(_ count: Int) -> [CodeSymbol] {
+        symbols((0..<count).map { index in
+            index % 997 == 0 ? "rdval" : "Module\(index / 100).\(index % 3 == 0 ? "read" : "write")Value\(index)"
+        })
+    }
+
+    private func snapshots(_ query: String, in symbols: [CodeSymbol]) async -> [[CodeSymbol]] {
+        var all: [[CodeSymbol]] = []
+        for await snapshot in SymbolSearch.stream(query, in: SymbolSearch.Index(symbols)) {
+            all.append(snapshot)
+        }
+        return all
+    }
+
+    @Test func theLastSnapshotIsTheWholeSearch() async {
+        let symbols = manySymbols(10_000)
+        for query in ["rdval", "read value", "write", "module1.r", "zzz"] {
+            let last = await snapshots(query, in: symbols).last
+            #expect(last?.map(\.id) == SymbolSearch.matches(query, in: symbols).map(\.id), "\(query)")
+        }
+    }
+
+    @Test func snapshotsOnlyGrow() async {
+        let all = await snapshots("rv", in: manySymbols(20_000))
+        #expect(!all.isEmpty)
+        for (earlier, later) in zip(all, all.dropFirst()) {
+            #expect(Set(earlier.map(\.id)).isSubset(of: Set(later.map(\.id))))
+        }
+    }
+
+    @Test func emptyListsAndQueries() async {
+        #expect(await snapshots("draw", in: []).map(\.count) == [0])
+        let few = symbols(["b", "a"])
+        #expect(await snapshots("  ", in: few).map { $0.map(\.name) } == [["b", "a"]])
+    }
+
+    @Test func stoppingTheListenerStopsTheSearch() async {
+        let index = SymbolSearch.Index(manySymbols(50_000))
+        let listener = Task {
+            var count = 0
+            for await _ in SymbolSearch.stream("rv", in: index) { count += 1 }
+            return count
+        }
+        listener.cancel()
+        _ = await listener.value  // ends instead of waiting for the whole search
+    }
 }
