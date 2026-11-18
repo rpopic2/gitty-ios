@@ -73,6 +73,15 @@ nonisolated enum RawTextStyle {
         UIMenu(children: extra + keptMenuElements(suggested))
     }
 
+    /// "Comment" for any selection: adds a comment on it to the review.
+    @MainActor
+    static func commentItems(for range: NSRange, onComment: (@MainActor (NSRange) -> Void)?) -> [UIMenuElement] {
+        guard let onComment, range.length > 0 else { return [] }
+        let action = UIAction(title: String(localized: "Comment"),
+                              image: UIImage(systemName: "text.bubble")) { _ in onComment(range) }
+        return [action]
+    }
+
     /// "Jump to Definition" for a selected name: searches symbols for it. Empty when the selection
     /// isn't a name or finds nothing (`searchTerm` decides).
     @MainActor

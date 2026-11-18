@@ -15,6 +15,8 @@ struct BrowserView: View {
     @State private var rejectedAddress: String?
     @State private var sideBar = SideBarState()
     @State private var isShowingSettings = false
+    /// The review that Comment adds to, kept until it's shared or deleted.
+    @State private var review = ReviewDraft()
 
     private var currentURL: URL? {
         currentURLString.isEmpty ? nil : URL(string: currentURLString)
@@ -33,6 +35,8 @@ struct BrowserView: View {
                                 rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
                 }
             }
+            // Like Mail's compose window: swiping it down sets the review aside, docked above the bar.
+            .sheet(isPresented: $review.isComposing) { ReviewComposer(draft: review) }
         } sideBar: {
             SideBarView(
                 selectedID: openProjectID,
@@ -45,6 +49,7 @@ struct BrowserView: View {
             )
         }
         .environment(sideBar)
+        .environment(review)
         .sheet(isPresented: $isShowingSettings) { SettingsView() }
         .onOpenURL(perform: openShared)
         .onChange(of: isEditingAddress) { _, isEditing in

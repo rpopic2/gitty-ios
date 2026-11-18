@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var isSigningIn = false
     @State private var isConfirmingSignOut = false
     @State private var isConfirmingDeleteAll = false
+    @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
 
     private enum Account {
         case loading
@@ -24,6 +25,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 gitHubSection
+                reviewSection
                 storageSection
                 aboutSection
             }
@@ -76,6 +78,26 @@ struct SettingsView: View {
     private func signOut() {
         account = .signedOut
         Task { await GitHubAuth.shared.signOut() }
+    }
+
+    // MARK: Review
+
+    private var reviewSection: some View {
+        Section {
+            Picker("Comment Format", selection: $reviewFormat) {
+                Text("Compact").tag(ReviewFormat.compact)
+                Text("Markdown").tag(ReviewFormat.markdown)
+            }
+        } header: {
+            Text("Review")
+        } footer: {
+            switch reviewFormat {
+            case .compact:
+                Text("Each comment starts with the file and lines, like `alc/main.c:12-14:`.")
+            case .markdown:
+                Text("Each comment starts with a heading for the file and lines, and the selected code.")
+            }
+        }
     }
 
     // MARK: Storage

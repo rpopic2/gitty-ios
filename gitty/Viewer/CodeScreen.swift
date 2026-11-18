@@ -32,6 +32,9 @@ struct CodeScreen: View {
     /// Symbol search in Symbols mode. Stays until it's cleared or another file is opened.
     @State private var symbolQuery = ""
     @State private var isSearchingSymbols = false
+    /// The review that Comment adds to.
+    @Environment(ReviewDraft.self) private var review
+    @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
 
     init(url: URL, mode: Binding<ViewMode>, projectID: String, isEditingAddress: Binding<Bool>,
          rejectedAddress: String? = nil,
@@ -73,7 +76,11 @@ struct CodeScreen: View {
                 onWillClose: { listSymbolID = $0 },
                 onShowInFile: { showInFile($0) },
                 symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
-                onSearchSymbols: { searchSymbols(for: $0) }
+                onSearchSymbols: { searchSymbols(for: $0) },
+                // The page shows the symbol's own text, which starts where the symbol does.
+                onComment: { symbol, range in
+                    comment(on: NSRange(location: symbol.range.location + range.location, length: range.length))
+                }
             )
             .navigationTransition(.zoom(sourceID: pagerSymbolID ?? -1, in: symbolNamespace))
         }
@@ -122,6 +129,7 @@ struct CodeScreen: View {
                     isActive: mode == .file,
                     symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
                     onSearchSymbols: { searchSymbols(for: $0) },
+                    onComment: { comment(on: $0) },
                     scrollRequest: fileScrollRequest
                 )
                 .ignoresSafeArea()
@@ -345,6 +353,27 @@ struct CodeScreen: View {
         openedSymbolID = nil
         symbolQuery = name
         isSearchingSymbols = true
+    }
+
+    /// Comment on a range of the file: add it to the end of the review and open the review.
+    private func comment(on range: NSRange) {
+        guard case .loaded(let rendered, _) = model.phase else { return }
+        let text = rendered.attributedString.string as NSString
+        guard range.length > 0, NSMaxRange(range) <= text.length else { return }
+        let lines = ReviewText.lines(of: range, in: text)
+        let code = text.substring(with: range)
+        let url = model.url
+        let format = reviewFormat
+        let review = review
+        Task {
+            let projects = await ProjectStore.shared.projects()
+            let selection = ReviewSelection(
+                location: ReviewText.location(for: url, projects: projects),
+                startLine: lines.start, endLine: lines.end, code: code,
+                language: ReviewText.language(for: url)
+            )
+            review.add(selection, format: format)
+        }
     }
 
     /// The pager's Show in File: close it, switch to File and put the symbol at the top.

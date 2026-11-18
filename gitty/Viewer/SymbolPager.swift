@@ -18,6 +18,8 @@ struct SymbolPager: View {
     /// Jump to Definition in a page's text menu: close the pager and search symbols.
     let symbolSearchTerm: @MainActor (String) -> String?
     let onSearchSymbols: @MainActor (String) -> Void
+    /// Comment in a page's text menu, with the range in the symbol's text.
+    let onComment: @MainActor (CodeSymbol, NSRange) -> Void
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
@@ -31,7 +33,8 @@ struct SymbolPager: View {
          onWillClose: @escaping @MainActor (Int) -> Void,
          onShowInFile: @escaping @MainActor (CodeSymbol) -> Void,
          symbolSearchTerm: @escaping @MainActor (String) -> String?,
-         onSearchSymbols: @escaping @MainActor (String) -> Void) {
+         onSearchSymbols: @escaping @MainActor (String) -> Void,
+         onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void) {
         self.symbols = symbols
         self.initialID = initialID
         _currentID = currentID
@@ -40,6 +43,7 @@ struct SymbolPager: View {
         self.onShowInFile = onShowInFile
         self.symbolSearchTerm = symbolSearchTerm
         self.onSearchSymbols = onSearchSymbols
+        self.onComment = onComment
     }
 
     private var visibleID: Int { scrolledID ?? initialID }
@@ -70,7 +74,8 @@ struct SymbolPager: View {
                                     insets: pageInsets,
                                     isCurrent: symbol.id == visibleID,
                                     symbolSearchTerm: symbolSearchTerm,
-                                    onSearchSymbols: onSearchSymbols
+                                    onSearchSymbols: onSearchSymbols,
+                                    onComment: { onComment(symbol, $0) }
                                 )
                                 .containerRelativeFrame([.horizontal, .vertical])
                             }
@@ -189,6 +194,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
     /// Jump to Definition in the text menu (see `CodeTextView`).
     var symbolSearchTerm: (@MainActor (String) -> String?)? = nil
     var onSearchSymbols: (@MainActor (String) -> Void)? = nil
+    var onComment: (@MainActor (NSRange) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -204,6 +210,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         textView.scrollsToTop = isCurrent
         context.coordinator.symbolSearchTerm = symbolSearchTerm
         context.coordinator.onSearchSymbols = onSearchSymbols
+        context.coordinator.onComment = onComment
 
         let contentInset = UIEdgeInsets(top: insets.top, left: 0, bottom: insets.bottom, right: 0)
         if textView.contentInset != contentInset {
@@ -228,12 +235,14 @@ struct ReadOnlyTextView: UIViewRepresentable {
         var textID: Int?
         var symbolSearchTerm: (@MainActor (String) -> String?)?
         var onSearchSymbols: (@MainActor (String) -> Void)?
+        var onComment: (@MainActor (NSRange) -> Void)?
 
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
-            let extra = RawTextStyle.jumpToDefinitionItems(for: range, in: textView,
-                                                           searchTerm: symbolSearchTerm,
-                                                           onSearch: onSearchSymbols)
+            let extra = RawTextStyle.commentItems(for: range, onComment: onComment)
+                + RawTextStyle.jumpToDefinitionItems(for: range, in: textView,
+                                                     searchTerm: symbolSearchTerm,
+                                                     onSearch: onSearchSymbols)
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
         }
     }

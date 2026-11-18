@@ -36,6 +36,8 @@ struct CodeTextView: UIViewRepresentable {
     var symbolSearchTerm: (@MainActor (String) -> String?)? = nil
     /// …and searching symbols for it.
     var onSearchSymbols: (@MainActor (String) -> Void)? = nil
+    /// Comment in the text menu: adds a comment on the selected range to the review.
+    var onComment: (@MainActor (NSRange) -> Void)? = nil
     /// Scrolls to a place in the file once per request (Show in File).
     var scrollRequest: FileScrollRequest? = nil
 
@@ -75,6 +77,7 @@ struct CodeTextView: UIViewRepresentable {
         coordinator.positionStore = positionStore
         coordinator.symbolSearchTerm = symbolSearchTerm
         coordinator.onSearchSymbols = onSearchSymbols
+        coordinator.onComment = onComment
 
         if textView.contentInset.bottom != bottomBarHeight {
             textView.contentInset.bottom = bottomBarHeight
@@ -114,6 +117,7 @@ struct CodeTextView: UIViewRepresentable {
         var barTapCount = 0
         var symbolSearchTerm: (@MainActor (String) -> String?)?
         var onSearchSymbols: (@MainActor (String) -> Void)?
+        var onComment: (@MainActor (NSRange) -> Void)?
 
         /// Characters laid out per slice. Most source files fit in one slice, so they are fully
         /// laid out before the first frame; bigger files finish over the next few frames.
@@ -255,9 +259,10 @@ struct CodeTextView: UIViewRepresentable {
 
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
-            let extra = RawTextStyle.jumpToDefinitionItems(for: range, in: textView,
-                                                           searchTerm: symbolSearchTerm,
-                                                           onSearch: onSearchSymbols)
+            let extra = RawTextStyle.commentItems(for: range, onComment: onComment)
+                + RawTextStyle.jumpToDefinitionItems(for: range, in: textView,
+                                                     searchTerm: symbolSearchTerm,
+                                                     onSearch: onSearchSymbols)
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
         }
 

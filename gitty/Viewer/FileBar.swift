@@ -286,6 +286,8 @@ struct BottomBarStack: View {
     let onOpenInBrowser: (@MainActor () -> Void)?
     let searchQuery: String?
     let onClearSearch: (@MainActor () -> Void)?
+    /// A review set aside shows above the bar, like a minimized Mail draft.
+    @Environment(ReviewDraft.self) private var review: ReviewDraft?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -311,6 +313,10 @@ struct BottomBarStack: View {
 
     var body: some View {
         let stack = VStack(spacing: 0) {
+            if !isCollapsed, let review, review.hasDraft, !review.isComposing {
+                ReviewDock(draft: review)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
             FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
                     isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
                     copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
