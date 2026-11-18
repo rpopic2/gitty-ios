@@ -4,9 +4,12 @@ import UIKit
 /// Symbols mode: every top-level definition as a full-width card, like photos in Photos.
 /// Tapping a card zooms into that symbol (see `SymbolPager`).
 ///
-/// Pinching in zooms out, like Photos: the symbols shrink to one-line rows, grouped under a
-/// sticky header per file (its name and count; tap to fold it, or open it in File). Pinching
-/// out, or tapping a row, comes back to the cards, at that symbol. The choice is kept app-wide.
+/// Pinching zooms in and out, like Photos, through three levels (kept app-wide):
+/// - Zoomed out (`grouped`): one-line rows, grouped under a sticky header per file (its name and
+///   count; tap to fold it, or open it in File). Tapping a row zooms back in to its card.
+/// - Cards, the default.
+/// - Zoomed in (`full`): every symbol's whole code, edge to edge in File's style, each under a
+///   slim title that sticks to the top while you read it. Tap one to open its page.
 struct SymbolsView: View {
     let symbols: [CodeSymbol]
     /// The symbol search the list is filtered by ("" for none). Give each search its own list
@@ -17,6 +20,8 @@ struct SymbolsView: View {
     /// False while another mode covers the list (it stays alive to keep its place).
     let isActive: Bool
     let namespace: Namespace.ID
+    /// A symbol's whole text, for the zoomed-in level (`nil` while another file's text loads).
+    let text: @MainActor (CodeSymbol) -> NSAttributedString?
     /// Brings a card into view (the pager closing on another card). Each request scrolls once,
     /// even to the same card as last time.
     let scrollRequest: SymbolScrollRequest?
@@ -37,8 +42,8 @@ struct SymbolsView: View {
     /// swipe only closes it: the list doesn't scroll and the bar doesn't shrink.
     let onCloseSearch: (@MainActor () -> Void)?
 
-    /// Zoomed out: rows grouped by file instead of cards.
-    @AppStorage("symbolsGroupedByFile") private var isGrouped = false
+    /// Rows grouped by file, cards, or every symbol's whole code.
+    @AppStorage("symbolsZoom") private var zoom: SymbolsZoom = .cards
     @State private var folded = SymbolFoldStore.standard.foldedFiles()
     @State private var groupCache = GroupCache()
     /// This pinch has already switched the layout (one switch per pinch).
@@ -51,6 +56,7 @@ struct SymbolsView: View {
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(symbols: [CodeSymbol], query: String, isActive: Bool, namespace: Namespace.ID,
+         text: @escaping @MainActor (CodeSymbol) -> NSAttributedString?,
          scrollRequest: SymbolScrollRequest?,
          initialID: @escaping @MainActor () -> Int? = { nil },
          onCenteredSymbolChange: @escaping @MainActor (Int) -> Void,
@@ -63,6 +69,7 @@ struct SymbolsView: View {
         self.query = query
         self.isActive = isActive
         self.namespace = namespace
+        self.text = text
         self.scrollRequest = scrollRequest
         self.initialID = initialID
         self.onCenteredSymbolChange = onCenteredSymbolChange
@@ -78,29 +85,35 @@ struct SymbolsView: View {
     var body: some View {
         ScrollViewReader { reader in
             Group {
-                if isGrouped {
+                switch zoom {
+                case .grouped:
                     scrollContainer { groupedRows }
                         .onAppear { moveToStart(reader) }
                         .transition(.opacity)
-                } else {
+                case .cards:
                     scrollContainer { cards }
+                        .onAppear { moveToStart(reader) }
+                        .transition(.opacity)
+                case .full:
+                    scrollContainer { fullCode }
                         .onAppear { moveToStart(reader) }
                         .transition(.opacity)
                 }
             }
             .onChange(of: scrollRequest) { _, request in
                 guard let request else { return }
-                reader.scrollTo(request.id, anchor: .center)
+                reader.scrollTo(request.id, anchor: anchor)
             }
         }
-        .accessibilityAction(named: layoutActionName) {
-            switchLayout(grouped: !isGrouped, anchor: scroll.centeredID)
-        }
+        // For VoiceOver, which has no pinch.
+        .accessibilityAction(named: "Zoom In") { zoomIn() }
+        .accessibilityAction(named: "Zoom Out") { zoomOut() }
     }
 
-    /// For VoiceOver, which has no pinch.
-    private var layoutActionName: LocalizedStringKey {
-        isGrouped ? "Show Cards" : "Group by File"
+    /// Where a symbol lands when it's brought into view: zoomed in, a symbol can be taller than
+    /// the screen, so its start goes to the top; otherwise it's centered.
+    private var anchor: UnitPoint {
+        zoom == .full ? .top : .center
     }
 
     /// `scrollPosition(id:)` ignores a starting value during the first layout and opens on the
@@ -109,7 +122,7 @@ struct SymbolsView: View {
     private func moveToStart(_ reader: ScrollViewProxy) {
         let target = switchAnchor ?? (query.isEmpty ? initialID() ?? scroll.centeredID : nil)
         switchAnchor = nil
-        if let target { reader.scrollTo(target, anchor: .center) }
+        if let target { reader.scrollTo(target, anchor: anchor) }
         scroll.centeredID = target
         scroll.isPositioned = true
     }
@@ -177,34 +190,65 @@ struct SymbolsView: View {
         .scrollTargetLayout()
     }
 
+    /// Every symbol's whole code, edge to edge, each under a slim title that sticks while you
+    /// read it. A file's own entry is just a title line before its symbols. The text isn't
+    /// selectable (it's plain `Text`, cheap to scroll through a big project); tap a symbol to
+    /// open its page.
+    private var fullCode: some View {
+        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+            ForEach(symbols) { symbol in
+                Section {
+                    if symbol.kind != .file {
+                        Button { onOpen(symbol) } label: {
+                            SymbolCode(symbol: symbol, text: text(symbol))
+                        }
+                        .buttonStyle(.plain)
+                        .matchedTransitionSource(id: symbol.id, in: namespace)
+                    }
+                } header: {
+                    SymbolTitle(symbol: symbol)
+                }
+            }
+        }
+        .scrollTargetLayout()
+    }
+
     // MARK: Switching
 
-    /// Pinching in (fingers together) groups by file; pinching out shows the cards again. Each
-    /// pinch switches once, when it passes the threshold, and the change animates from there.
+    /// Pinching in (fingers together) zooms out a level; pinching out zooms in. Each pinch
+    /// switches once, when it passes the threshold, and the change animates from there.
     private var pinch: some Gesture {
         MagnifyGesture()
             .onChanged { value in
                 guard !pinchHandled else { return }
-                if value.magnification < 0.8, !isGrouped {
+                if value.magnification < 0.8 {
                     pinchHandled = true
-                    switchLayout(grouped: true, anchor: scroll.centeredID)
-                } else if value.magnification > 1.25, isGrouped {
+                    zoomOut()
+                } else if value.magnification > 1.25 {
                     pinchHandled = true
-                    switchLayout(grouped: false, anchor: scroll.centeredID)
+                    zoomIn()
                 }
             }
             .onEnded { _ in pinchHandled = false }
     }
 
-    private func switchLayout(grouped: Bool, anchor: Int?) {
+    private func zoomIn() {
+        if let level = zoom.zoomedIn { switchZoom(to: level, anchor: scroll.centeredID) }
+    }
+
+    private func zoomOut() {
+        if let level = zoom.zoomedOut { switchZoom(to: level, anchor: scroll.centeredID) }
+    }
+
+    private func switchZoom(to level: SymbolsZoom, anchor: Int?) {
         switchAnchor = anchor
         scroll.isPositioned = false  // until the other layout has moved to the anchor
-        withAnimation(.smooth(duration: 0.3)) { isGrouped = grouped }
+        withAnimation(.smooth(duration: 0.3)) { zoom = level }
     }
 
     /// A row tapped in the grouped view: back to the cards, at that symbol.
     private func showCard(_ symbol: CodeSymbol) {
-        switchLayout(grouped: false, anchor: symbol.id)
+        switchZoom(to: .cards, anchor: symbol.id)
     }
 
     private func toggleFold(_ file: URL) {
@@ -423,6 +467,77 @@ struct OnPullDownPastTop: ViewModifier {
         } action: { wasPulled, isPulled in
             if isPulled && !wasPulled { action?() }
         }
+    }
+}
+
+/// Symbols' zoom levels, out to in.
+enum SymbolsZoom: String {
+    case grouped, cards, full
+
+    var zoomedIn: SymbolsZoom? {
+        switch self {
+        case .grouped: .cards
+        case .cards: .full
+        case .full: nil
+        }
+    }
+
+    var zoomedOut: SymbolsZoom? {
+        switch self {
+        case .grouped: nil
+        case .cards: .grouped
+        case .full: .cards
+        }
+    }
+}
+
+/// Zoomed in: the slim title above a symbol's code (or a file's title line, before its symbols).
+private struct SymbolTitle: View {
+    let symbol: CodeSymbol
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol.kind.systemImage)
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            Text(symbol.name)
+                .font(symbol.kind == .file ? .subheadline.weight(.semibold) : .subheadline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            if symbol.kind != .file {
+                Text(symbol.lineLabel)
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: symbol.kind == .file ? 36 : 28)
+        .background(.bar)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(symbol.spokenDescription)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Zoomed in: a symbol's whole code in File's style. Until another file's text has loaded, its
+/// preview stands in.
+private struct SymbolCode: View {
+    let symbol: CodeSymbol
+    let text: NSAttributedString?
+
+    var body: some View {
+        Text(verbatim: TabExpansion.expand(text?.string ?? symbol.preview))
+            .font(.custom(RawTextStyle.fontName, fixedSize: RawTextStyle.fontSize))
+            .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, RawTextStyle.insets.left)
+            .padding(.vertical, 8)
+            .background(Color(uiColor: RawTextStyle.backgroundColor))
+            .contentShape(Rectangle())
+            .accessibilityLabel(symbol.spokenDescription)
+            .accessibilityHint(Text("Opens its page"))
     }
 }
 

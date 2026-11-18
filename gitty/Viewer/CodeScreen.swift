@@ -215,6 +215,7 @@ struct CodeScreen: View {
                 query: shownQuery,
                 isActive: mode == .symbols,
                 namespace: symbolNamespace,
+                text: model.text(of:),
                 scrollRequest: listScrollRequest,
                 initialID: { savedListSymbolID() },
                 onCenteredSymbolChange: { saveListPosition($0) },
