@@ -9,7 +9,10 @@ struct BrowserView: View {
     @AppStorage("currentURL") private var currentURLString = ""
     /// The project chosen in the sidebar, shown in Project mode; "" for Files.
     @AppStorage("openProjectID") private var openProjectID = ""
-    @SceneStorage("viewMode") private var mode: ViewMode = .file
+    @SceneStorage("viewMode") private var mode: ViewMode = .code
+    /// The file just opened (from Project, the bar or a link), which starts at its own entry in
+    /// the Code level. The file shown at launch comes back where it was left instead.
+    @State private var openedURL: URL?
     @State private var isEditingAddress = false
     /// A shared or pasted address that isn't a URL we can open: shown in the editor with the reason.
     @State private var rejectedAddress: String?
@@ -27,6 +30,7 @@ struct BrowserView: View {
             NavigationStack {
                 if let url = currentURL {
                     CodeScreen(url: url, mode: $mode, projectID: openProjectID,
+                               opensAtFile: url == openedURL,
                                isEditingAddress: $isEditingAddress, rejectedAddress: rejectedAddress,
                                onOpen: open, onPasteAndGo: pasteAndGo)
                         .id(url)  // a new URL gets a fresh screen and model
@@ -87,6 +91,8 @@ struct BrowserView: View {
         }
         RecentFilesStore.standard.add(url)
         Task { await OpenHistory.shared.recordOpen(url) }  // for recently opened order
+        openedURL = url
+        mode = .code  // opening a file shows its code, from its own entry
         currentURLString = url.absoluteString  // the same URL keeps its screen: no reload
     }
 

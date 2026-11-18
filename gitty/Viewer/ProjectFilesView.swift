@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// The open project in the Project tab: every file, grouped under a header per directory, code
-/// files first in each. Tap a file to open it in File mode. Pull to refresh the file list;
+/// files first in each. Tap a file to open its code (the Code level). Pull to refresh the list;
 /// Download All saves every file for offline reading. The filter under the header (`*.cs *.md`,
 /// see `FileFilter`) narrows the list, Download All, and the project's symbols. In recently
 /// opened order (the sort button beside the mode selector) the files are one flat list instead.

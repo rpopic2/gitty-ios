@@ -1,7 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// One file, full screen, with a Safari-style bar and the Photos-style mode selector at the bottom.
+/// The open file and its project, with a Safari-style bar and the Photos-style selector at the
+/// bottom. Pinching zooms through the levels (`ViewMode`): the project's files, then its symbols
+/// as rows, as cards, and as whole code. A file's own page (tap its entry) is the whole file.
 struct CodeScreen: View {
     @State private var model: CodeDocumentModel
     @Environment(\.openURL) private var openURL
@@ -16,6 +18,8 @@ struct CodeScreen: View {
     @Binding var mode: ViewMode
     /// The project chosen in the sidebar ("" for Files), shown in Project mode.
     let projectID: String
+    /// Just opened: the list starts at the file's own entry, not where it was left.
+    let opensAtFile: Bool
 
     @Namespace private var symbolNamespace
     /// The symbol opened in the pager (drives the navigation push).
@@ -24,17 +28,15 @@ struct CodeScreen: View {
     @State private var pagerSymbolID: Int?
     /// Brings a card into view in the Symbols list (the pager closing on another symbol).
     @State private var listScrollRequest: SymbolScrollRequest?
-    /// The symbols the pager pages through: the list's (search results) when a card was tapped,
-    /// all of them after Search from File.
+    /// The symbols the pager pages through: the list's (search results, too) when one is tapped.
     @State private var pagerSymbols: [CodeSymbol] = []
-    /// Show in File: where File should scroll to.
-    @State private var fileScrollRequest: FileScrollRequest?
-    /// Symbol search in Symbols mode. Stays until it's cleared or another file is opened.
+    /// Symbol search. Stays until it's cleared or another file is opened.
     @State private var symbolQuery = ""
     @State private var isSearchingSymbols = false
-    /// Symbols has been shown at least once. The list is built then, with the whole project's
-    /// symbols, so it can come back to where it was left.
-    @State private var hasShownSymbols = false
+    /// The list hasn't started yet: when `opensAtFile`, it starts at the file's own entry.
+    @State private var startsAtFile: Bool
+    /// The bar's title: the file in the middle of the list (or the open file, at first).
+    @State private var fileInView: String?
     /// Project has been shown at least once (it's kept from then on).
     @State private var hasShownProject = false
     /// The project chosen in the sidebar, for the bar in Project mode (`nil` for Files).
@@ -45,13 +47,15 @@ struct CodeScreen: View {
     @Environment(ReviewDraft.self) private var review
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
 
-    init(url: URL, mode: Binding<ViewMode>, projectID: String, isEditingAddress: Binding<Bool>,
-         rejectedAddress: String? = nil,
+    init(url: URL, mode: Binding<ViewMode>, projectID: String, opensAtFile: Bool = false,
+         isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
          onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
          store: DocumentStore = .shared) {
         _model = State(initialValue: CodeDocumentModel(url: url, store: store))
         _mode = mode
         self.projectID = projectID
+        self.opensAtFile = opensAtFile
+        _startsAtFile = State(initialValue: opensAtFile)
         _isEditingAddress = isEditingAddress
         self.rejectedAddress = rejectedAddress
         self.onOpen = onOpen
@@ -61,9 +65,6 @@ struct CodeScreen: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             content
-            if isSearchingSymbols && barSearchesSymbols && mode == .file {
-                fileSearchResults
-            }
             bottom
         }
         .overlay(alignment: .top) { webPageBanner }
@@ -76,14 +77,16 @@ struct CodeScreen: View {
         }
         .onChange(of: mode) {
             model.setBarCollapsed(false)
-            isSearchingSymbols = false
+            if mode == .project { isSearchingSymbols = false }
+            // Back from Project, where the filter may have changed: index again if it did.
+            if mode.showsSymbols, model.symbolIndex.isReady { model.loadProjectSymbols() }
         }
         .onChange(of: mode, initial: true) {
-            if mode == .symbols { hasShownSymbols = true }
             if mode == .project { hasShownProject = true }
         }
-        .onChange(of: needsProjectSymbols, initial: true) {
-            if needsProjectSymbols { model.loadProjectSymbols() }
+        // The levels list the whole project, so its files are indexed right away.
+        .onChange(of: model.symbolIndex.isReady, initial: true) {
+            if model.symbolIndex.isReady { model.loadProjectSymbols() }
         }
         .onChange(of: symbolQuery, initial: true) { model.search(symbolQuery) }
         .navigationDestination(item: $openedSymbolID) { openedID in
@@ -96,7 +99,8 @@ struct CodeScreen: View {
                 // list (hidden behind) follows, so it's already on the card when you swipe down.
                 onPage: { listScrollRequest = SymbolScrollRequest($0) },
                 onWillClose: { listScrollRequest = SymbolScrollRequest($0) },
-                onShowInFile: { showInFile($0) },
+                openFile: model.url,
+                onRefresh: { await model.refresh(file: $0) },
                 symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
                 onSearchSymbols: { searchSymbols(for: $0) },
                 // The page shows the symbol's own text, which starts where the symbol does.
@@ -120,23 +124,29 @@ struct CodeScreen: View {
             document
                 .accessibilityHidden(mode == .project)
             // Project lists files, so it doesn't depend on this file loading (or failing with a 404).
-            // Built on first use, then kept (hidden) like File and Symbols, so switching back is
+            // Built on first use, then kept (hidden) like the symbols, so switching back is
             // instant: it doesn't read and group the project's files again.
             if hasShownProject {
                 ProjectView(projectID: projectID, currentURL: model.url, isActive: mode == .project,
                             sorting: projectSorting) { url in
-                    mode = .file  // opening a file shows it
-                    onOpen(url)
+                    open(url)
                 }
                 .equatable()  // hidden, its big list mustn't redraw each time this screen does
                 .opacity(mode == .project ? 1 : 0)
                 .allowsHitTesting(mode == .project)
                 .accessibilityHidden(mode != .project)
+                // Pinching out zooms in to the project's symbols.
+                .simultaneousGesture(
+                    MagnifyGesture().onEnded { value in
+                        if value.magnification > 1.25 { withAnimation(.smooth(duration: 0.3)) { mode = .files } }
+                    },
+                    including: mode == .project ? .all : .subviews
+                )
             }
         }
     }
 
-    /// The open file in File and Symbols mode: loading, loaded, or the reason it couldn't load.
+    /// The open file's symbol levels: loading, loaded, or the reason it couldn't load.
     @ViewBuilder
     private var document: some View {
         switch model.phase {
@@ -144,40 +154,12 @@ struct CodeScreen: View {
             // A blank page while the progress line runs, as in Safari.
             Color(uiColor: RawTextStyle.backgroundColor)
                 .ignoresSafeArea()
-        case .loaded(let text, let version):
-            ZStack {
-                // Stays alive (hidden) in the other modes, so File keeps its place and returns instantly.
-                CodeTextView(
-                    text: text,
-                    version: version,
-                    documentURL: model.url,
-                    bottomBarHeight: FileBarMetrics.expandedHeight,
-                    isBarCollapsed: model.isBarCollapsed,
-                    barTapCount: model.barTapCount,
-                    onRefresh: { await model.refresh() },
-                    onBarCollapsedChange: { model.setBarCollapsed($0) },
-                    isActive: mode == .file,
-                    symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
-                    onSearchSymbols: { searchSymbols(for: $0) },
-                    onComment: { comment(on: $0, inFile: nil) },
-                    scrollRequest: fileScrollRequest
-                )
-                .ignoresSafeArea()
-                .opacity(mode == .file ? 1 : 0)
-                .allowsHitTesting(mode == .file)
-                .accessibilityHidden(mode != .file)
-
-                // Also kept alive while hidden, so the list keeps its exact scroll position when
-                // you come back from File or Project. (Rebuilding it and restoring the position
-                // with `scrollPosition(id:)` isn't reliable: SwiftUI often ignores the starting
-                // value on a view's first layout.)
-                if hasShownSymbols {
-                    symbols
-                        .opacity(mode == .symbols ? 1 : 0)
-                        .allowsHitTesting(mode == .symbols)
-                        .accessibilityHidden(mode != .symbols)
-                }
-            }
+        case .loaded:
+            // Kept alive while Project covers it, so it keeps its exact scroll position.
+            symbols
+                .opacity(mode.showsSymbols ? 1 : 0)
+                .allowsHitTesting(mode.showsSymbols)
+                .accessibilityHidden(!mode.showsSymbols)
         case .failed(let message):
             ContentUnavailableView {
                 Label("Couldn’t Load File", systemImage: "exclamationmark.triangle")
@@ -192,8 +174,10 @@ struct CodeScreen: View {
     @ViewBuilder
     private var symbols: some View {
         switch model.symbolIndex {
-        case _ where !model.projectSymbolsLoaded:
-            // The project's other files are being indexed.
+        case _ where !model.projectSymbolsLoaded && !opensAtFile:
+            // The project's other files are being indexed, and the place to come back to may be
+            // in one of them. (A file just opened starts at its own entry: it shows right away,
+            // and the other files fill in after it.)
             placeholder { ProgressView() }
         case .indexing:
             placeholder { ProgressView() }
@@ -213,12 +197,13 @@ struct CodeScreen: View {
             SymbolsView(
                 symbols: shownSymbols,
                 query: shownQuery,
-                isActive: mode == .symbols,
+                mode: $mode,
+                isActive: mode.showsSymbols,
                 namespace: symbolNamespace,
                 text: model.text(of:),
                 scrollRequest: listScrollRequest,
                 initialID: { savedListSymbolID() },
-                onCenteredSymbolChange: { saveListPosition($0) },
+                onCenteredSymbolChange: { centeredSymbolChanged($0) },
                 isBarCollapsed: model.isBarCollapsed,
                 barTapCount: model.barTapCount,
                 openFile: model.url,
@@ -249,9 +234,24 @@ struct CodeScreen: View {
         if case .ready(let symbols) = model.symbolIndex { symbols } else { [] }
     }
 
-    /// Where the Symbols list was left last time this file was open.
+    /// Where the list starts: the file's own entry when it was just opened, otherwise where it
+    /// was left last time this file was open.
     private func savedListSymbolID() -> Int? {
-        ReadingPositionStore.standard.symbolsPosition(for: model.url)?.symbolID(in: indexedSymbols)
+        if startsAtFile {
+            startsAtFile = false
+            return 0  // the open file's entry comes first
+        }
+        return ReadingPositionStore.standard.symbolsPosition(for: model.url)?.symbolID(in: indexedSymbols)
+    }
+
+    /// Another symbol reached the middle of the list: save the place, and name its file in the
+    /// bar (which redraws only when that file changes).
+    private func centeredSymbolChanged(_ id: Int) {
+        saveListPosition(id)
+        let symbols = indexedSymbols
+        guard symbols.indices.contains(id) else { return }
+        let name = symbols[id].fileURL?.displayFileName ?? model.fileName
+        if name != fileInView { fileInView = name }
     }
 
     /// Saves the card in the middle of the Symbols list, like File saves its place. It changes
@@ -294,7 +294,8 @@ struct CodeScreen: View {
     }
 
     /// The address editor or the symbol search while editing, otherwise the bar with the mode
-    /// selector. In Symbols mode, tapping the bar searches symbols instead of editing the address.
+    /// selector. At the symbol levels, tapping the bar searches symbols instead of editing the
+    /// address.
     @ViewBuilder
     private var bottom: some View {
         if isSearchingSymbols && barSearchesSymbols {
@@ -317,16 +318,15 @@ struct CodeScreen: View {
                 mode: $mode,
                 onExpand: { model.expandBarFromTap() },
                 onEdit: {
-                    // File and Symbols search symbols; the address is edited from Project (or
-                    // anywhere when there's nothing to search).
+                    // The symbol levels search symbols; the address is edited from Project (or
+                    // while the file hasn't loaded).
                     if barSearchesSymbols { isSearchingSymbols = true } else { isEditingAddress = true }
                 },
                 copyText: barAddress,
                 onPasteAndGo: onPasteAndGo,
                 onOpenInBrowser: openInBrowserAction,
-                // Symbols shows the active search in the bar; File shows the file name (and
-                // searches when tapped); Project edits the address.
-                searchQuery: barSearchesSymbols ? (mode == .symbols ? symbolQuery : "") : nil,
+                // The symbol levels show the active search in the bar; Project edits the address.
+                searchQuery: barSearchesSymbols ? symbolQuery : nil,
                 onClearSearch: { symbolQuery = "" },
                 sorting: barSorting
             )
@@ -334,8 +334,8 @@ struct CodeScreen: View {
     }
 
     /// The sort button beside the mode selector: the project's files in Project mode, and the
-    /// project's files in Symbols. None in File mode, for Files (it has its own order), or for a
-    /// file outside a project.
+    /// project's files at the symbol levels. None for Files (it has its own order), or for a file
+    /// outside a project.
     private var barSorting: Binding<ListSorting>? {
         switch mode {
         case .project where !projectID.isEmpty:
@@ -343,7 +343,7 @@ struct CodeScreen: View {
                 projectSorting = sorting
                 ListSortingStore.standard.save(sorting, for: .project, projectID: projectID)
             })
-        case .symbols where model.symbolsProjectID != nil:
+        case _ where mode.showsSymbols && model.symbolsProjectID != nil:
             return Binding(get: { model.symbolSorting }, set: { model.setSymbolSorting($0) })
         default:
             return nil
@@ -351,9 +351,9 @@ struct CodeScreen: View {
     }
 
     /// In Project mode, the bar names the project and edits its address on github.com (Files,
-    /// which has no address, edits the open file's). Otherwise, the open file.
+    /// which has no address, edits the open file's). Otherwise, the file in view.
     private var barTitle: String {
-        guard mode == .project else { return model.fileName }
+        guard mode == .project else { return fileInView ?? model.fileName }
         return projectID.isEmpty ? String(localized: "Files") : project?.title ?? ""
     }
 
@@ -364,11 +364,11 @@ struct CodeScreen: View {
         return address
     }
 
-    /// "This is a web page." at the top of File mode, until dismissed. Like the bottom bar, it
-    /// slides away while you scroll down and comes back when the bar expands.
+    /// "This is a web page." at the top of the symbol levels, until dismissed. Like the bottom
+    /// bar, it slides away while you scroll down and comes back when the bar expands.
     @ViewBuilder
     private var webPageBanner: some View {
-        if model.isWebPage, mode == .file, !isWebPageBannerDismissed, !isEditingAddress,
+        if model.isWebPage, mode.showsSymbols, !isWebPageBannerDismissed, !isEditingAddress,
            !isSearchingSymbols, !model.isBarCollapsed {
             WebPageBanner(
                 onOpenInBrowser: { openInBrowser() },
@@ -384,67 +384,27 @@ struct CodeScreen: View {
         return { openInBrowser() }
     }
 
-    /// Whether tapping the bar searches symbols: in File and Symbols mode, once the file has
-    /// loaded in a language with symbols. Otherwise (Project, a failed load, a web page or another
-    /// language) it edits the address, so there's always a way to open something else.
+    /// Whether tapping the bar searches symbols: at the symbol levels, once the file has loaded.
+    /// Otherwise (Project, a failed load) it edits the address, so there's always a way to open
+    /// something else.
     private var barSearchesSymbols: Bool {
-        guard mode != .project, case .loaded = model.phase else { return false }
-        if case .unsupportedLanguage = model.symbolIndex { return false }
+        guard mode.showsSymbols, case .loaded = model.phase else { return false }
         return true
     }
 
-    /// Searching symbols in File mode: the matches above the search field (every symbol until
-    /// you type). Tapping one opens its page, paging through the matches; swiping down comes
-    /// back to File.
-    @ViewBuilder
-    private var fileSearchResults: some View {
-        switch model.symbolIndex {
-        case .indexing:
-            placeholder { ProgressView() }
-        case .unsupportedLanguage:
-            placeholder {
-                ContentUnavailableView(
-                    "No Symbols for This File Type",
-                    systemImage: "doc.questionmark",
-                    description: Text("Symbols are available for C, C# and Swift files for now.")
-                )
-            }
-        case .ready where shownSymbols.isEmpty && isSearchPending:
-            placeholder { ProgressView() }  // nothing found yet
-        case .ready where shownSymbols.isEmpty:
-            placeholder {
-                if symbolQuery.isEmpty {
-                    ContentUnavailableView("No Symbols", systemImage: "function")
-                } else {
-                    ContentUnavailableView.search(text: symbolQuery)
-                }
-            }
-        case .ready:
-            SymbolResultsList(symbols: shownSymbols, onCloseSearch: { isSearchingSymbols = false }) { symbol in
-                isSearchingSymbols = false
-                pagerSymbols = shownSymbols
-                pagerSymbolID = symbol.id
-                openedSymbolID = symbol.id
-            }
-        }
-    }
-
-    /// While searching in Symbols mode, a swipe on the cards closes the search.
+    /// While searching, a swipe on the list closes the search.
     private var closeSearchAction: (@MainActor () -> Void)? {
         guard isSearchingSymbols else { return nil }
         return { isSearchingSymbols = false }
     }
 
-    /// Search in the text menu: what to search for, for any selection. `nil` (no menu item) only
-    /// when this file has no symbols to search.
+    /// Search in the text menu: what to search for, for any selection.
     private func symbolSearchTerm(forSelection selection: String) -> String? {
-        if case .unsupportedLanguage = model.symbolIndex { return nil }
-        return SymbolSearch.query(fromSelection: selection)
+        SymbolSearch.query(fromSelection: selection)
     }
 
-    /// Search (from File or a symbol's page): put the selection in the symbol search and
-    /// focus it. In File the matches list above the field; from a symbol's page, the page
-    /// closes and the Symbols cards filter.
+    /// Search (from a page's text menu): the page closes, and the list filters with the
+    /// selection in the focused search field.
     private func searchSymbols(for name: String) {
         openedSymbolID = nil
         symbolQuery = name
@@ -474,31 +434,22 @@ struct CodeScreen: View {
         }
     }
 
-    /// A file header's open button in Symbols' grouped view: show that file in File mode, where
-    /// it was left.
+    /// Opening a file from Project: the Code level, at the file's own entry. The open file just
+    /// scrolls there; another file opens (and becomes the open one, first in the list).
+    private func open(_ url: URL) {
+        guard url == model.url else { return onOpen(url) }
+        withAnimation(.smooth(duration: 0.3)) { mode = .code }
+        listScrollRequest = SymbolScrollRequest(0)
+    }
+
+    /// A file header's open button at the Files level: that file's code, at its entry, without
+    /// reopening anything (it's already in the list). It counts as opening it.
     private func openFile(_ file: URL) {
-        mode = .file
-        if file != model.url { onOpen(file) }
-    }
-
-    /// The pager's Show in File: close it, switch to File and put the symbol at the top.
-    /// A symbol from another file opens that file, at the symbol (as its reading position).
-    private func showInFile(_ symbol: CodeSymbol) {
-        openedSymbolID = nil
-        mode = .file
-        if let file = symbol.fileURL, file != model.url {
-            ReadingPositionStore.standard.save(ReadingPosition(characterIndex: symbol.range.location, lineOffset: 0),
-                                               for: file)
-            onOpen(file)
-            return
-        }
-        fileScrollRequest = FileScrollRequest(characterIndex: symbol.range.location)
-    }
-
-    /// Symbols and symbol search cover the whole project, so its files are indexed once either
-    /// is used.
-    private var needsProjectSymbols: Bool {
-        mode == .symbols || isSearchingSymbols
+        let entry = indexedSymbols.first { $0.kind == .file && ($0.fileURL ?? model.url) == file }
+        guard let entry else { return onOpen(file) }
+        Task { await OpenHistory.shared.recordOpen(file) }
+        withAnimation(.smooth(duration: 0.3)) { mode = .code }
+        listScrollRequest = SymbolScrollRequest(entry.id)
     }
 
     /// Hands the URL to the default browser.
@@ -514,8 +465,8 @@ struct CodeScreen: View {
     }
 }
 
-/// iOS 18 Safari tints the status bar area with bar material. iOS 26 uses the text view's
-/// scroll edge effect instead (see `CodeTextView`).
+/// iOS 18 Safari tints the status bar area with bar material. iOS 26 uses the scroll views'
+/// edge effect instead.
 private struct StatusBarBackdrop: View {
     var body: some View {
         if #available(iOS 26.0, *) {

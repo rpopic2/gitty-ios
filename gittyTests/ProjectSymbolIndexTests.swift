@@ -16,6 +16,12 @@ struct ProjectSymbolIndexTests {
         #expect(ProjectSymbolIndex.project(containing: elsewhere, in: [repo, folder]) == nil)
     }
 
+    @Test func textFilesAreEntriesAndBinaryOnesArent() {
+        #expect(ProjectSymbolIndex.isText(Data("# Title\nSome text.".utf8)))
+        #expect(ProjectSymbolIndex.isText(Data()))
+        #expect(!ProjectSymbolIndex.isText(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00])))  // PNG
+    }
+
     @Test func aFolderProjectDoesNotIncludeSimilarlyNamedFolders() {
         let lookalike = URL(string: "https://raw.githubusercontent.com/o/r/main/alcove/x.c")!
         #expect(ProjectSymbolIndex.project(containing: lookalike, in: [folder]) == nil)

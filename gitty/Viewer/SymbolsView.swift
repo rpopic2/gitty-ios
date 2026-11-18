@@ -4,12 +4,14 @@ import UIKit
 /// Symbols mode: every top-level definition as a full-width card, like photos in Photos.
 /// Tapping a card zooms into that symbol (see `SymbolPager`).
 ///
-/// Pinching zooms in and out, like Photos, through three levels (kept app-wide):
-/// - Zoomed out (`grouped`): one-line rows, grouped under a sticky header per file (its name and
-///   count; tap to fold it, or open it in File). Tapping a row zooms back in to its card.
-/// - Cards, the default.
-/// - Zoomed in (`full`): every symbol's whole code, edge to edge in File's style, each under a
-///   slim title that sticks to the top while you read it. Tap one to open its page.
+/// Pinching zooms in and out, like Photos, through the levels of `ViewMode` (the selector under
+/// the bar follows):
+/// - Files: one-line rows, grouped under a sticky header per file (its name and count; tap to
+///   fold it, or show it in Code). Tapping a row zooms back in to its card. Zooming out from
+///   here goes to Project.
+/// - Symbols: the cards.
+/// - Code: every symbol's whole code, edge to edge in the raw-text style, each under a slim
+///   title that sticks to the top while you read it. Tap one to open its page.
 struct SymbolsView: View {
     let symbols: [CodeSymbol]
     /// The symbol search the list is filtered by ("" for none). Give each search its own list
@@ -35,15 +37,18 @@ struct SymbolsView: View {
     /// The open file, which symbols without a `fileURL` are in (for the grouped view).
     let openFile: URL
     let onOpen: @MainActor (CodeSymbol) -> Void
-    /// A file header's open button: show that file in File mode.
+    /// A file header's open button: show that file's code (the Code level, at its entry).
     let onOpenFile: @MainActor (URL) -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
     /// While searching: a swipe on the cards closes the search field (the filter stays). That
     /// swipe only closes it: the list doesn't scroll and the bar doesn't shrink.
     let onCloseSearch: (@MainActor () -> Void)?
 
-    /// Rows grouped by file, cards, or every symbol's whole code.
-    @AppStorage("symbolsZoom") private var zoom: SymbolsZoom = .cards
+    /// The zoom level, shared with the selector under the bar (Project hides this view).
+    @Binding var mode: ViewMode
+    /// The level on screen. It follows `mode`, one step behind, so the new level can open at the
+    /// symbol that was in the middle (see `onChange(of: mode)`).
+    @State private var zoom: ViewMode
     @State private var folded = SymbolFoldStore.standard.foldedFiles()
     @State private var groupCache = GroupCache()
     /// This pinch has already switched the layout (one switch per pinch).
@@ -55,7 +60,8 @@ struct SymbolsView: View {
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(symbols: [CodeSymbol], query: String, isActive: Bool, namespace: Namespace.ID,
+    init(symbols: [CodeSymbol], query: String, mode: Binding<ViewMode>, isActive: Bool,
+         namespace: Namespace.ID,
          text: @escaping @MainActor (CodeSymbol) -> NSAttributedString?,
          scrollRequest: SymbolScrollRequest?,
          initialID: @escaping @MainActor () -> Int? = { nil },
@@ -67,6 +73,8 @@ struct SymbolsView: View {
          onCloseSearch: (@MainActor () -> Void)? = nil) {
         self.symbols = symbols
         self.query = query
+        _mode = mode
+        _zoom = State(initialValue: mode.wrappedValue.showsSymbols ? mode.wrappedValue : .files)
         self.isActive = isActive
         self.namespace = namespace
         self.text = text
@@ -86,15 +94,15 @@ struct SymbolsView: View {
         ScrollViewReader { reader in
             Group {
                 switch zoom {
-                case .grouped:
+                case .project, .files:
                     scrollContainer { groupedRows }
                         .onAppear { moveToStart(reader) }
                         .transition(.opacity)
-                case .cards:
+                case .symbols:
                     scrollContainer { cards }
                         .onAppear { moveToStart(reader) }
                         .transition(.opacity)
-                case .full:
+                case .code:
                     scrollContainer { fullCode }
                         .onAppear { moveToStart(reader) }
                         .transition(.opacity)
@@ -105,6 +113,13 @@ struct SymbolsView: View {
                 reader.scrollTo(request.id, anchor: anchor)
             }
         }
+        .onChange(of: mode) { _, mode in
+            // Another level (a pinch, or the selector): it opens at the symbol in the middle.
+            guard mode.showsSymbols, mode != zoom else { return }
+            switchAnchor = scroll.centeredID
+            scroll.isPositioned = false  // until the new level has moved to the anchor
+            withAnimation(.smooth(duration: 0.3)) { zoom = mode }
+        }
         // For VoiceOver, which has no pinch.
         .accessibilityAction(named: "Zoom In") { zoomIn() }
         .accessibilityAction(named: "Zoom Out") { zoomOut() }
@@ -113,7 +128,7 @@ struct SymbolsView: View {
     /// Where a symbol lands when it's brought into view: zoomed in, a symbol can be taller than
     /// the screen, so its start goes to the top; otherwise it's centered.
     private var anchor: UnitPoint {
-        zoom == .full ? .top : .center
+        zoom == .code ? .top : .center
     }
 
     /// `scrollPosition(id:)` ignores a starting value during the first layout and opens on the
@@ -239,22 +254,22 @@ struct SymbolsView: View {
     }
 
     private func zoomIn() {
-        if let level = zoom.zoomedIn { switchZoom(to: level, anchor: scroll.centeredID) }
+        if let level = zoom.zoomedIn { withAnimation(.smooth(duration: 0.3)) { mode = level } }
     }
 
+    /// From Files, out to Project.
     private func zoomOut() {
-        if let level = zoom.zoomedOut { switchZoom(to: level, anchor: scroll.centeredID) }
+        if let level = zoom.zoomedOut { withAnimation(.smooth(duration: 0.3)) { mode = level } }
     }
 
-    private func switchZoom(to level: SymbolsZoom, anchor: Int?) {
-        switchAnchor = anchor
-        scroll.isPositioned = false  // until the other layout has moved to the anchor
-        withAnimation(.smooth(duration: 0.3)) { zoom = level }
-    }
-
-    /// A row tapped in the grouped view: back to the cards, at that symbol.
+    /// A row tapped in the Files level: in to the cards, at that symbol.
     private func showCard(_ symbol: CodeSymbol) {
-        switchZoom(to: .cards, anchor: symbol.id)
+        switchAnchor = symbol.id
+        scroll.isPositioned = false
+        withAnimation(.smooth(duration: 0.3)) {
+            zoom = .symbols
+            mode = .symbols
+        }
     }
 
     private func toggleFold(_ file: URL) {
@@ -416,87 +431,6 @@ private struct SymbolRow: View {
     }
 }
 
-/// Symbol search results over File: a compact list (kind, name, line), best matches first.
-struct SymbolResultsList: View {
-    let symbols: [CodeSymbol]
-    /// Pulling the list down past its top closes the search.
-    let onCloseSearch: @MainActor () -> Void
-    let onOpen: @MainActor (CodeSymbol) -> Void
-
-    init(symbols: [CodeSymbol], onCloseSearch: @escaping @MainActor () -> Void,
-         onOpen: @escaping @MainActor (CodeSymbol) -> Void) {
-        self.symbols = symbols
-        self.onCloseSearch = onCloseSearch
-        self.onOpen = onOpen
-    }
-
-    var body: some View {
-        List(symbols) { symbol in
-            Button { onOpen(symbol) } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: symbol.kind.systemImage)
-                        .foregroundStyle(.tint)
-                        .frame(width: 22)
-                        .accessibilityHidden(true)
-                    Text(symbol.name)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 8)
-                    Text(symbol.lineLabel)
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .accessibilityLabel(symbol.spokenDescription)
-        }
-        .listStyle(.plain)
-        .contentMargins(.bottom, FileBarMetrics.fieldHeight + 16, for: .scrollContent)  // the search field
-        .modifier(OnPullDownPastTop(action: onCloseSearch))
-        .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
-    }
-}
-
-/// Pulling a list down past its top (about 60pt) runs `action` once per pull, like pulling down
-/// to dismiss a sheet. `nil` turns it off.
-struct OnPullDownPastTop: ViewModifier {
-    let action: (@MainActor () -> Void)?
-
-    init(action: (@MainActor () -> Void)?) {
-        self.action = action
-    }
-
-    func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y < -geometry.contentInsets.top - 60
-        } action: { wasPulled, isPulled in
-            if isPulled && !wasPulled { action?() }
-        }
-    }
-}
-
-/// Symbols' zoom levels, out to in.
-enum SymbolsZoom: String {
-    case grouped, cards, full
-
-    var zoomedIn: SymbolsZoom? {
-        switch self {
-        case .grouped: .cards
-        case .cards: .full
-        case .full: nil
-        }
-    }
-
-    var zoomedOut: SymbolsZoom? {
-        switch self {
-        case .grouped: nil
-        case .cards: .grouped
-        case .full: .cards
-        }
-    }
-}
-
 /// Zoomed in, a file's page zooms out of (and back into) its title line; a symbol's, its code.
 private struct TransitionSourceIfFile: ViewModifier {
     let symbol: CodeSymbol
@@ -543,7 +477,7 @@ private struct SymbolTitle: View {
     }
 }
 
-/// Zoomed in: a symbol's whole code in File's style. Until another file's text has loaded, its
+/// Zoomed in: a symbol's whole code in the raw-text style. Until another file's text has loaded, its
 /// preview stands in.
 private struct SymbolCode: View {
     let symbol: CodeSymbol

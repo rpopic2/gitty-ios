@@ -14,6 +14,10 @@ final class CodeDocumentModel {
         case indexing
         case ready([CodeSymbol])
         case unsupportedLanguage
+
+        var isReady: Bool {
+            if case .ready = self { true } else { false }
+        }
     }
 
     let url: URL
@@ -95,6 +99,21 @@ final class CodeDocumentModel {
     /// Pull-to-refresh: the only way a saved file is ever downloaded again.
     func refresh() async {
         await download(isRefresh: true)
+    }
+
+    /// Pull to refresh on a file's page: downloads that file again. Another project file's
+    /// page shows the new text once it's loaded, and its symbols are indexed again.
+    func refresh(file: URL?) async {
+        guard let file, file != url else { return await refresh() }
+        do {
+            _ = try await store.fetch(file)
+            otherTexts[file] = nil
+            textOrder.removeAll { $0 == file }
+            loadedFilter = nil  // index the project's files again (only the changed one is redone)
+            loadProjectSymbols()
+        } catch {
+            refreshError = error.localizedDescription
+        }
     }
 
     func retry() async {
@@ -190,12 +209,11 @@ final class CodeDocumentModel {
     private func publishSymbols() {
         guard let ownSymbols else { return }
         var combined: [CodeSymbol] = []
-        // Each file's entry, then its symbols. (A file without symbols, such as a README, has
-        // no entry of its own: it just shows the project's.)
-        if case .symbols(let own) = ownSymbols {
-            combined = (ownFileEntry.map { [$0] } ?? []) + own
-            combined = combined.enumerated().map { $1.moved(to: $0, file: nil) }
-        }
+        // Each file's entry, then its symbols. A file without symbols (a README, a web page,
+        // another language) is just its entry: its page is the whole file.
+        var own: [CodeSymbol] = []
+        if case .symbols(let symbols) = ownSymbols { own = symbols }
+        combined = ((ownFileEntry.map { [$0] } ?? []) + own).enumerated().map { $1.moved(to: $0, file: nil) }
         let files = symbolSorting.arrange(otherFiles, key: { $0.url.absoluteString },
                                           name: { $0.url.absoluteString }, history: openDates)
         for file in files {
@@ -204,11 +222,7 @@ final class CodeDocumentModel {
                 combined.append(symbol.moved(to: combined.count, file: file.url))
             }
         }
-        if case .unsupportedLanguage = ownSymbols, combined.isEmpty {
-            symbolIndex = .unsupportedLanguage
-        } else {
-            symbolIndex = .ready(combined)
-        }
+        symbolIndex = .ready(combined)
         prepareSearch(for: combined)
     }
 
@@ -264,8 +278,10 @@ final class CodeDocumentModel {
     }
 
     /// The text of one symbol, styled like the file. `nil` while another file's text is loading.
+    /// A file's own entry gets the file's text object itself, the same one until it's refreshed.
     func text(of symbol: CodeSymbol) -> NSAttributedString? {
         guard let full = fullText(of: symbol.fileURL), NSMaxRange(symbol.range) <= full.length else { return nil }
+        if symbol.range == NSRange(location: 0, length: full.length) { return full }
         return full.attributedSubstring(from: symbol.range)
     }
 
@@ -290,10 +306,11 @@ final class CodeDocumentModel {
             let rendered = await Task.detached(priority: .userInitiated) {
                 RawTextStyle.render(document)
             }.value
-            // Pages show a few files at a time; keep the last few, not the whole project.
+            // The Code level and pages show a few files at a time; keep the last ones, not the
+            // whole project.
             textOrder.removeAll { $0 == file }
             textOrder.append(file)
-            if textOrder.count > 6 { otherTexts[textOrder.removeFirst()] = nil }
+            if textOrder.count > 24 { otherTexts[textOrder.removeFirst()] = nil }
             otherTexts[file] = rendered.attributedString
         }
     }

@@ -286,7 +286,7 @@ struct BottomBarStack: View {
     let onOpenInBrowser: (@MainActor () -> Void)?
     let searchQuery: String?
     let onClearSearch: (@MainActor () -> Void)?
-    /// The sort button beside the mode selector (`nil`: none, as in File mode).
+    /// The sort button beside the mode selector (`nil`: none).
     let sorting: Binding<ListSorting>?
     /// A review set aside shows above the bar, like a minimized Mail draft.
     @Environment(ReviewDraft.self) private var review: ReviewDraft?

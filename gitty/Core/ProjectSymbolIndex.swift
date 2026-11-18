@@ -32,6 +32,12 @@ actor ProjectSymbolIndex {
         return project.rawURL(for: folder.isEmpty ? "" : folder + "/")?.absoluteString
     }
 
+    /// Text, not an image or another binary file: no NUL bytes in its first few kilobytes, the
+    /// way `grep` and Git tell.
+    nonisolated static func isText(_ data: Data) -> Bool {
+        !data.prefix(8_000).contains(0)
+    }
+
     /// The project a file belongs to, if any: the one with the most specific folder.
     static func project(containing url: URL, in projects: [ProjectInfo]) -> ProjectInfo? {
         let address = url.absoluteString
@@ -42,18 +48,16 @@ actor ProjectSymbolIndex {
             .0
     }
 
-    /// The symbols of every downloaded file in `project` except `excluded`, files in path order,
-    /// only from files the project's filter lets through. Files in languages without symbols
-    /// are skipped. Stops early when the task is cancelled.
+    /// Every downloaded text file in `project` except `excluded`, in path order, with its symbols
+    /// (none for a README or a language without symbols), only files the project's filter lets
+    /// through. Binary files (images…) are left out. Stops early when the task is cancelled.
     func symbols(in project: ProjectInfo, excluding excluded: URL,
                  matching filter: FileFilter = .none) async -> [FileSymbols] {
         guard let prefix = Self.prefix(of: project) else { return [] }
         let files = await store.savedDocuments()
             .filter { metadata in
                 let address = metadata.url.absoluteString
-                guard metadata.url != excluded, address.hasPrefix(prefix),
-                      SymbolLanguage.extensionHasSymbols(metadata.url.pathExtension)
-                else { return false }
+                guard metadata.url != excluded, address.hasPrefix(prefix) else { return false }
                 guard !filter.isEmpty else { return true }
                 let relative = String(address.dropFirst(prefix.count))
                 return filter.matches(relative.removingPercentEncoding ?? relative)
@@ -67,10 +71,14 @@ actor ProjectSymbolIndex {
                 result.append(FileSymbols(url: metadata.url, file: entry.file, symbols: entry.symbols))
                 continue
             }
-            guard let document = await store.cached(metadata.url) else { continue }
-            let text = RawTextDecoder.decode(document.data, contentType: document.metadata.contentType)
-            guard case .symbols(let symbols) = SymbolIndexer.index(text, fileExtension: metadata.url.pathExtension)
+            guard let document = await store.cached(metadata.url),
+                  Self.isText(document.data)
             else { continue }
+            let text = RawTextDecoder.decode(document.data, contentType: document.metadata.contentType)
+            var symbols: [CodeSymbol] = []
+            if case .symbols(let found) = SymbolIndexer.index(text, fileExtension: metadata.url.pathExtension) {
+                symbols = found
+            }
             // Listed even without symbols: the file itself is an entry.
             let file = SymbolIndexer.fileEntry(named: metadata.url.lastPathComponent, text: text)
             cache[metadata.url] = Entry(fetchedAt: metadata.fetchedAt, file: file, symbols: symbols)

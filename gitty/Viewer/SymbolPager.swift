@@ -4,6 +4,9 @@ import UIKit
 /// One symbol at a time, full screen, like a photo opened in Photos.
 /// Swipe left/right for the previous/next symbol. Swipe down to zoom back to the list
 /// (the zoom navigation transition provides that gesture).
+///
+/// A file's own page is the whole file, where File used to be: select text for Comment and
+/// Search, pull to refresh it, and it comes back where you left off.
 struct SymbolPager: View {
     let symbols: [CodeSymbol]
     /// The symbol that was tapped. The pager opens on it.
@@ -15,8 +18,10 @@ struct SymbolPager: View {
     let onPage: @MainActor (Int) -> Void
     /// Called with the symbol on screen when the pager starts to close (the swipe down begins).
     let onWillClose: @MainActor (Int) -> Void
-    /// Tapping the caption: close the pager and show the symbol in File.
-    let onShowInFile: @MainActor (CodeSymbol) -> Void
+    /// The open file, which entries without a `fileURL` are in (for a file page's place).
+    let openFile: URL
+    /// Pull to refresh on a file's page: download that file (`nil`: the open file) again.
+    let onRefresh: @MainActor (URL?) async -> Void
     /// Search in a page's text menu: close the pager and search symbols.
     let symbolSearchTerm: @MainActor (String) -> String?
     let onSearchSymbols: @MainActor (String) -> Void
@@ -36,7 +41,8 @@ struct SymbolPager: View {
          text: @escaping @MainActor (CodeSymbol) -> NSAttributedString?,
          onPage: @escaping @MainActor (Int) -> Void,
          onWillClose: @escaping @MainActor (Int) -> Void,
-         onShowInFile: @escaping @MainActor (CodeSymbol) -> Void,
+         openFile: URL,
+         onRefresh: @escaping @MainActor (URL?) async -> Void,
          symbolSearchTerm: @escaping @MainActor (String) -> String?,
          onSearchSymbols: @escaping @MainActor (String) -> Void,
          onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void) {
@@ -46,7 +52,8 @@ struct SymbolPager: View {
         self.text = text
         self.onPage = onPage
         self.onWillClose = onWillClose
-        self.onShowInFile = onShowInFile
+        self.openFile = openFile
+        self.onRefresh = onRefresh
         self.symbolSearchTerm = symbolSearchTerm
         self.onSearchSymbols = onSearchSymbols
         self.onComment = onComment
@@ -78,14 +85,17 @@ struct SymbolPager: View {
                                 // Another file's text may still be loading: the page fills in
                                 // once it's there (a different id makes the view take the text).
                                 let pageText = text(symbol)
+                                let isFilePage = symbol.kind == .file
                                 ReadOnlyTextView(
                                     text: pageText ?? NSAttributedString(),
-                                    textID: pageText == nil ? -1 - symbol.id : symbol.id,
+                                    textID: pageID(for: symbol, text: pageText),
                                     insets: pageInsets,
                                     isCurrent: symbol.id == visibleID,
                                     symbolSearchTerm: symbolSearchTerm,
                                     onSearchSymbols: onSearchSymbols,
-                                    onComment: { onComment(symbol, $0) }
+                                    onComment: { onComment(symbol, $0) },
+                                    positionURL: isFilePage ? symbol.fileURL ?? openFile : nil,
+                                    onRefresh: refreshAction(for: symbol)
                                 )
                                 // The text starts below the status bar and never scrolls under
                                 // it: just the page's background shows there.
@@ -110,7 +120,7 @@ struct SymbolPager: View {
                 }
 
                 if let current {
-                    SymbolCaption(symbol: current, onShowInFile: { onShowInFile(current) })
+                    SymbolCaption(symbol: current)
                         .padding(.bottom, 8)
                 }
             }
@@ -126,6 +136,21 @@ struct SymbolPager: View {
             if id != initialID { hasPaged = true }
             if hasPaged { onPage(id) }
         }
+    }
+
+    /// Pull to refresh, on a file's page only.
+    private func refreshAction(for symbol: CodeSymbol) -> (@MainActor () async -> Void)? {
+        guard symbol.kind == .file else { return nil }
+        let refresh = onRefresh
+        let file = symbol.fileURL
+        return { await refresh(file) }
+    }
+
+    /// When a page takes new text: once another file's text has loaded, and for a file's page
+    /// each time the file is refreshed (its text is then a new object).
+    private func pageID(for symbol: CodeSymbol, text: NSAttributedString?) -> Int {
+        guard let text else { return -1 - symbol.id }
+        return symbol.kind == .file ? ObjectIdentifier(text).hashValue : symbol.id
     }
 }
 
@@ -152,22 +177,17 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
 }
 
 /// "name · Line N" in a small capsule at the bottom, in place of the bar and selector.
-/// Tapping it shows the symbol in File.
 private struct SymbolCaption: View {
     let symbol: CodeSymbol
-    let onShowInFile: @MainActor () -> Void
 
     static let height: CGFloat = 36
     /// Space kept free under the text so its end isn't hidden behind the caption.
     static let reservedHeight: CGFloat = height + 16
 
     var body: some View {
-        Button(action: onShowInFile) {
-            capsule
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityHint(Text("Shows this symbol in File"))
+        capsule
+            .allowsHitTesting(false)  // touches go to the page under it
+            .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -178,8 +198,8 @@ private struct SymbolCaption: View {
             Text(symbol.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            // From another file of the project: which one, since tapping opens it. A file's own
-            // page needs nothing more than its name.
+            // From another file of the project: which one. A file's own page needs nothing
+            // more than its name.
             if symbol.kind != .file {
                 Text(symbol.fileURL.map { "· \($0.lastPathComponent):\(symbol.line)" } ?? "· Line \(symbol.line)")
                     .monospacedDigit()
@@ -212,10 +232,18 @@ struct ReadOnlyTextView: UIViewRepresentable {
     let insets: EdgeInsets
     /// Only the page on screen answers a tap on the status bar.
     let isCurrent: Bool
-    /// Search in the text menu (see `CodeTextView`).
+    /// Search in the text menu: the search for a selection (`nil` hides the item)…
     var symbolSearchTerm: (@MainActor (String) -> String?)? = nil
+    /// …and searching symbols for it.
     var onSearchSymbols: (@MainActor (String) -> Void)? = nil
+    /// Comment in the text menu: adds a comment on the selected range to the review.
     var onComment: (@MainActor (NSRange) -> Void)? = nil
+    /// A file's page: the file whose reading position it keeps (saved when scrolling stops,
+    /// restored when the page takes its text).
+    var positionURL: URL? = nil
+    /// A file's page: pull to refresh.
+    var onRefresh: (@MainActor () async -> Void)? = nil
+    var positionStore: ReadingPositionStore = .standard
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -227,14 +255,24 @@ struct ReadOnlyTextView: UIViewRepresentable {
             textView.topEdgeEffect.isHidden = true  // nothing covers the top of a page
         }
         textView.delegate = context.coordinator
+        if onRefresh != nil {
+            let refreshControl = UIRefreshControl()
+            refreshControl.addTarget(context.coordinator, action: #selector(Coordinator.handleRefresh(_:)),
+                                     for: .valueChanged)
+            textView.refreshControl = refreshControl
+        }
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
+        let coordinator = context.coordinator
         textView.scrollsToTop = isCurrent
-        context.coordinator.symbolSearchTerm = symbolSearchTerm
-        context.coordinator.onSearchSymbols = onSearchSymbols
-        context.coordinator.onComment = onComment
+        coordinator.symbolSearchTerm = symbolSearchTerm
+        coordinator.onSearchSymbols = onSearchSymbols
+        coordinator.onComment = onComment
+        coordinator.onRefresh = onRefresh
+        coordinator.positionURL = positionURL
+        coordinator.positionStore = positionStore
 
         let contentInset = UIEdgeInsets(top: insets.top, left: 0, bottom: insets.bottom, right: 0)
         if textView.contentInset != contentInset {
@@ -249,10 +287,25 @@ struct ReadOnlyTextView: UIViewRepresentable {
             textView.textContainerInset = containerInset
         }
 
-        guard context.coordinator.textID != textID else { return }
-        context.coordinator.textID = textID
+        guard coordinator.textID != textID else { return }
+        // Refreshed text keeps the place on screen; first text goes back to the saved one.
+        let keep = coordinator.textID != nil && textView.textStorage.length > 0
+            ? coordinator.currentPosition(in: textView) : nil
+        coordinator.textID = textID
         textView.attributedText = text
         textView.contentOffset.y = -contentInset.top
+        if let positionURL, let position = keep ?? positionStore.position(for: positionURL) {
+            // Once the page has its size, so the lines are where they'll be.
+            Task { @MainActor [weak textView] in
+                guard let textView else { return }
+                textView.layoutIfNeeded()
+                coordinator.restore(position, in: textView)
+            }
+        }
+    }
+
+    static func dismantleUIView(_ textView: UITextView, coordinator: Coordinator) {
+        coordinator.save(textView)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -260,6 +313,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
         var symbolSearchTerm: (@MainActor (String) -> String?)?
         var onSearchSymbols: (@MainActor (String) -> Void)?
         var onComment: (@MainActor (NSRange) -> Void)?
+        var onRefresh: (@MainActor () async -> Void)?
+        var positionURL: URL?
+        var positionStore: ReadingPositionStore = .standard
 
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
@@ -268,6 +324,58 @@ struct ReadOnlyTextView: UIViewRepresentable {
                                            searchTerm: symbolSearchTerm,
                                            onSearch: onSearchSymbols)
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
+        }
+
+        @objc func handleRefresh(_ control: UIRefreshControl) {
+            Task { @MainActor in
+                await onRefresh?()
+                control.endRefreshing()
+            }
+        }
+
+        // MARK: Reading position (a file's page)
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate, let textView = scrollView as? UITextView { save(textView) }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            if let textView = scrollView as? UITextView { save(textView) }
+        }
+
+        func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
+            if let textView = scrollView as? UITextView { save(textView) }
+        }
+
+        func save(_ textView: UITextView) {
+            guard let positionURL, let position = currentPosition(in: textView) else { return }
+            positionStore.save(position, for: positionURL)
+        }
+
+        /// The line at the top of the page and how far it's scrolled past.
+        func currentPosition(in textView: UITextView) -> ReadingPosition? {
+            guard textView.textStorage.length > 0 else { return nil }
+            let y = textView.contentOffset.y + textView.adjustedContentInset.top - textView.textContainerInset.top
+            guard y > 0 else { return .top }
+            let layoutManager = textView.layoutManager
+            let glyphIndex = layoutManager.glyphIndex(for: CGPoint(x: 0, y: y), in: textView.textContainer)
+            let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            return ReadingPosition(characterIndex: layoutManager.characterIndexForGlyph(at: glyphIndex),
+                                   lineOffset: Double(y - lineRect.minY))
+        }
+
+        func restore(_ position: ReadingPosition, in textView: UITextView) {
+            let length = textView.textStorage.length
+            let inset = textView.adjustedContentInset
+            guard position != .top, length > 0 else { return }
+            let layoutManager = textView.layoutManager
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: min(position.characterIndex, length - 1))
+            let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            let y = lineRect.minY + min(CGFloat(position.lineOffset), lineRect.height)
+            let contentHeight = layoutManager.usedRect(for: textView.textContainer).height
+                + textView.textContainerInset.top + textView.textContainerInset.bottom
+            let maxY = max(-inset.top, contentHeight - textView.bounds.height + inset.bottom)
+            textView.contentOffset.y = min(max(y + textView.textContainerInset.top - inset.top, -inset.top), maxY)
         }
     }
 }
