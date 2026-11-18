@@ -7,6 +7,10 @@ import UIKit
 struct CodeScreen: View {
     @State private var model: CodeDocumentModel
     @Environment(\.openURL) private var openURL
+    /// For the pager's zoom transition, which closes it with a pinch or a swipe down. No view in
+    /// the list is marked as its source (that tracking cost scrolling), so it zooms from the
+    /// middle of the screen.
+    @Namespace private var pagerNamespace
     /// The reader closed the "This is a web page." banner for this file.
     @State private var isWebPageBannerDismissed = false
     /// Tapping the bar edits the address; the editor covers the screen while it's open.
@@ -112,6 +116,7 @@ struct CodeScreen: View {
                             inFile: symbol.fileURL)
                 }
             )
+            .navigationTransition(.zoom(sourceID: openedID, in: pagerNamespace))
         }
         .alert("Couldn’t Refresh", isPresented: refreshAlertIsPresented, presenting: model.refreshError) { _ in
             Button("OK", role: .cancel) {}

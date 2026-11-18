@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 
 /// One symbol at a time, full screen, like a photo opened in Photos.
-/// Swipe left/right for the previous/next symbol. The back button at the bottom left (or a
-/// swipe from the left edge) goes back to the list, at the symbol on screen.
+/// Swipe left/right for the previous/next symbol. Pinch or swipe down to close it, back to the
+/// list at the symbol on screen (the zoom navigation transition provides those gestures).
 ///
 /// A file's own page is the whole file, where File used to be: select text for Comment and
 /// Search, pull to refresh it, and it comes back where you left off.
@@ -34,7 +34,6 @@ struct SymbolPager: View {
     @State private var hasPaged = false
     /// Swiping from the right edge pages here, so it doesn't open the sidebar.
     @Environment(SideBarState.self) private var sideBar: SideBarState?
-    @Environment(\.dismiss) private var dismiss
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -122,15 +121,8 @@ struct SymbolPager: View {
 
                 if let current {
                     SymbolCaption(symbol: current)
-                        .padding(.horizontal, SymbolCaption.height + 16)  // clear of the button
                         .padding(.bottom, 8)
                 }
-                HStack {
-                    BackButton { dismiss() }
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -181,31 +173,6 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
             super.viewWillDisappear(animated)
             onWillDisappear?()
         }
-    }
-}
-
-/// Back to the list, beside the caption: a round button in the same style.
-private struct BackButton: View {
-    let action: @MainActor () -> Void
-
-    init(action: @escaping @MainActor () -> Void) {
-        self.action = action
-    }
-
-    var body: some View {
-        let icon = Image(systemName: "chevron.backward")
-            .font(.body.weight(.semibold))
-            .frame(width: SymbolCaption.height, height: SymbolCaption.height)
-            .contentShape(Circle())
-        Button(action: action) {
-            if #available(iOS 26.0, *) {
-                icon.glassEffect(.regular.interactive(), in: Circle())
-            } else {
-                icon.background(.bar, in: Circle())
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Back")
     }
 }
 
