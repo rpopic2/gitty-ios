@@ -37,6 +37,16 @@ struct ProjectFilesView: View {
         let total: Int
     }
 
+    /// What Download All would fetch now: the files the filter lets through that aren't saved
+    /// (and aren't too big), and their size. Worked out when the list, the filter or the saved
+    /// files change, not on every redraw.
+    @State private var pending = PendingDownload()
+
+    private struct PendingDownload {
+        var urls: [URL] = []
+        var bytes: Int64 = 0
+    }
+
     /// Files bigger than this are left out of Download All (they still open one by one).
     private static let downloadAllSizeLimit = 5_000_000
 
@@ -138,7 +148,7 @@ struct ProjectFilesView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            downloadButton(project: project, tree: tree)
+            downloadButton
         }
     }
 
@@ -192,14 +202,33 @@ struct ProjectFilesView: View {
         filter = new
         guard case .loaded(let project, let tree, _) = state else { return }
         state = .loaded(project, tree, tree.directories(under: project.folder ?? "", matching: new))
+        updatePending()
+    }
+
+    /// Swiping a saved file: deletes its saved copy. It stays in the list and downloads again
+    /// when opened; its reading position is kept. A file that's open stays on screen.
+    private func deleteDownload(_ url: URL) {
+        saved.remove(url)
+        updatePending()
+        Task { await DocumentStore.shared.delete(url) }
     }
 
     @ViewBuilder
     private func row(for entry: ProjectTree.Entry, in project: ProjectInfo) -> some View {
         if let url = project.rawURL(for: entry.path) {
             let isCurrent = url == currentURL
+            let isSaved = saved.contains(url)
             Button { onOpen(url) } label: {
-                FileEntryRow(entry: entry, isSaved: saved.contains(url))
+                FileEntryRow(entry: entry, isSaved: isSaved)
+            }
+            .swipeActions {
+                if isSaved {
+                    // Not `.destructive`: the row stays, only its saved copy goes.
+                    Button { deleteDownload(url) } label: {
+                        Label("Delete Download", systemImage: "trash")
+                    }
+                    .tint(.red)
+                }
             }
             // The open file looks selected, as in Files.
             .listRowBackground(isCurrent
@@ -249,6 +278,7 @@ struct ProjectFilesView: View {
             let directories = tree.directories(under: project.folder ?? "", matching: filter)
             fileCount = tree.files(under: project.folder ?? "").count
             state = .loaded(project, tree, directories)
+            updatePending()
         } catch {
             if case .loaded = state, refresh { return }  // keep the list; the pull just ends
             isSignedIn = await GitHubAuth.shared.isSignedIn
@@ -259,7 +289,7 @@ struct ProjectFilesView: View {
     // MARK: Download All
 
     @ViewBuilder
-    private func downloadButton(project: ProjectInfo, tree: ProjectTree) -> some View {
+    private var downloadButton: some View {
         if let download {
             HStack(spacing: 6) {
                 ProgressView()
@@ -270,24 +300,43 @@ struct ProjectFilesView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Downloading \(download.done) of \(download.total)")
+        } else if pending.urls.isEmpty {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(filter.isEmpty ? "All files saved" : "All matching files saved")
         } else {
-            // What's missing is worked out on tap: listing a big repository's files on every
-            // redraw would cost more than it's worth.
-            Button("Download All", systemImage: "arrow.down.circle") {
-                downloadAll(missingFiles(project: project, tree: tree))
+            Button { downloadAll(pending.urls) } label: {
+                HStack(spacing: 6) {
+                    Text(pending.bytes, format: .byteCount(style: .file))
+                        .font(.footnote)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "arrow.down.circle")
+                        .font(.title2)
+                }
             }
-            .labelStyle(.iconOnly)
-            .font(.title2)
             .buttonStyle(.borderless)  // only the button, not the whole row
+            .accessibilityLabel("Download All")
+            .accessibilityValue(Text("\(pending.urls.count) files, ") + Text(pending.bytes, format: .byteCount(style: .file)))
         }
     }
 
-    /// The project's files that the filter lets through and that aren't saved yet.
-    private func missingFiles(project: ProjectInfo, tree: ProjectTree) -> [URL] {
-        tree.files(under: project.folder ?? "", matching: filter)
-            .filter { ($0.size ?? 0) <= Self.downloadAllSizeLimit }
-            .compactMap { project.rawURL(for: $0.path) }
-            .filter { !saved.contains($0) }
+    /// Works out what Download All would fetch: the files the filter lets through that aren't
+    /// saved yet and aren't too big.
+    private func updatePending() {
+        guard case .loaded(let project, let tree, _) = state else {
+            pending = PendingDownload()
+            return
+        }
+        var result = PendingDownload()
+        for entry in tree.files(under: project.folder ?? "", matching: filter)
+        where (entry.size ?? 0) <= Self.downloadAllSizeLimit {
+            guard let url = project.rawURL(for: entry.path), !saved.contains(url) else { continue }
+            result.urls.append(url)
+            result.bytes += Int64(entry.size ?? 0)
+        }
+        pending = result
     }
 
     /// Downloads a few files at a time. Each lands in the saved copies, like opening it would.
@@ -311,6 +360,7 @@ struct ProjectFilesView: View {
                 }
             }
             download = nil
+            updatePending()  // what failed is still to do
         }
     }
 }
