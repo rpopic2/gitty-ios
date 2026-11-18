@@ -215,11 +215,13 @@ struct CodeScreen: View {
                 initialID: { savedListSymbolID() },
                 isBarCollapsed: model.isBarCollapsed,
                 barTapCount: model.barTapCount,
+                openFile: model.url,
                 onOpen: { symbol in
                     pagerSymbols = shownSymbols  // page through the search results only
                     pagerSymbolID = symbol.id
                     openedSymbolID = symbol.id
                 },
+                onOpenFile: { openFile($0) },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 onCloseSearch: closeSearchAction
             )
@@ -443,6 +445,13 @@ struct CodeScreen: View {
             )
             review.add(selection, format: format)
         }
+    }
+
+    /// A file header's open button in Symbols' grouped view: show that file in File mode, where
+    /// it was left.
+    private func openFile(_ file: URL) {
+        mode = .file
+        if file != model.url { onOpen(file) }
     }
 
     /// The pager's Show in File: close it, switch to File and put the symbol at the top.
