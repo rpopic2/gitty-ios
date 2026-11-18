@@ -5,8 +5,10 @@ import UIKit
 /// Tapping a card zooms into that symbol (see `SymbolPager`).
 struct SymbolsView: View {
     let symbols: [CodeSymbol]
-    /// The symbol search the list is filtered by ("" for none). Clearing it brings back the
-    /// place from before the search.
+    /// The symbol search the list is filtered by ("" for none). Give each search its own list
+    /// (`.id(query)`): the results start at the top, and clearing the search starts a fresh full
+    /// list at the place from before the search. (One list kept through searches piles up the
+    /// cards it built for every set of results, and scrolling gets slower.)
     let query: String
     /// False while another mode covers the list (it stays alive to keep its place).
     let isActive: Bool
@@ -57,19 +59,12 @@ struct SymbolsView: View {
             list
                 .onAppear {
                     // `scrollPosition(id:)` ignores a starting value during the first layout and
-                    // opens on the first card. Move to the saved card explicitly.
-                    let target = scrolledID ?? initialID()
+                    // opens on the first card. Move to the saved card explicitly. Search results
+                    // start at the top, with the best match.
+                    let target = query.isEmpty ? initialID() ?? scrolledID : nil
                     if let target { reader.scrollTo(target, anchor: .center) }
                     position = target
                     isPositioned = true
-                }
-                .onChange(of: query) { _, query in
-                    // Cleared: back to where the list was before the search. Chosen here rather
-                    // than left to `scrollPosition`, which would chase the card that was in the
-                    // middle of the results through the much longer list.
-                    guard query.isEmpty, let target = initialID() else { return }
-                    reader.scrollTo(target, anchor: .center)
-                    position = target
                 }
         }
         .onChange(of: position) { _, id in

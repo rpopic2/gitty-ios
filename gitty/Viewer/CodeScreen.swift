@@ -223,6 +223,7 @@ struct CodeScreen: View {
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 onCloseSearch: closeSearchAction
             )
+            .id(shownQuery)  // a fresh list for each search's results, and for the full list after
         case .unsupportedLanguage:
             placeholder {
                 ContentUnavailableView(
