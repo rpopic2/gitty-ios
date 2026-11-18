@@ -191,9 +191,9 @@ struct SymbolsView: View {
     }
 
     /// Every symbol's whole code, edge to edge, each under a slim title that sticks while you
-    /// read it. A file's own entry is just a title line before its symbols. The text isn't
-    /// selectable (it's plain `Text`, cheap to scroll through a big project); tap a symbol to
-    /// open its page.
+    /// read it. A file's own entry is just a title line before its symbols: tap it to read the
+    /// whole file on its page. The text isn't selectable (it's plain `Text`, cheap to scroll
+    /// through a big project); tap a symbol to open its page.
     private var fullCode: some View {
         LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(symbols) { symbol in
@@ -206,7 +206,13 @@ struct SymbolsView: View {
                         .matchedTransitionSource(id: symbol.id, in: namespace)
                     }
                 } header: {
-                    SymbolTitle(symbol: symbol)
+                    // A file's title opens its page with the whole file (as its card does);
+                    // a symbol's opens its page, like its code.
+                    Button { onOpen(symbol) } label: {
+                        SymbolTitle(symbol: symbol)
+                    }
+                    .buttonStyle(.plain)
+                    .modifier(TransitionSourceIfFile(symbol: symbol, namespace: namespace))
                 }
             }
         }
@@ -491,6 +497,20 @@ enum SymbolsZoom: String {
     }
 }
 
+/// Zoomed in, a file's page zooms out of (and back into) its title line; a symbol's, its code.
+private struct TransitionSourceIfFile: ViewModifier {
+    let symbol: CodeSymbol
+    let namespace: Namespace.ID
+
+    func body(content: Content) -> some View {
+        if symbol.kind == .file {
+            content.matchedTransitionSource(id: symbol.id, in: namespace)
+        } else {
+            content
+        }
+    }
+}
+
 /// Zoomed in: the slim title above a symbol's code (or a file's title line, before its symbols).
 private struct SymbolTitle: View {
     let symbol: CodeSymbol
@@ -515,8 +535,10 @@ private struct SymbolTitle: View {
         .padding(.horizontal, 12)
         .frame(height: symbol.kind == .file ? 36 : 28)
         .background(.bar)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(symbol.spokenDescription)
+        .accessibilityHint(symbol.kind == .file ? Text("Opens the whole file") : Text("Opens its page"))
         .accessibilityAddTraits(.isHeader)
     }
 }
