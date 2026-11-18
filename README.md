@@ -10,7 +10,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 - **Smooth, exact scrolling:** every line's height is known up front, so the scroll bar and text never jump.
 - **Safari-style bottom bar:** shows the file name, collapses while you scroll down, and shows a thin loading line only while downloading. Liquid Glass on iOS 26+, the Safari 18 style on iOS 18.
 - **Photos-style mode selector** under the bar: **Project**, **File** (the raw file) and **Symbols**.
-- **Sidebar:** swipe left from the right edge of the screen to push the content aside and show the sidebar: **Files**, your **Projects**, and **Settings** at the bottom. Choosing Files or a project shows it in the Project tab. Tap or swipe right on the content beside it to close it. (On a symbol's page that swipe pages instead.)
+- **Sidebar:** swipe left from the right edge of the screen to push the content off and show the full-screen sidebar: **Files**, your **Projects**, and **Settings** at the bottom. Choosing Files or a project shows it in the Project tab. Swipe right on the sidebar to close it. (On a symbol's page that swipe pages instead.)
 - **Projects:** enter, paste or share a GitHub repository link (`github.com/owner/repo`, or `…/tree/branch/folder`) to add it as a project and open it. The Project tab lists all of the open project's files, under a header for each directory, with code files first; a file downloads when you open it, and **Download All** saves the whole project for offline reading. The file list comes from GitHub's trees API, fetched when the project is added and again only on pull to refresh. For a private repository, sign in to GitHub when it fails to load (see below).
 - **Files:** every file you've opened or saved that isn't in a project, recent first, with an icon on files that open offline. Tap one to open it in File mode, or swipe one to delete it and its saved copy. With no file open, the start page shows the open project or Files, with the address bar ready.
 - **Code review:** select code, in File or on a symbol's page, and choose **Comment**. A review opens like a new message in Mail, with the file and lines filled in (`alc/main.c:12-14: `) and the cursor ready. It's one plain text you can edit anywhere. Comment again and it's added at the end. Swipe the review down to set it aside: it waits above the bar, and a tap brings it back. **Share** sends the raw text anywhere (an AI chat, Messages, Notes); once it's shared, the review is done. In Settings you can switch comments to Markdown, with a heading and the selected code.
@@ -101,7 +101,7 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/Viewer/FileBar.swift` | Bottom bar, loading line and the bar + selector stack. Sizes in `FileBarMetrics` |
 | `gitty/Viewer/ModeSelector.swift` | Project / File / Symbols selector |
 | `gitty/Viewer/ProjectFilesView.swift` | The open project's files by directory, Download All, sign-in when a repository isn't found |
-| `gitty/Viewer/SideBar.swift` | The right sidebar: edge swipe, push layout, Files / projects / Settings |
+| `gitty/Viewer/SideBar.swift` | The right sidebar: full screen, edge swipe to open and swipe right to close, Files / projects / Settings |
 | `gitty/Viewer/ReviewComposer.swift` | The review draft, its Mail-style sheet and docked bar, and sharing |
 | `gitty/Viewer/SettingsView.swift` | Settings: GitHub account, storage, about and licenses |
 | `gitty/Viewer/GitHubSignInView.swift` | The sign-in sheet: the code to enter on GitHub, and waiting for it |
