@@ -223,8 +223,8 @@ private struct ScreenEdgePan: UIViewRepresentable {
     }
 }
 
-/// The sidebar: Files, then your projects, and Settings at the bottom. Choosing one shows it in
-/// the Project tab.
+/// The sidebar: Files, then your projects, the code font, and Settings at the bottom. Choosing
+/// Files or a project shows it in the Project tab.
 struct SideBarView: View {
     /// The open project's id, or "" for Files.
     let selectedID: String
@@ -233,6 +233,9 @@ struct SideBarView: View {
     let onSettings: @MainActor () -> Void
 
     @State private var projects: [ProjectInfo] = []
+    /// The code font and its size, for pages and the symbol levels.
+    @AppStorage(CodeTextStyle.fontKey) private var codeFont: CodeFont = .courier
+    @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
     /// Whether it shows: it's built ahead of time, and loads the projects each time it opens.
     @Environment(SideBarState.self) private var state: SideBarState?
 
@@ -270,6 +273,28 @@ struct SideBarView: View {
                 if projects.isEmpty {
                     Text("To add a project, enter a GitHub repository link in the bar.")
                 }
+            }
+            Section("Code Font") {
+                Picker("Font", selection: $codeFont) {
+                    ForEach(CodeFont.allCases, id: \.self) { font in
+                        Text(font.title).tag(font)
+                    }
+                }
+                Stepper(value: $codeFontSize, in: CodeTextStyle.sizes, step: 1) {
+                    HStack {
+                        Text("Size")
+                        Spacer()
+                        Text("\(Int(codeFontSize)) pt")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                // How code looks in the chosen font and size.
+                Text(verbatim: "int main(void) { return 0; }")
+                    .font(CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize)).swiftUIFont)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .accessibilityHidden(true)
             }
         }
         .listStyle(.insetGrouped)

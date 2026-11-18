@@ -437,6 +437,7 @@ private struct SymbolFileHeader: View {
 private struct FileDeclarations: View {
     let symbols: [CodeSymbol]
     let onTap: @MainActor (CodeSymbol) -> Void
+    @Environment(\.codeTextStyle) private var codeTextStyle
 
     init(symbols: [CodeSymbol], onTap: @escaping @MainActor (CodeSymbol) -> Void) {
         self.symbols = symbols
@@ -448,7 +449,7 @@ private struct FileDeclarations: View {
             ForEach(symbols) { symbol in
                 (Text(Image(systemName: symbol.kind.systemImage)).foregroundStyle(.tint)
                     + Text(verbatim: " " + Self.declaration(of: symbol)))
-                    .font(.custom(RawTextStyle.fontName, fixedSize: RawTextStyle.fontSize))
+                    .font(codeTextStyle.swiftUIFont)
                     .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
@@ -581,6 +582,7 @@ private struct SymbolCode: View {
     let block: CodeBlock
     let onAppear: @MainActor () -> Void
     let onTap: @MainActor () -> Void
+    @Environment(\.codeTextStyle) private var codeTextStyle
 
     init(block: CodeBlock, onAppear: @escaping @MainActor () -> Void, onTap: @escaping @MainActor () -> Void) {
         self.block = block
@@ -591,7 +593,7 @@ private struct SymbolCode: View {
     var body: some View {
         Button(action: onTap) {
             Text(verbatim: block.code ?? TabExpansion.expand(block.symbol.preview))
-                .font(.custom(RawTextStyle.fontName, fixedSize: RawTextStyle.fontSize))
+                .font(codeTextStyle.swiftUIFont)
                 .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, RawTextStyle.insets.left)
@@ -643,6 +645,7 @@ nonisolated struct SymbolScrollRequest: Equatable, Sendable {
 /// One symbol in the list: its kind, name, line and the first lines of its code.
 struct SymbolCard: View {
     let symbol: CodeSymbol
+    @Environment(\.codeTextStyle) private var codeTextStyle
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -665,7 +668,7 @@ struct SymbolCard: View {
                     .foregroundStyle(.secondary)
             }
             Text(symbol.preview)
-                .font(.custom(RawTextStyle.fontName, fixedSize: 11))
+                .font(codeTextStyle.previewFont)
                 .foregroundStyle(.secondary)
                 .lineLimit(SymbolIndexer.previewLineCount)
                 .frame(maxWidth: .infinity, alignment: .leading)

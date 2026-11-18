@@ -4,7 +4,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 
 ## Features
 
-- **Safari's raw-text look:** Courier 13pt, wrapped lines, Safari's margins, light and dark mode.
+- **Safari's raw-text look:** Courier 13pt, wrapped lines, Safari's margins, light and dark mode. The sidebar's **Code Font** section switches to JetBrains Mono (bundled, under the SIL Open Font License) and sets the size, for pages and the symbol levels.
 - **Works offline, never expires:** downloaded files stay on the device and open without the network. They are downloaded again only when you pull to refresh, and an unchanged file costs just an HTTP 304.
 - **Picks up where you left off:** a file's page (the whole file) saves its reading position when scrolling stops, and comes back to it. It is stored as a text position, so it survives rotation and refreshes. The symbol list remembers its place too: the symbol in the middle of the screen, found again by name after a refresh. A file you open starts at its own entry in Code.
 - **Smooth, exact scrolling:** every line's height is known up front, so the scroll bar and text never jump.
@@ -96,7 +96,8 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/Languages/symbols-*.scm` | One symbols query per language (tags.scm conventions) |
 | `gitty/Core/CodeSymbol.swift` | A symbol: name, kind, range (with its leading comment), line, preview |
 | `gitty/Core/RawTextDecoder.swift` | Bytes to text, decoded the way Safari does it (BOM, charset, UTF-8, windows-1252) |
-| `gitty/Viewer/RawTextStyle.swift` | Safari's raw-text style constants, taken from WebKit's source |
+| `gitty/Viewer/RawTextStyle.swift` | Safari's raw-text style constants, taken from WebKit's source, and the chosen code font (`CodeTextStyle`) |
+| `gitty/Fonts/` | JetBrains Mono Regular and its license (registered at launch) |
 | `gitty/Viewer/FileBar.swift` | Bottom bar, loading line and the bar + selector stack. Sizes in `FileBarMetrics` |
 | `gitty/Viewer/ModeSelector.swift` | The zoom levels (Project / Files / Symbols / Code) and their selector |
 | `gitty/Viewer/ProjectFilesView.swift` | The open project's files by directory, the filter, Download All, sign-in when a repository isn't found |

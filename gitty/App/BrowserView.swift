@@ -20,6 +20,9 @@ struct BrowserView: View {
     @State private var isShowingSettings = false
     /// The review that Comment adds to, kept until it's shared or deleted.
     @State private var review = ReviewDraft()
+    /// The code font and size, chosen in the sidebar.
+    @AppStorage(CodeTextStyle.fontKey) private var codeFont: CodeFont = .courier
+    @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
 
     private var currentURL: URL? {
         currentURLString.isEmpty ? nil : URL(string: currentURLString)
@@ -54,6 +57,7 @@ struct BrowserView: View {
         }
         .environment(sideBar)
         .environment(review)
+        .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize)))
         .sheet(isPresented: $isShowingSettings) { SettingsView() }
         .onOpenURL(perform: openShared)
         .onChange(of: isEditingAddress) { _, isEditing in

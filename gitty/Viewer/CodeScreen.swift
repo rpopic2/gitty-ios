@@ -47,6 +47,8 @@ struct CodeScreen: View {
     /// The review that Comment adds to.
     @Environment(ReviewDraft.self) private var review
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
+    /// The code font: when it changes, the pages' text is styled again.
+    @Environment(\.codeTextStyle) private var codeTextStyle
 
     init(url: URL, mode: Binding<ViewMode>, projectID: String, opensAtFile: Bool = false,
          isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
@@ -96,6 +98,7 @@ struct CodeScreen: View {
             if model.symbolIndex.isReady { model.loadProjectSymbols() }
         }
         .onChange(of: symbolQuery, initial: true) { model.search(symbolQuery) }
+        .onChange(of: codeTextStyle) { Task { await model.restyle() } }
         .navigationDestination(item: $openedSymbolID) { openedID in
             SymbolPager(
                 symbols: pagerSymbols,

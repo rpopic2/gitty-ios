@@ -34,6 +34,8 @@ struct SymbolPager: View {
     @State private var hasPaged = false
     /// Swiping from the right edge pages here, so it doesn't open the sidebar.
     @Environment(SideBarState.self) private var sideBar: SideBarState?
+    /// A page takes its text again when the code font changes.
+    @Environment(\.codeTextStyle) private var codeTextStyle
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -150,7 +152,11 @@ struct SymbolPager: View {
     /// each time the file is refreshed (its text is then a new object).
     private func pageID(for symbol: CodeSymbol, text: NSAttributedString?) -> Int {
         guard let text else { return -1 - symbol.id }
-        return symbol.kind == .file ? ObjectIdentifier(text).hashValue : symbol.id
+        guard symbol.kind != .file else { return ObjectIdentifier(text).hashValue }  // new object when restyled
+        var hasher = Hasher()
+        hasher.combine(symbol.id)
+        hasher.combine(codeTextStyle)
+        return hasher.finalize()
     }
 }
 

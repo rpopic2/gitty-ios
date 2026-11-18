@@ -104,6 +104,19 @@ final class CodeDocumentModel {
         await download(isRefresh: true)
     }
 
+    /// The code font changed: style the text again (the same text, so the symbols stay). Other
+    /// files' page texts are styled again when next needed.
+    func restyle() async {
+        guard case .loaded = phase, let document = await store.cached(url) else { return }
+        let rendered = await Task.detached(priority: .userInitiated) {
+            RawTextStyle.render(document)
+        }.value
+        guard case .loaded = phase else { return }
+        phase = .loaded(rendered, version: UUID())
+        otherTexts.removeAll()
+        textOrder.removeAll()
+    }
+
     /// Pull to refresh on a file's page: downloads that file again. Another project file's
     /// page shows the new text once it's loaded, and its symbols are indexed again.
     func refresh(file: URL?) async {
