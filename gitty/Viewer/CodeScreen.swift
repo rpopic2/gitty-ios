@@ -350,7 +350,7 @@ struct CodeScreen: View {
         }
     }
 
-    /// While searching in Symbols mode, scrolling the cards closes the search.
+    /// While searching in Symbols mode, a swipe on the cards closes the search.
     private var closeSearchAction: (@MainActor () -> Void)? {
         guard isSearchingSymbols else { return nil }
         return { isSearchingSymbols = false }

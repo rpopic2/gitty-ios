@@ -210,7 +210,7 @@ private struct BarTextField: UIViewRepresentable {
 
 /// Searching symbols: the bar becomes a search field above the keyboard, and the list filters as
 /// you type. The keyboard's Search key or a swipe down closes it and keeps the filter (so does
-/// scrolling the cards, in Symbols); the field's clear button clears it.
+/// a swipe on the cards, in Symbols); the field's clear button clears it.
 struct SymbolSearchEditor: View {
     @Binding var query: String
     let onClose: @MainActor () -> Void

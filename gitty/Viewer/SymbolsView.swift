@@ -19,8 +19,8 @@ struct SymbolsView: View {
     let barTapCount: Int
     let onOpen: @MainActor (CodeSymbol) -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
-    /// While searching: scrolling the cards closes the search field (the filter stays), like
-    /// scrolling a page in Safari ends editing the address.
+    /// While searching: a swipe on the cards closes the search field (the filter stays). That
+    /// swipe only closes it: the list doesn't scroll and the bar doesn't shrink.
     let onCloseSearch: (@MainActor () -> Void)?
 
     /// Not observed: updated every scroll frame without redrawing anything.
@@ -83,6 +83,10 @@ struct SymbolsView: View {
         }
     }
 
+    private var closesSearchOnSwipe: Bool {
+        isActive && onCloseSearch != nil
+    }
+
     private var list: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
@@ -102,17 +106,23 @@ struct SymbolsView: View {
         }
         .scrollPosition(id: $position, anchor: .center)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
-        .scrollDisabled(!isActive)  // hidden: stays put, and leaves status-bar taps to File
+        // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe that
+        // closes the search mustn't scroll; scrolling comes back for the next swipe.
+        .scrollDisabled(!isActive || closesSearchOnSwipe)
+        .gesture(
+            DragGesture(minimumDistance: 10).onChanged { _ in
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                to: nil, from: nil, for: nil)
+                onCloseSearch?()
+            },
+            including: closesSearchOnSwipe ? .all : .subviews
+        )
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .background(Color(uiColor: .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in
             scroll.isUserScrolling = phase == .interacting || phase == .decelerating
             if phase == .interacting {
                 scroll.tracker.beginDrag(at: context.geometry.contentOffset.y)
-                // The drag hides the keyboard; without it the search field would stay, alone,
-                // in place of the bar and the mode selector.
-                if isActive { onCloseSearch?() }
             }
         }
         .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
