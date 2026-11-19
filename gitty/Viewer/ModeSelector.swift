@@ -1,12 +1,10 @@
 import SwiftUI
 
-/// The levels, out to in, like Years / Months / All in Photos: the selector under the
-/// bar switches between them.
+/// The levels, like Photos' Years and All: the project's files, and its code as an outline.
+/// The selector under the bar switches between them.
 enum ViewMode: String, CaseIterable, Identifiable {
     /// The open project's files (chosen in the sidebar), or Files.
     case project
-    /// Symbols as one-line rows, grouped under a header per file.
-    case files
     /// Every symbol's whole code, edge to edge.
     case code
 
@@ -15,7 +13,6 @@ enum ViewMode: String, CaseIterable, Identifiable {
     var title: LocalizedStringKey {
         switch self {
         case .project: "Project"
-        case .files: "Files"
         case .code: "Code"
         }
     }

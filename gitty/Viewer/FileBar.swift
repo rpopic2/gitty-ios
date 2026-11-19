@@ -66,6 +66,9 @@ struct FileBar: View {
     /// non-empty search is shown instead of the title, with a clear button.
     let searchQuery: String?
     let onClearSearch: (@MainActor () -> Void)?
+    /// At the Code level: Collapse All and Expand All in the menu.
+    let onCollapseAll: (@MainActor () -> Void)?
+    let onExpandAll: (@MainActor () -> Void)?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -73,7 +76,8 @@ struct FileBar: View {
          onExpand: @escaping @MainActor () -> Void, onEdit: @escaping @MainActor () -> Void,
          copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
-         searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil) {
+         searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
+         onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil) {
         self.title = title
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
@@ -85,6 +89,8 @@ struct FileBar: View {
         self.onOpenInBrowser = onOpenInBrowser
         self.searchQuery = searchQuery
         self.onClearSearch = onClearSearch
+        self.onCollapseAll = onCollapseAll
+        self.onExpandAll = onExpandAll
     }
 
     private var activeSearch: String? {
@@ -136,6 +142,12 @@ struct FileBar: View {
             }
             if let onOpenInBrowser {
                 Button("Open in Browser", systemImage: "safari") { onOpenInBrowser() }
+            }
+            if let onCollapseAll, let onExpandAll {
+                Section {
+                    Button("Collapse All", systemImage: "chevron.right.2") { onCollapseAll() }
+                    Button("Expand All", systemImage: "chevron.down.2") { onExpandAll() }
+                }
             }
         }
         .accessibilityElement(children: .ignore)
@@ -288,6 +300,8 @@ struct BottomBarStack: View {
     let onClearSearch: (@MainActor () -> Void)?
     /// The sort button beside the mode selector (`nil`: none).
     let sorting: Binding<ListSorting>?
+    let onCollapseAll: (@MainActor () -> Void)?
+    let onExpandAll: (@MainActor () -> Void)?
     /// A review set aside shows above the bar, like a minimized Mail draft.
     @Environment(ReviewDraft.self) private var review: ReviewDraft?
 
@@ -299,7 +313,8 @@ struct BottomBarStack: View {
          copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
-         sorting: Binding<ListSorting>? = nil) {
+         sorting: Binding<ListSorting>? = nil,
+         onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil) {
         self.title = title
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
@@ -313,6 +328,8 @@ struct BottomBarStack: View {
         self.onOpenInBrowser = onOpenInBrowser
         self.searchQuery = searchQuery
         self.onClearSearch = onClearSearch
+        self.onCollapseAll = onCollapseAll
+        self.onExpandAll = onExpandAll
     }
 
     var body: some View {
@@ -324,7 +341,8 @@ struct BottomBarStack: View {
             FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
                     isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
                     copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
-                    searchQuery: searchQuery, onClearSearch: onClearSearch)
+                    searchQuery: searchQuery, onClearSearch: onClearSearch,
+                    onCollapseAll: onCollapseAll, onExpandAll: onExpandAll)
             if !isCollapsed, let mode {
                 HStack(spacing: 8) {
                     if let sorting {

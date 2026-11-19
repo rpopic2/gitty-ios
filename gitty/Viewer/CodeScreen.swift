@@ -35,8 +35,10 @@ struct CodeScreen: View {
     @State private var openedAnchor: PageAnchor?
     /// The symbol on screen in the pager.
     @State private var pagerSymbolID: Int?
-    /// Brings a card into view in the Symbols list (the pager closing on another symbol).
+    /// Brings a symbol into view in the Code list (the pager closing on another symbol).
     @State private var listScrollRequest: SymbolScrollRequest?
+    /// Collapse All or Expand All, from the bar's menu.
+    @State private var collapseRequest: CollapseRequest?
     /// The symbols the pager pages through: the list's (search results, too) when one is tapped.
     @State private var pagerSymbols: [CodeSymbol] = []
     /// Symbol search. Stays until it's cleared or another file is opened.
@@ -229,18 +231,18 @@ struct CodeScreen: View {
             SymbolsView(
                 symbols: shownSymbols,
                 query: shownQuery,
-                mode: $mode,
                 isActive: mode.showsSymbols,
                 ownText: ownText,
                 scrollRequest: listScrollRequest,
+                collapseRequest: collapseRequest,
                 initialID: { savedListSymbolID() },
                 onCenteredSymbolChange: { saveListPosition($0) },
                 isBarCollapsed: { model.isBarCollapsed },
                 barTapCount: model.barTapCount,
                 openFile: model.url,
+                collapseScope: model.collapseScope,
                 onOpen: { openPager(at: $0, anchor: nil) },
                 onOpenAt: { openPager(at: $0, anchor: $1) },
-                onOpenFile: { openFile($0) },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 onCloseSearch: closeSearchAction,
                 albumContext: albumContext
@@ -250,7 +252,7 @@ struct CodeScreen: View {
             // A fresh list for each search's results, for the full list after, and for each order
             // (ids are places in the list, so they move; the list finds its symbol by name).
             .id([shownQuery, model.symbolSorting.order.rawValue, model.symbolSorting.isReversed ? "reversed" : "",
-                 hasSymbolQuery && searchesFileNames ? "files" : "", model.activeAlbum?.id.uuidString ?? ""])
+                 model.activeAlbum?.id.uuidString ?? ""])
         case .unsupportedLanguage:
             placeholder {
                 ContentUnavailableView(
@@ -326,25 +328,18 @@ struct CodeScreen: View {
         ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbols[id]), for: model.url)
     }
 
-    /// The symbols matching the search, best first; all of them in file order without one.
-    /// The search runs in the background (`CodeDocumentModel.search`): these are the matches so
-    /// far, which fill in while it runs.
-    /// At the Files level, the search is by file name instead: the matching files, each with
-    /// all its symbols.
+    /// Without a search, every symbol in file order (or the album's). With one: the files whose
+    /// name contains it (each with all its symbols), then the symbols it matches, best first.
+    /// The symbol search runs in the background (`CodeDocumentModel.search`): these are the
+    /// matches so far, which fill in while it runs.
     private var shownSymbols: [CodeSymbol] {
         guard hasSymbolQuery else { return model.listSymbols }
-        return searchesFileNames ? model.symbols(inFilesNamed: symbolQuery) : model.albumSearchResults()
+        return model.combinedSearchResults(symbolQuery)
     }
 
     /// The search `shownSymbols` are for: "" while the full list shows.
     private var shownQuery: String {
-        guard hasSymbolQuery else { return "" }
-        return searchesFileNames ? symbolQuery : model.resultsQuery
-    }
-
-    /// The Files level searches file names; the other levels, symbols.
-    private var searchesFileNames: Bool {
-        mode == .files
+        hasSymbolQuery ? model.resultsQuery : ""
     }
 
     private var hasSymbolQuery: Bool {
@@ -353,7 +348,7 @@ struct CodeScreen: View {
 
     /// The search hasn't finished going through the symbols (or hasn't started on this query).
     private var isSearchPending: Bool {
-        hasSymbolQuery && !searchesFileNames && (model.isSearching || model.resultsQuery != symbolQuery)
+        hasSymbolQuery && (model.isSearching || model.resultsQuery != symbolQuery)
     }
 
     /// Full-screen, opaque, so the hidden file text never shows through.
@@ -370,8 +365,7 @@ struct CodeScreen: View {
     private var bottom: some View {
         if isSearchingSymbols && barSearchesSymbols {
             SymbolSearchEditor(query: $symbolQuery, isSearching: isSearchPending,
-                               placeholder: searchesFileNames ? String(localized: "Search Files")
-                                   : String(localized: "Search Symbols"),
+                               placeholder: String(localized: "Search Files and Symbols"),
                                onClose: { isSearchingSymbols = false })
         } else if isEditingAddress {
             AddressEditor(
@@ -400,7 +394,9 @@ struct CodeScreen: View {
                 // The symbol levels show the active search in the bar; Project edits the address.
                 searchQuery: barSearchesSymbols ? symbolQuery : nil,
                 onClearSearch: { symbolQuery = "" },
-                sorting: barSorting
+                sorting: barSorting,
+                onCollapseAll: collapseAllAction(true),
+                onExpandAll: collapseAllAction(false)
             )
         }
     }
@@ -519,14 +515,10 @@ struct CodeScreen: View {
         listScrollRequest = SymbolScrollRequest(0)
     }
 
-    /// A file header's open button at the Files level: that file's code, at its entry, without
-    /// reopening anything (it's already in the list). It counts as opening it.
-    private func openFile(_ file: URL) {
-        let entry = indexedSymbols.first { $0.kind == .file && ($0.fileURL ?? model.url) == file }
-        guard let entry else { return onOpen(file) }
-        Task { await OpenHistory.shared.recordOpen(file) }
-        withAnimation(.smooth(duration: 0.3)) { mode = .code }
-        listScrollRequest = SymbolScrollRequest(entry.id)
+    /// The bar menu's Collapse All and Expand All, at the Code level once the list shows.
+    private func collapseAllAction(_ collapses: Bool) -> (@MainActor () -> Void)? {
+        guard barSearchesSymbols, model.symbolIndex.isReady else { return nil }
+        return { collapseRequest = CollapseRequest(collapses: collapses) }
     }
 
     /// Hands the URL to the default browser.

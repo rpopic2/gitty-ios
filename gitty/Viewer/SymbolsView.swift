@@ -1,15 +1,13 @@
 import SwiftUI
 import UIKit
 
-/// The symbol levels: every top-level definition of the open file and its project. Tapping
-/// one opens its card, full screen (see `SymbolPager`).
-///
-/// The levels of `ViewMode`, chosen with the selector under the bar (pinching is for closing a
-/// symbol's card only):
-/// - Files: each file's declarations, one line per symbol like a C header, under a sticky header
-///   (its name and count; tap to fold it, or show it in Code). Tapping a line shows its code.
-/// - Code: every symbol's whole code, edge to edge in the raw-text style, each under a slim
-///   title that sticks to the top while you read it. Tap one to open its page.
+/// The Code level: every top-level definition of the open file and its project, as an outline.
+/// Each file has a title line, and each symbol a title with its declaration, which sticks to the
+/// top while you read its code, edge to edge in the raw-text style under it. Tap a title to
+/// collapse or expand it (a file's folds all its symbols); Collapse All (the bar's menu, a
+/// file title's menu, or pinching in) leaves just the titles, like a C header, and Expand All
+/// (or pinching out) brings the code back, keeping your place. Tap the code to open its page,
+/// full screen (see `SymbolPager`).
 ///
 /// Equatable, so the bar collapsing or expanding (which redraws the screen around it, several
 /// times in a fling) doesn't redraw this list and its every symbol: use `.equatable()`.
@@ -18,32 +16,33 @@ struct SymbolsView: View, Equatable {
     /// The symbol search the list is filtered by ("" for none). Give each search its own list
     /// (`.id(query)`): the results start at the top, and clearing the search starts a fresh full
     /// list at the place from before the search. (One list kept through searches piles up the
-    /// cards it built for every set of results, and scrolling gets slower.)
+    /// blocks it built for every set of results, and scrolling gets slower.)
     let query: String
     /// False while another mode covers the list (it stays alive to keep its place).
     let isActive: Bool
-    /// The open file's text, for its symbols' code at the Code level (ready at once).
+    /// The open file's text, for its symbols' code (ready at once).
     let ownText: NSString?
-    /// Brings a card into view (the pager closing on another card). Each request scrolls once,
-    /// even to the same card as last time.
+    /// Brings a symbol into view (the pager closing on another one). Each request scrolls once,
+    /// even to the same symbol as last time.
     let scrollRequest: SymbolScrollRequest?
+    /// Collapse All or Expand All, from the bar's menu. Each request runs once.
+    let collapseRequest: CollapseRequest?
     /// The saved place in the list, where it starts.
     let initialID: @MainActor () -> Int?
-    /// Another card reached the middle of the screen (to save the place). It's reported without
+    /// Another symbol reached the top of the screen (to save the place). It's reported without
     /// redrawing anything, here or in the screen around it: that happens many times a second.
     let onCenteredSymbolChange: @MainActor (Int) -> Void
     /// Whether the bar is collapsed now. Read as the list scrolls rather than passed in, so the
     /// bar changing doesn't redraw the list.
     let isBarCollapsed: @MainActor () -> Bool
     let barTapCount: Int
-    /// The open file, which symbols without a `fileURL` are in (for the grouped view).
+    /// The open file, which symbols without a `fileURL` are in.
     let openFile: URL
+    /// Where the list's files are, for what's collapsed (see `CollapsedCodeStore`).
+    let collapseScope: String
     let onOpen: @MainActor (CodeSymbol) -> Void
-    /// A tap on a symbol's code at the Code level: open its page with the tapped line where
-    /// it was on screen.
+    /// A tap on a symbol's code: open its page with the tapped line where it was on screen.
     let onOpenAt: (@MainActor (CodeSymbol, PageAnchor) -> Void)?
-    /// A file header's open button: show that file's code (the Code level, at its entry).
-    let onOpenFile: @MainActor (URL) -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
     /// While searching: a swipe on the list closes the search field (the filter stays). That
     /// swipe only closes it: the list doesn't scroll and the bar doesn't shrink.
@@ -51,61 +50,51 @@ struct SymbolsView: View, Equatable {
     /// For the long-press menus' Add to Album (`nil`: the file isn't in a project).
     let albumContext: AlbumMenuContext?
 
-    /// The zoom level, shared with the selector under the bar (Project hides this view).
-    @Binding var mode: ViewMode
-    /// `mode` when this was made, for `==`.
-    private let modeValue: ViewMode
-    /// The level on screen. It follows `mode`, one step behind, so the new level can open at the
-    /// symbol that was in the middle (see `onChange(of: mode)`).
-    @State private var zoom: ViewMode
-    @State private var folded = SymbolFoldStore.standard.foldedFiles()
-    @State private var groupCache = GroupCache()
-    /// The Code level's prepared code, per symbol (this list's ids).
+    /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
-    /// Where the other layout should open: the symbol that was in the middle, or a tapped row.
-    @State private var switchAnchor: Int?
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
-    /// The Code level's line-number peek.
+    /// The line-number peek.
     @State private var peek = CodePeek()
-    /// What's collapsed at the Code level (shared, saved).
+    /// This pinch has already collapsed or expanded everything (once per pinch).
+    @State private var pinchHandled = false
+    /// What's collapsed (shared, saved).
     private let collapsed = CollapsedCodeStore.shared
-    /// The list's width, which the Code level's code wraps in.
+    /// The list's width, which the code wraps in.
     @State private var codeWidth: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
-    /// The font and syntax colors: a new theme colors the Code level's blocks again.
+    /// The font and syntax colors: a new theme colors the blocks again.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(symbols: [CodeSymbol], query: String, mode: Binding<ViewMode>, isActive: Bool,
+    init(symbols: [CodeSymbol], query: String, isActive: Bool,
          ownText: NSString?,
          scrollRequest: SymbolScrollRequest?,
+         collapseRequest: CollapseRequest?,
          initialID: @escaping @MainActor () -> Int? = { nil },
          onCenteredSymbolChange: @escaping @MainActor (Int) -> Void,
          isBarCollapsed: @escaping @MainActor () -> Bool, barTapCount: Int, openFile: URL,
+         collapseScope: String,
          onOpen: @escaping @MainActor (CodeSymbol) -> Void,
          onOpenAt: (@MainActor (CodeSymbol, PageAnchor) -> Void)? = nil,
-         onOpenFile: @escaping @MainActor (URL) -> Void,
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
          onCloseSearch: (@MainActor () -> Void)? = nil,
          albumContext: AlbumMenuContext? = nil) {
         self.symbols = symbols
         self.query = query
-        _mode = mode
-        modeValue = mode.wrappedValue
-        _zoom = State(initialValue: mode.wrappedValue.showsSymbols ? mode.wrappedValue : .files)
         self.isActive = isActive
         self.ownText = ownText
         self.scrollRequest = scrollRequest
+        self.collapseRequest = collapseRequest
         self.initialID = initialID
         self.onCenteredSymbolChange = onCenteredSymbolChange
         self.isBarCollapsed = isBarCollapsed
         self.barTapCount = barTapCount
         self.openFile = openFile
+        self.collapseScope = collapseScope
         self.onOpen = onOpen
         self.onOpenAt = onOpenAt
-        self.onOpenFile = onOpenFile
         self.onBarCollapsedChange = onBarCollapsedChange
         self.onCloseSearch = onCloseSearch
         self.albumContext = albumContext
@@ -114,125 +103,82 @@ struct SymbolsView: View, Equatable {
     /// What the list shows. The closures aren't compared: they reach the screen's state and
     /// model, which stay current.
     nonisolated static func == (lhs: SymbolsView, rhs: SymbolsView) -> Bool {
-        lhs.symbols == rhs.symbols && lhs.query == rhs.query && lhs.modeValue == rhs.modeValue
+        lhs.symbols == rhs.symbols && lhs.query == rhs.query
             && lhs.isActive == rhs.isActive && lhs.ownText === rhs.ownText
-            && lhs.scrollRequest == rhs.scrollRequest && lhs.barTapCount == rhs.barTapCount
-            && lhs.openFile == rhs.openFile && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
+            && lhs.scrollRequest == rhs.scrollRequest && lhs.collapseRequest == rhs.collapseRequest
+            && lhs.barTapCount == rhs.barTapCount
+            && lhs.openFile == rhs.openFile && lhs.collapseScope == rhs.collapseScope
+            && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
             && lhs.albumContext == rhs.albumContext
     }
 
     var body: some View {
         ScrollViewReader { reader in
-            Group {
-                switch zoom {
-                case .project, .files:
-                    scrollContainer { groupedRows }
-                        .onAppear { moveToStart(reader) }
-                        .transition(.opacity)
-                case .code:
-                    scrollContainer { fullCode }
-                        .onAppear { moveToStart(reader) }
-                        .transition(.opacity)
+            scrollContainer { fullCode }
+                .onAppear { moveToStart(reader) }
+                .simultaneousGesture(pinch(reader), including: isActive ? .all : .subviews)
+                .onChange(of: scrollRequest) { _, request in
+                    guard let request else { return }
+                    reader.scrollTo(request.id, anchor: .top)
                 }
-            }
-            .onChange(of: scrollRequest) { _, request in
-                guard let request else { return }
-                reader.scrollTo(scrollTarget(for: request.id), anchor: anchor)
-            }
+                .onChange(of: collapseRequest) { _, request in
+                    guard let request else { return }
+                    setAllCollapsed(request.collapses, reader)
+                }
         }
-        .onChange(of: mode) { _, mode in
-            // Another level (the selector): it opens at the symbol in the middle.
-            guard mode.showsSymbols, mode != zoom else { return }
-            switchAnchor = scroll.centeredID
-            scroll.isPositioned = false  // until the new level has moved to the anchor
-            withAnimation(.smooth(duration: 0.3)) { zoom = mode }
-        }
-    }
-
-    /// What to scroll to for a symbol: itself, except at the Files level, where a whole file is
-    /// one item (its declarations), so the file's.
-    private func scrollTarget(for id: Int) -> Int {
-        guard zoom == .files || zoom == .project else { return id }
-        return groupCache.anchor(for: id, in: symbols, openFile: openFile, query: query) ?? id
-    }
-
-    /// Where a symbol lands when it's brought into view: zoomed in, a symbol can be taller than
-    /// the screen, so its start goes to the top; otherwise it's centered.
-    private var anchor: UnitPoint {
-        zoom == .code ? .top : .center
     }
 
     /// `scrollPosition(id:)` ignores a starting value during the first layout and opens on the
-    /// first item, so move to the start explicitly: after switching levels, the symbol that was in the
-    /// middle; otherwise the saved place. Search results start at the top, with the best match.
+    /// first item, so move to the start explicitly: the saved place. Search results start at the
+    /// top, with the best match.
     private func moveToStart(_ reader: ScrollViewProxy) {
-        let target = (switchAnchor ?? (query.isEmpty ? initialID() ?? scroll.centeredID : nil)).map(scrollTarget(for:))
-        switchAnchor = nil
-        if let target { reader.scrollTo(target, anchor: anchor) }
+        let target = query.isEmpty ? initialID() ?? scroll.centeredID : nil
+        if let target { reader.scrollTo(target, anchor: .top) }
         scroll.centeredID = target
         scroll.isPositioned = true
     }
 
-    /// The card in the middle, for `scrollPosition`: kept in the unobserved `scroll`, so a new
-    /// card reaching the middle redraws nothing, and reported to `onCenteredSymbolChange` once
-    /// the list has moved to where it starts (its first layout, on the first card, isn't).
-    /// It's the same binding on every redraw: a new one makes SwiftUI apply the position again,
-    /// which stops a fling dead (as the bar collapsing redraws this view mid-fling).
+    /// The symbol at the top, kept in the unobserved `scroll`, so a new one reaching the top
+    /// redraws nothing, and reported to `onCenteredSymbolChange` once the list has moved to
+    /// where it starts (its first layout, on the first symbol, isn't).
     private var centeredID: Binding<Int?> {
         scroll.report = onCenteredSymbolChange
         return scroll.centeredBinding
     }
 
-    // MARK: Layouts
-
-    /// One item per file, not per symbol: the file's declarations are a single block, so the
-    /// lazy list has a file's worth of items to deal with, not a project's worth of symbols.
-    private var groupedRows: some View {
-        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-            ForEach(groupCache.groups(of: symbols, openFile: openFile, query: query)) { group in
-                let isFolded = folded.contains(group.file)
-                Section {
-                    // Always there (empty when folded): see `fullCode`.
-                    FileDeclarations(symbols: isFolded ? [] : group.symbols,
-                                     fileExtension: group.file.pathExtension, file: group.file,
-                                     albumContext: albumContext) { showCode($0) }
-                        .id(group.anchorID ?? -1)  // the file as a scroll target (never -1 here)
-                } header: {
-                    SymbolFileHeader(
-                        name: group.file.displayFileName,
-                        count: group.symbols.count,
-                        isFolded: isFolded,
-                        onToggle: { toggleFold(group.file) },
-                        onOpenFile: { onOpenFile(group.file) }
-                    )
-                    .contextMenu {
-                        if let albumContext { AlbumMenuItems(items: [.file(group.file)], context: albumContext) }
-                    }
-                }
-            }
+    /// Collapse All or Expand All, keeping the symbol at the top where it is.
+    private func setAllCollapsed(_ isCollapsed: Bool, _ reader: ScrollViewProxy) {
+        let anchor = scroll.centeredID
+        collapsed.setAllCollapsed(isCollapsed, scope: collapseScope)
+        guard let anchor else { return }
+        Task { @MainActor in
+            await Task.yield()  // once the list has its new heights
+            reader.scrollTo(anchor, anchor: .top)
         }
-        .padding(.bottom, 12)
-        .scrollTargetLayout()
     }
 
-    /// Every symbol's whole code, edge to edge, each under a slim title that sticks while you
-    /// read it. A file's own entry is just a title line before its symbols: tap it to read the
-    /// whole file on its page. The text isn't selectable (it's plain `Text`, cheap to scroll
-    /// through a big project); tap a symbol to open its page.
+    // MARK: Layout
+
+    /// Every symbol, each under a title that sticks while you read its code. A file's own
+    /// entry is just a title line before its symbols.
     ///
-    /// Each symbol is exactly one view, whatever it is (a file's entry is an empty one), so the
-    /// lazy list can count them from their types alone. With an `if` here, it had to run this
-    /// closure for every symbol of the project before showing anything, which took seconds on a
-    /// big one. Nothing per symbol is made until it scrolls in: its block is made in its view's
-    /// body. The open file's code is ready at once; other files' is prepared in the background,
-    /// the symbols on screen first and the next few ahead of time (`CodeBlockStore`).
+    /// Each symbol is exactly one view, whatever it is (a file's entry is an empty one, and so
+    /// is a collapsed or hidden symbol's code), so the lazy list can count them from their types
+    /// alone. With an `if` here, it had to run this closure for every symbol of the project
+    /// before showing anything, which took seconds on a big one. Nothing per symbol is made until
+    /// it scrolls in: its block is made in its view's body. The open file's code is ready at
+    /// once; other files' is prepared in the background, the symbols on screen first and the
+    /// next few ahead of time (`CodeBlockStore`).
     private var fullCode: some View {
         codeBlocks.symbols = symbols
         codeBlocks.ownText = ownText
         codeBlocks.use(theme: codeTextStyle.theme, openFile: openFile)
         let collapsed = collapsed
         let openFile = openFile
-        codeBlocks.isShown = { !collapsed.isHidden($0, openFile: openFile) && !collapsed.isCollapsed($0, openFile: openFile) }
+        let scope = collapseScope
+        codeBlocks.isShown = {
+            !collapsed.isHidden($0, openFile: openFile) && !collapsed.isCollapsed($0, openFile: openFile, scope: scope)
+        }
         codeBlocks.layoutKey = codeWidth > 0
             ? CodeLayoutKey(width: codeWidth - 2 * RawTextStyle.insets.left, style: codeTextStyle,
                             isDark: colorScheme == .dark)
@@ -241,13 +187,15 @@ struct SymbolsView: View, Equatable {
             ForEach(symbols) { symbol in
                 Section {
                     SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, collapsed: collapsed, openFile: openFile,
-                               albumContext: albumContext, onTap: { onOpen(symbol) },
+                               scope: scope, albumContext: albumContext, onTap: { onOpen(symbol) },
                                onTapAt: { anchor in
                                    if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
                                })
                 } header: {
                     // Tap to collapse: a symbol's code, or a whole file's symbols.
-                    CodeHeader(symbol: symbol, collapsed: collapsed, openFile: openFile, albumContext: albumContext)
+                    CodeHeader(symbol: symbol, collapsed: collapsed, openFile: openFile, scope: scope,
+                               albumContext: albumContext,
+                               onSetFileCollapsed: { setFileCollapsed($0, symbol) })
                 }
             }
         }
@@ -255,14 +203,18 @@ struct SymbolsView: View, Equatable {
         .modifier(PeekShift(peek: peek))  // the whole list slides while peeking
     }
 
-    /// What adding this entry to an album adds.
-    private func albumItem(for symbol: CodeSymbol) -> AlbumItem {
-        AlbumItem(symbol, openFile: openFile)
+    /// A file title's Collapse All / Expand All: its symbols.
+    private func setFileCollapsed(_ isCollapsed: Bool, _ entry: CodeSymbol) {
+        let file = entry.fileURL ?? openFile
+        let inFile = symbols.filter { $0.kind != .file && ($0.fileURL ?? openFile) == file }
+        withAnimation(.smooth(duration: 0.25)) {
+            collapsed.setCollapsed(isCollapsed, inFile, openFile: openFile, scope: collapseScope)
+        }
     }
 
-    // MARK: Switching
+    // MARK: Gestures
 
-    /// At the Code level: a drag from the left edge peeks at the line numbers.
+    /// A drag from the left edge peeks at the line numbers.
     private var peekGesture: some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .global)
             .onChanged { value in
@@ -274,23 +226,21 @@ struct SymbolsView: View, Equatable {
             }
     }
 
-    /// A row tapped at the Files level: its code, at that symbol.
-    private func showCode(_ symbol: CodeSymbol) {
-        collapsed.reveal(symbol, openFile: openFile)  // it's what you asked to see
-        switchAnchor = symbol.id
-        scroll.isPositioned = false
-        withAnimation(.smooth(duration: 0.3)) {
-            zoom = .code
-            mode = .code
-        }
-    }
-
-    private func toggleFold(_ file: URL) {
-        let isFolded = !folded.contains(file)
-        withAnimation(.smooth(duration: 0.25)) {
-            if isFolded { folded.insert(file) } else { folded.remove(file) }
-        }
-        SymbolFoldStore.standard.setFolded(isFolded, file)
+    /// Pinching in (fingers together) collapses everything to its titles; pinching out expands
+    /// it all again. Once per pinch, when it passes the threshold.
+    private func pinch(_ reader: ScrollViewProxy) -> some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                guard !pinchHandled else { return }
+                if value.magnification < 0.8 {
+                    pinchHandled = true
+                    setAllCollapsed(true, reader)
+                } else if value.magnification > 1.25 {
+                    pinchHandled = true
+                    setAllCollapsed(false, reader)
+                }
+            }
+            .onEnded { _ in pinchHandled = false }
     }
 
     // MARK: Scrolling
@@ -299,13 +249,13 @@ struct SymbolsView: View, Equatable {
         isActive && onCloseSearch != nil
     }
 
-    /// The scroll view either layout sits in: its place, the bar collapsing as you scroll, the
-    /// swipe that closes the search, and the Code level's peek.
+    /// The scroll view: its place, the bar collapsing as you scroll, the swipe that closes the
+    /// search, and the peek.
     private func scrollContainer<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         ScrollView {
             content()
         }
-        .modifier(PositionTracking(position: centeredID, byVisibility: zoom == .code))
+        .modifier(PositionTracking(position: centeredID))
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe that
         // closes the search mustn't scroll; scrolling comes back for the next swipe.
@@ -318,13 +268,13 @@ struct SymbolsView: View, Equatable {
             },
             including: closesSearchOnSwipe ? .all : .subviews
         )
-        .simultaneousGesture(peekGesture, including: isActive && zoom == .code ? .all : .subviews)
+        .simultaneousGesture(peekGesture, including: isActive ? .all : .subviews)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-            if zoom == .code, width != codeWidth { codeWidth = width }
+            if width != codeWidth { codeWidth = width }
         }
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
-        // At the Code level, the strip a peek uncovers is the code's background.
-        .background(Color(uiColor: zoom == .code ? RawTextStyle.backgroundColor : .systemGroupedBackground))
+        // The strip a peek uncovers is the code's background.
+        .background(Color(uiColor: RawTextStyle.backgroundColor))
         .onScrollPhaseChange { _, phase, context in
             scroll.isUserScrolling = phase == .interacting || phase == .decelerating
             scroll.isCoasting = phase == .decelerating
@@ -349,146 +299,57 @@ struct SymbolsView: View, Equatable {
     }
 }
 
-/// The grouped view's files, worked out again only when the symbols change (not on every
-/// redraw: a big project has tens of thousands of symbols). Not observed.
-private final class GroupCache {
-    private var key: (query: String, count: Int, first: Int?, last: Int?)?
-    private var groups: [SymbolFileGroup] = []
+/// Collapse All (`collapses`) or Expand All, from the bar's menu. A new request (a new `token`)
+/// runs again, even the same one.
+nonisolated struct CollapseRequest: Equatable, Sendable {
+    let collapses: Bool
+    let token = UUID()
 
-    /// Each symbol's file's anchor (see `SymbolFileGroup.anchorID`), made with `groups`.
-    private var anchors: [Int: Int] = [:]
-
-    func groups(of symbols: [CodeSymbol], openFile: URL, query: String) -> [SymbolFileGroup] {
-        let key = (query: query, count: symbols.count, first: symbols.first?.id, last: symbols.last?.id)
-        if let old = self.key, old == key { return groups }
-        self.key = key
-        groups = SymbolFileGroup.groups(of: symbols, openFile: openFile)
-        anchors = [:]
-        for group in groups {
-            guard let anchor = group.anchorID else { continue }
-            if let entry = group.entryID { anchors[entry] = anchor }
-            for symbol in group.symbols { anchors[symbol.id] = anchor }
-        }
-        return groups
-    }
-
-    func anchor(for id: Int, in symbols: [CodeSymbol], openFile: URL, query: String) -> Int? {
-        _ = groups(of: symbols, openFile: openFile, query: query)
-        return anchors[id]
+    init(collapses: Bool) {
+        self.collapses = collapses
     }
 }
 
-/// A file in the grouped view: fold it with a tap, open it with the button at the end. It
-/// sticks to the top while its symbols scroll under it.
-private struct SymbolFileHeader: View {
-    let name: String
-    let count: Int
-    let isFolded: Bool
-    let onToggle: @MainActor () -> Void
-    let onOpenFile: @MainActor () -> Void
-
-    init(name: String, count: Int, isFolded: Bool, onToggle: @escaping @MainActor () -> Void,
-         onOpenFile: @escaping @MainActor () -> Void) {
-        self.name = name
-        self.count = count
-        self.isFolded = isFolded
-        self.onToggle = onToggle
-        self.onOpenFile = onOpenFile
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Button(action: onToggle) {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isFolded ? 0 : 90))
-                    Text(name)
-                        .font(.headline)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text("· \(count)")
-                        .font(.subheadline)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(name), \(count) symbols")
-            .accessibilityValue(isFolded ? Text("Folded") : Text("Unfolded"))
-            .accessibilityHint(isFolded ? Text("Shows this file's symbols") : Text("Hides this file's symbols"))
-
-            Button("Open \(name)", systemImage: "arrow.up.forward.square") { onOpenFile() }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-        }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 44)
-        .background(.bar)
-    }
-}
-
-/// A file's symbols at the Files level, like a C header: each one's declaration (the first line
-/// of its definition), with its kind's icon, long ones wrapped. One view for the whole file;
-/// tapping a line shows that symbol's code.
-private struct FileDeclarations: View {
-    let symbols: [CodeSymbol]
-    /// The file's, for its syntax colors.
-    let fileExtension: String
-    /// The file they're in, for Add to Album.
-    let file: URL
+/// A title: tap it to collapse or expand what's under it (a symbol's code, or a file's
+/// symbols); touch and hold for Add to Album (and on a file's, Collapse All and Expand All in
+/// it). Hidden (but still one view) in a collapsed file. Observes the collapsed state itself, so
+/// a tap redraws just the titles and blocks on screen, not the list.
+private struct CodeHeader: View {
+    let symbol: CodeSymbol
+    let collapsed: CollapsedCodeStore
+    let openFile: URL
+    let scope: String
     let albumContext: AlbumMenuContext?
-    let onTap: @MainActor (CodeSymbol) -> Void
-    @Environment(\.codeTextStyle) private var codeTextStyle
+    /// A file's menu: collapse (`true`) or expand all its symbols.
+    let onSetFileCollapsed: @MainActor (Bool) -> Void
 
-    init(symbols: [CodeSymbol], fileExtension: String, file: URL, albumContext: AlbumMenuContext?,
-         onTap: @escaping @MainActor (CodeSymbol) -> Void) {
-        self.symbols = symbols
-        self.fileExtension = fileExtension
-        self.file = file
-        self.albumContext = albumContext
-        self.onTap = onTap
-    }
-
-    /// Nothing when there are no symbols (folded, or a file without any), but always one view.
     var body: some View {
         VStack(spacing: 0) {
-            if !symbols.isEmpty { lines }
-        }
-    }
-
-    private var lines: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(symbols) { symbol in
-                (Text(Image(systemName: symbol.kind.systemImage)).foregroundStyle(.tint)
-                    + Text(verbatim: " ")
-                    + Text(SyntaxColoring.shared.attributed(Self.declaration(of: symbol), fileExtension: fileExtension,
-                                                            theme: codeTextStyle.theme)))
-                    .font(codeTextStyle.swiftUIFont)
-                    .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-                    .onTapGesture { onTap(symbol) }
-                    .contextMenu {
-                        if let albumContext {
-                            AlbumMenuItems(items: [AlbumItem(symbol, openFile: file)], context: albumContext)
-                        }
+            if !collapsed.isHidden(symbol, openFile: openFile) {
+                let isCollapsed = symbol.kind == .file
+                    ? collapsed.isFileCollapsed(symbol.fileURL ?? openFile)
+                    : collapsed.isCollapsed(symbol, openFile: openFile, scope: scope)
+                Button {
+                    withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile, scope: scope) }
+                } label: {
+                    SymbolTitle(symbol: symbol, isCollapsed: isCollapsed,
+                                fileExtension: (symbol.fileURL ?? openFile).pathExtension)
+                }
+                .buttonStyle(.plain)
+                // The same menu and preview as the code's.
+                .contextMenu {
+                    if let albumContext {
+                        AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
                     }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(symbol.spokenDescription)
-                    .accessibilityHint(Text("Shows its code"))
-                    .accessibilityAction { onTap(symbol) }
-                    .accessibilityAddTraits(.isButton)
+                    if symbol.kind == .file {
+                        Button("Collapse All in File", systemImage: "chevron.right.2") { onSetFileCollapsed(true) }
+                        Button("Expand All in File", systemImage: "chevron.down.2") { onSetFileCollapsed(false) }
+                    }
+                } preview: {
+                    CodeMenuPreview(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension)
+                }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
     }
 
     /// The first line of the definition (the preview starts at it, after any comment), without
@@ -499,46 +360,15 @@ private struct FileDeclarations: View {
     }
 }
 
-/// A Code-level title: tap it to collapse or expand what's under it (a symbol's code, or a
-/// file's symbols), touch and hold for Add to Album. Hidden (but still one view) in a collapsed
-/// file. Observes the collapsed state itself, so a tap redraws just the titles and blocks on
-/// screen, not the list.
-private struct CodeHeader: View {
-    let symbol: CodeSymbol
-    let collapsed: CollapsedCodeStore
-    let openFile: URL
-    let albumContext: AlbumMenuContext?
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if !collapsed.isHidden(symbol, openFile: openFile) {
-                let isCollapsed = symbol.kind == .file
-                    ? collapsed.isFileCollapsed(symbol.fileURL ?? openFile)
-                    : collapsed.isCollapsed(symbol, openFile: openFile)
-                Button {
-                    withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile) }
-                } label: {
-                    SymbolTitle(symbol: symbol, isCollapsed: isCollapsed)
-                }
-                .buttonStyle(.plain)
-                // The same menu and preview as the code's.
-                .contextMenu {
-                    if let albumContext {
-                        AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
-                    }
-                } preview: {
-                    CodeMenuPreview(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension)
-                }
-            }
-        }
-    }
-}
-
-/// Zoomed in: the slim title above a symbol's code (or a file's title line, before its symbols),
-/// with a chevron: down while what's under it shows, right while it's collapsed.
+/// A title, with a chevron (down while what's under it shows, right while it's collapsed): a
+/// symbol's declaration, in the code font and colors, like a line of a C header (its code under
+/// it starts after that line), or a file's name, before its symbols.
 private struct SymbolTitle: View {
     let symbol: CodeSymbol
     let isCollapsed: Bool
+    /// The symbol's file's, for its colors.
+    let fileExtension: String
+    @Environment(\.codeTextStyle) private var codeTextStyle
 
     var body: some View {
         HStack(spacing: 6) {
@@ -548,17 +378,18 @@ private struct SymbolTitle: View {
                 .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                 .accessibilityHidden(true)
             Image(systemName: symbol.kind.systemImage)
+                .font(.caption)
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
-            Text(symbol.name)
-                .font(symbol.kind == .file ? .subheadline.weight(.semibold) : .subheadline)
+            title
                 .lineLimit(1)
-                .truncationMode(.middle)
+                .truncationMode(.tail)
             Spacer(minLength: 8)
             // No line number: peek at the numbers instead.
         }
         .padding(.horizontal, 12)
-        .frame(height: symbol.kind == .file ? 36 : 28)
+        .padding(.vertical, 4)
+        .frame(minHeight: symbol.kind == .file ? 36 : 28)
         .background(.bar)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -568,6 +399,24 @@ private struct SymbolTitle: View {
             ? (isCollapsed ? Text("Shows the file’s symbols") : Text("Hides the file’s symbols"))
             : (isCollapsed ? Text("Shows its code") : Text("Hides its code")))
         .accessibilityAddTraits([.isHeader, .isButton])
+    }
+
+    @ViewBuilder
+    private var title: some View {
+        switch symbol.kind {
+        case .file:
+            Text(symbol.name)
+                .font(.subheadline.weight(.semibold))
+        case .lines:
+            Text(symbol.name)
+                .font(codeTextStyle.swiftUIFont)
+                .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
+        default:
+            Text(SyntaxColoring.shared.attributed(CodeHeader.declaration(of: symbol), fileExtension: fileExtension,
+                                                  theme: codeTextStyle.theme))
+                .font(codeTextStyle.swiftUIFont)
+                .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
+        }
     }
 }
 
@@ -620,21 +469,28 @@ private final class CodeBlock {
         let ownCode = ownCode
         let fileExtension = fileExtension
         let highlighted = theme != .none
+        // The title shows the declaration: the code leaves its line out.
+        let dropsDeclaration = symbol.kind != .file && symbol.kind != .lines
+        let declarationLine = symbol.line
         task = Task {
             var texts = known
             if texts == nil {
                 var plain = ownCode
+                var fromPreview = false
                 if plain == nil, let file {
                     if let loaded = await FileTextCache.shared.code(of: range, in: file, priority: priority) {
                         plain = CodePieces.trimmingTrailingWhitespace(loaded.code)
                         firstLine = loaded.firstLine
                     } else {
                         plain = TabExpansion.expand(preview)
+                        fromPreview = true  // starts at the declaration
                     }
                 }
                 guard let plain else { return }
+                // Its line in the code: after any comment above the definition.
+                let dropped = dropsDeclaration ? (fromPreview ? 0 : max(0, declarationLine - firstLine)) : nil
                 let made = await Task.detached(priority: priority) {
-                    CodePieces.texts(plain, fileExtension: fileExtension, highlighted: highlighted)
+                    CodeBlock.texts(plain, leavingOut: dropped, fileExtension: fileExtension, highlighted: highlighted)
                 }.value
                 self.texts = made
                 texts = made
@@ -646,6 +502,37 @@ private final class CodeBlock {
             guard !Task.isCancelled, layoutKey == key else { return }
             layouts = laidOut
         }
+    }
+
+    /// The code's pieces, without line `dropped` (0-based; the declaration, which the title
+    /// shows): the lines before it (a comment), then the ones after, each piece numbered with
+    /// its lines in the whole code, so line numbers and taps stay right. Empty when that line was
+    /// all there is.
+    nonisolated static func texts(_ plain: String, leavingOut dropped: Int?, fileExtension: String,
+                                  highlighted: Bool) -> [CodeText] {
+        let lines = plain.components(separatedBy: "\n")
+        guard let dropped, dropped < lines.count else {
+            return CodePieces.texts(plain, fileExtension: fileExtension, highlighted: highlighted)
+        }
+        var result: [CodeText] = []
+        if dropped > 0 {
+            result += CodePieces.texts(lines[..<dropped].joined(separator: "\n"), fileExtension: fileExtension,
+                                       highlighted: highlighted)
+        }
+        let after = lines[(dropped + 1)...].joined(separator: "\n")
+        if !after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            result += CodePieces.texts(after, fileExtension: fileExtension, highlighted: highlighted).map {
+                CodeText(string: $0.string, runs: $0.runs, firstLine: $0.firstLine + dropped + 1)
+            }
+        }
+        return result
+    }
+
+    /// What stands in until the code is laid out: its first lines, without the declaration.
+    var placeholder: String {
+        let preview = TabExpansion.expand(symbol.preview)
+        guard symbol.kind != .file, symbol.kind != .lines else { return preview }
+        return preview.split(separator: "\n", omittingEmptySubsequences: false).dropFirst().joined(separator: "\n")
     }
 
     /// Off screen for a while: lets its layout go (it's made again when it comes back).
@@ -779,6 +666,7 @@ private struct SymbolCode: View {
     let peek: CodePeek
     let collapsed: CollapsedCodeStore
     let openFile: URL
+    let scope: String
     let albumContext: AlbumMenuContext?
     let onTap: @MainActor () -> Void
     let onTapAt: @MainActor (PageAnchor) -> Void
@@ -786,13 +674,14 @@ private struct SymbolCode: View {
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, collapsed: CollapsedCodeStore, openFile: URL,
-         albumContext: AlbumMenuContext?, onTap: @escaping @MainActor () -> Void,
+         scope: String, albumContext: AlbumMenuContext?, onTap: @escaping @MainActor () -> Void,
          onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.symbol = symbol
         self.store = store
         self.peek = peek
         self.collapsed = collapsed
         self.openFile = openFile
+        self.scope = scope
         self.albumContext = albumContext
         self.onTap = onTap
         self.onTapAt = onTapAt
@@ -801,7 +690,7 @@ private struct SymbolCode: View {
     var body: some View {
         VStack(spacing: 0) {
             if symbol.kind != .file, !collapsed.isHidden(symbol, openFile: openFile),
-               !collapsed.isCollapsed(symbol, openFile: openFile) {
+               !collapsed.isCollapsed(symbol, openFile: openFile, scope: scope) {
                 let block = store.block(for: symbol)
                 SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, onTap: onTap, onTapAt: onTapAt)
                     .onAppear { store.appeared(symbol) }
@@ -835,6 +724,7 @@ private struct CodeMenuPreview: View {
             Text(SyntaxColoring.shared.attributed(TabExpansion.expand(symbol.preview), fileExtension: fileExtension,
                                                   theme: codeTextStyle.theme))
                 .font(codeTextStyle.previewFont)
+                .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
                 .lineLimit(SymbolIndexer.previewLineCount)
         }
         .padding(16)
@@ -865,13 +755,18 @@ private struct SymbolCodeText: View {
         self.onTapAt = onTapAt
     }
 
+    /// Nothing under the title: a one-line symbol (its declaration is all of it).
+    private var isEmpty: Bool {
+        if let layouts = block.layouts { layouts.isEmpty } else { block.placeholder.isEmpty }
+    }
+
     var body: some View {
         code
             .font(codeTextStyle.swiftUIFont)
             .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, RawTextStyle.insets.left)
-            .padding(.vertical, 8)
+            .padding(.vertical, isEmpty ? 0 : 8)
             .background(Color(uiColor: RawTextStyle.backgroundColor))
             .contentShape(Rectangle())
             .onTapGesture { onTap() }
@@ -896,8 +791,10 @@ private struct SymbolCodeText: View {
             }
         } else if let layout = block.layouts?.first {
             piece(layout)
+        } else if isEmpty {
+            Color.clear.frame(height: 0)
         } else {
-            Text(verbatim: TabExpansion.expand(block.symbol.preview))
+            Text(verbatim: block.placeholder)
         }
     }
 
@@ -919,23 +816,16 @@ private struct SymbolCodeText: View {
     }
 }
 
-/// Which symbol is in the middle (at the Code level, at the top), for coming back to it.
-///
-/// The other levels use `scrollPosition(id:)`. The Code level's blocks vary a lot in height (a
-/// one-line macro, a 300-line function), and `scrollPosition` keeps its symbol anchored while
-/// the ones scrolling in are measured, which stalled scrolling each time a long one came in.
-/// There, the list is only watched: the first symbol on screen is reported.
+/// Which symbol is at the top, for coming back to it. The blocks vary a lot in height (a
+/// one-line macro, a 300-line function), and `scrollPosition(id:)` keeps its symbol anchored
+/// while the ones scrolling in are measured, which stalled scrolling each time a long one came
+/// in. So the list is only watched: the first symbol on screen is reported.
 private struct PositionTracking: ViewModifier {
     let position: Binding<Int?>
-    let byVisibility: Bool
 
     func body(content: Content) -> some View {
-        if byVisibility {
-            content.onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.01) { ids in
-                if let first = ids.first { position.wrappedValue = first }
-            }
-        } else {
-            content.scrollPosition(id: position, anchor: .center)
+        content.onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.01) { ids in
+            if let first = ids.first { position.wrappedValue = first }
         }
     }
 }
@@ -945,7 +835,7 @@ private final class ScrollTracking {
     var isUserScrolling = false
     /// Decelerating after a fling.
     var isCoasting = false
-    /// The card in the middle of the screen.
+    /// The symbol at the top of the screen.
     var centeredID: Int?
     /// The list has moved to where it starts, so `centeredID` changes are the reader's.
     var isPositioned = false

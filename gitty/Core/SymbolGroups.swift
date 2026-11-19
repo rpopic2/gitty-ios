@@ -1,48 +1,15 @@
 import Foundation
 import Observation
 
-/// One file's symbols, for Symbols mode zoomed out (grouped by file).
-nonisolated struct SymbolFileGroup: Identifiable, Sendable {
-    let file: URL
-    let symbols: [CodeSymbol]
-    /// The file's own entry in the list, when it's there (always, without a search).
-    var entryID: Int? = nil
-
-    var id: URL { file }
-
-    /// The id that stands for the whole file in the Files level (a scroll target): its entry's,
-    /// else its first symbol's.
-    var anchorID: Int? { entryID ?? symbols.first?.id }
-
-    /// Groups symbols by file. Files come in the order of their first symbol in the list: the
-    /// open file first, then the project's in path order, or, for search results (best first),
-    /// the file with the best match first. Each file's symbols keep their order in the list.
-    /// Files' own entries aren't rows: the header stands for the file (a search that only
-    /// matches a file's name still lists the file, with no rows).
-    /// - Parameter openFile: the file that symbols without a `fileURL` are in.
-    static func groups(of symbols: [CodeSymbol], openFile: URL) -> [SymbolFileGroup] {
-        var order: [URL] = []
-        var byFile: [URL: [CodeSymbol]] = [:]
-        var entries: [URL: Int] = [:]
-        for symbol in symbols {
-            let file = symbol.fileURL ?? openFile
-            if byFile[file] == nil { order.append(file) }
-            if symbol.kind == .file {
-                entries[file] = symbol.id
-                byFile[file, default: []].append(contentsOf: [])
-            } else {
-                byFile[file, default: []].append(symbol)
-            }
-        }
-        return order.map { SymbolFileGroup(file: $0, symbols: byFile[$0] ?? [], entryID: entries[$0]) }
-    }
-}
-
-extension SymbolFileGroup {
-    /// The Files level's search: the files whose name matches (fuzzy, like symbol search), the
-    /// best match first (equal ones in list order), each with its entry and all its symbols.
-    /// `symbols` is the whole list, where each file's entry and symbols come together.
-    static func symbols(inFilesNamed query: String, in symbols: [CodeSymbol]) -> [CodeSymbol] {
+/// Search by file name: for the Code level's search, matching files come with all their
+/// symbols.
+nonisolated enum FileNameSearch {
+    /// The files whose name matches (fuzzy, like symbol search), the best match first (equal
+    /// ones in list order), each with its entry and all its symbols. `symbols` is the whole
+    /// list, where each file's entry and symbols come together.
+    /// - Parameter maxRank: only matches at least this close (`SymbolSearch.rank`: 5 and under
+    ///   is the name containing the query); `nil` for any.
+    static func symbols(inFilesNamed query: String, in symbols: [CodeSymbol], maxRank: Int? = nil) -> [CodeSymbol] {
         let search = SymbolSearch.Query(query)
         guard !search.text.isEmpty else { return symbols }
         // Each file's run of the list, from its entry.
@@ -55,7 +22,7 @@ extension SymbolFileGroup {
             }
             let entry = symbols[start]
             let name = entry.kind == .file ? entry.name : (entry.fileURL?.lastPathComponent ?? entry.name)
-            if let rank = SymbolSearch.rank(search, SymbolSearch.Index.Entry(name)) {
+            if let rank = SymbolSearch.rank(search, SymbolSearch.Index.Entry(name)), rank <= (maxRank ?? .max) {
                 matches.append((start..<end, rank))
             }
             start = end
@@ -67,45 +34,49 @@ extension SymbolFileGroup {
     }
 }
 
-/// The files folded away in Symbols' grouped view, saved in `UserDefaults`. Files are kept by
-/// URL, so each project (and each file opened by URL) keeps its own.
-nonisolated struct SymbolFoldStore: @unchecked Sendable {
-    static let standard = SymbolFoldStore(defaults: .standard)
-
-    private let defaults: UserDefaults
-    private let key = "foldedSymbolFiles"
-
-    init(defaults: UserDefaults) {
-        self.defaults = defaults
-    }
-
-    func foldedFiles() -> Set<URL> {
-        Set((defaults.stringArray(forKey: key) ?? []).compactMap(URL.init(string:)))
-    }
-
-    func setFolded(_ isFolded: Bool, _ file: URL) {
-        var files = Set(defaults.stringArray(forKey: key) ?? [])
-        if isFolded { files.insert(file.absoluteString) } else { files.remove(file.absoluteString) }
-        defaults.set(files.sorted(), forKey: key)
-    }
-}
-
-/// What's collapsed at the Code level (tap a title), saved in `UserDefaults`: symbols, whose
-/// code is hidden under their titles, and files, whose symbols are all hidden under the
-/// file's title. Symbols are kept by file, kind and name, so one stays collapsed when its file
-/// changes. Loaded once; each block only checks the set, and a tap writes it once. Separate
-/// from the Files level's folding.
+/// What's collapsed at the Code level, saved in `UserDefaults`:
+/// - symbols, whose code is hidden under their titles (tap a title). **Collapse All** makes a
+///   list's symbols collapsed by default (its scope, below), so only the ones tapped since are
+///   kept: each symbol is kept only while it differs from its list's default, by file, kind and
+///   name (so it stays as it is when its file changes);
+/// - files, whose symbols are all hidden under the file's title.
+///
+/// A scope is where a list's files are: a project's raw address prefix, or the open file's
+/// address for a file outside projects. Loaded once; each title and block only checks the
+/// sets, and a change writes them once.
 @MainActor @Observable
 final class CollapsedCodeStore {
     static let shared = CollapsedCodeStore(defaults: .standard)
 
-    private(set) var keys: Set<String>
+    /// Symbols that differ from their scope's default.
+    private(set) var flipped: Set<String>
+    /// Files folded to their title.
+    private(set) var files: Set<String>
+    /// Scopes whose symbols are collapsed by default (Collapse All).
+    private(set) var collapsedScopes: Set<String>
     @ObservationIgnored private let defaults: UserDefaults
-    private static let key = "collapsedCode"
+
+    private enum Key {
+        static let flipped = "collapsedCode.symbols"
+        static let files = "collapsedCode.files"
+        static let scopes = "collapsedCode.scopes"
+        /// Before Collapse All: symbols and `file#` keys together.
+        static let old = "collapsedCode"
+    }
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
-        keys = Set(defaults.stringArray(forKey: Self.key) ?? [])
+        var flipped = Set(defaults.stringArray(forKey: Key.flipped) ?? [])
+        var files = Set(defaults.stringArray(forKey: Key.files) ?? [])
+        if let old = defaults.stringArray(forKey: Key.old) {
+            for key in old {
+                if key.hasPrefix("file#") { files.insert(key) } else { flipped.insert(key) }
+            }
+            defaults.removeObject(forKey: Key.old)
+        }
+        self.flipped = flipped
+        self.files = files
+        collapsedScopes = Set(defaults.stringArray(forKey: Key.scopes) ?? [])
     }
 
     /// - Parameter openFile: the file that symbols without a `fileURL` are in.
@@ -113,16 +84,16 @@ final class CollapsedCodeStore {
         (symbol.fileURL ?? openFile).absoluteString + "#" + symbol.kind.rawValue + "#" + symbol.name
     }
 
-    func isCollapsed(_ symbol: CodeSymbol, openFile: URL) -> Bool {
-        keys.contains(Self.key(for: symbol, openFile: openFile))
-    }
-
     nonisolated static func key(forFile file: URL) -> String {
         "file#" + file.absoluteString
     }
 
+    func isCollapsed(_ symbol: CodeSymbol, openFile: URL, scope: String) -> Bool {
+        collapsedScopes.contains(scope) != flipped.contains(Self.key(for: symbol, openFile: openFile))
+    }
+
     func isFileCollapsed(_ file: URL) -> Bool {
-        keys.contains(Self.key(forFile: file))
+        files.contains(Self.key(forFile: file))
     }
 
     /// Not shown at all: in a collapsed file (a file's own title always shows).
@@ -130,23 +101,51 @@ final class CollapsedCodeStore {
         symbol.kind != .file && isFileCollapsed(symbol.fileURL ?? openFile)
     }
 
-    /// A file's title collapses the file; a symbol's, its code.
-    func toggle(_ symbol: CodeSymbol, openFile: URL) {
-        let key = symbol.kind == .file ? Self.key(forFile: symbol.fileURL ?? openFile)
-            : Self.key(for: symbol, openFile: openFile)
-        if keys.contains(key) { keys.remove(key) } else { keys.insert(key) }
+    /// A file's title folds the file; a symbol's, its code.
+    func toggle(_ symbol: CodeSymbol, openFile: URL, scope: String) {
+        if symbol.kind == .file {
+            let key = Self.key(forFile: symbol.fileURL ?? openFile)
+            if files.contains(key) { files.remove(key) } else { files.insert(key) }
+        } else {
+            let key = Self.key(for: symbol, openFile: openFile)
+            if flipped.contains(key) { flipped.remove(key) } else { flipped.insert(key) }
+        }
         save()
     }
 
-    /// Shows a symbol and its code (going to it from the Files level).
-    func reveal(_ symbol: CodeSymbol, openFile: URL) {
-        let removed = [Self.key(for: symbol, openFile: openFile), Self.key(forFile: symbol.fileURL ?? openFile)]
-        guard removed.contains(where: keys.contains) else { return }
-        keys.subtract(removed)
+    /// Collapses or expands these symbols (a file's, from its title's menu), unfolding their
+    /// file.
+    func setCollapsed(_ isCollapsed: Bool, _ symbols: [CodeSymbol], openFile: URL, scope: String) {
+        let byDefault = collapsedScopes.contains(scope)
+        for symbol in symbols where symbol.kind != .file {
+            let key = Self.key(for: symbol, openFile: openFile)
+            if isCollapsed == byDefault { flipped.remove(key) } else { flipped.insert(key) }
+            files.remove(Self.key(forFile: symbol.fileURL ?? openFile))
+        }
+        save()
+    }
+
+    /// Collapse All (or Expand All) in a scope: every symbol's code, and no file folded.
+    func setAllCollapsed(_ isCollapsed: Bool, scope: String) {
+        if isCollapsed { collapsedScopes.insert(scope) } else { collapsedScopes.remove(scope) }
+        flipped = flipped.filter { !$0.hasPrefix(scope) }
+        files = files.filter { !$0.hasPrefix("file#" + scope) }
+        save()
+    }
+
+    /// Shows a symbol and its code.
+    func reveal(_ symbol: CodeSymbol, openFile: URL, scope: String) {
+        let fileKey = Self.key(forFile: symbol.fileURL ?? openFile)
+        guard isCollapsed(symbol, openFile: openFile, scope: scope) || files.contains(fileKey) else { return }
+        files.remove(fileKey)
+        let key = Self.key(for: symbol, openFile: openFile)
+        if collapsedScopes.contains(scope) { flipped.insert(key) } else { flipped.remove(key) }
         save()
     }
 
     private func save() {
-        defaults.set(keys.sorted(), forKey: Self.key)
+        defaults.set(flipped.sorted(), forKey: Key.flipped)
+        defaults.set(files.sorted(), forKey: Key.files)
+        defaults.set(collapsedScopes.sorted(), forKey: Key.scopes)
     }
 }

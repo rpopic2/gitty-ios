@@ -42,6 +42,9 @@ final class CodeDocumentModel {
     /// The project the open file is in (once the project's symbols are loaded), whose Symbols
     /// order `symbolSorting` is. `nil` for a file that isn't in a project.
     private(set) var symbolsProjectID: String?
+    /// Where the list's files are, for what's collapsed at the Code level (`CollapsedCodeStore`):
+    /// the project's raw address prefix, or the open file's address outside projects.
+    private(set) var collapseScope: String
     /// The order of the project's other files in Symbols (the open file always comes first;
     /// each file's symbols stay in file order).
     private(set) var symbolSorting = ListSorting()
@@ -99,6 +102,7 @@ final class CodeDocumentModel {
     init(url: URL, store: DocumentStore) {
         self.url = url
         self.store = store
+        collapseScope = url.absoluteString
     }
 
     // MARK: - Loading
@@ -240,6 +244,9 @@ final class CodeDocumentModel {
         Task {
             let projects = await ProjectStore.shared.projects()
             let project = ProjectSymbolIndex.project(containing: url, in: projects)
+            if let project, let prefix = ProjectSymbolIndex.prefix(of: project), collapseScope != prefix {
+                collapseScope = prefix
+            }
             if let project, symbolsProjectID != project.id {
                 symbolsProjectID = project.id
                 symbolSorting = ListSortingStore.standard.sorting(for: .symbols, projectID: project.id)
@@ -421,15 +428,15 @@ final class CodeDocumentModel {
         }
     }
 
-    /// The Files level's search, by file name (see `SymbolFileGroup.symbols(inFilesNamed:in:)`),
-    /// worked out once per search and list.
+    /// The search by file name (see `FileNameSearch`), worked out once per search and list:
+    /// files whose name contains the query, each with all its symbols.
     func symbols(inFilesNamed query: String) -> [CodeSymbol] {
         guard symbolIndex.isReady else { return [] }
         let all = listSymbols
         let key = FileSearchKey(query: query, count: all.count, first: all.first?.id, last: all.last?.id,
                                 sorting: symbolSorting, album: activeAlbum?.id)
         if let fileSearch, fileSearch.key == key { return fileSearch.result }
-        let result = SymbolFileGroup.symbols(inFilesNamed: query, in: all)
+        let result = FileNameSearch.symbols(inFilesNamed: query, in: all, maxRank: 5)
         fileSearch = (key, result)
         return result
     }
@@ -444,6 +451,32 @@ final class CodeDocumentModel {
     }
 
     @ObservationIgnored private var fileSearch: (key: FileSearchKey, result: [CodeSymbol])?
+
+    /// The search at the Code level: the files whose name contains it (each with all its
+    /// symbols), then the symbols it matches so far (in the album, if one is shown), best first.
+    /// Worked out once per search and set of matches.
+    func combinedSearchResults(_ query: String) -> [CodeSymbol] {
+        let files = symbols(inFilesNamed: query)
+        let matches = albumSearchResults()
+        let key = CombinedSearchKey(query: query, files: files.count, firstFile: files.first?.id,
+                                    matches: matches.count, firstMatch: matches.first?.id, lastMatch: matches.last?.id)
+        if let combinedSearch, combinedSearch.key == key { return combinedSearch.result }
+        var ids = Set(files.map(\.id))
+        let result = files + matches.filter { ids.insert($0.id).inserted }
+        combinedSearch = (key, result)
+        return result
+    }
+
+    private struct CombinedSearchKey: Equatable {
+        let query: String
+        let files: Int
+        let firstFile: Int?
+        let matches: Int
+        let firstMatch: Int?
+        let lastMatch: Int?
+    }
+
+    @ObservationIgnored private var combinedSearch: (key: CombinedSearchKey, result: [CodeSymbol])?
 
     /// The text of one symbol, styled like the file. `nil` while another file's text is loading.
     /// A file's own entry gets the file's text object itself, the same one until it's refreshed.
