@@ -18,14 +18,15 @@ actor FileTextCache {
         self.store = store
     }
 
-    /// A symbol's code in a downloaded file, tabs expanded, worked out away from the main
-    /// thread and alongside other requests (only reading the file's text goes through here,
-    /// once per file). `nil` if the file isn't saved.
-    nonisolated func code(of range: NSRange, in file: URL, priority: TaskPriority) async -> String? {
+    /// A symbol's code in a downloaded file, tabs expanded, and the line of the file it starts
+    /// at, worked out away from the main thread and alongside other requests (only reading the
+    /// file's text goes through here, once per file). `nil` if the file isn't saved.
+    nonisolated func code(of range: NSRange, in file: URL, priority: TaskPriority) async -> (code: String, firstLine: Int)? {
         guard let text = await text(of: file) else { return nil }
         return await Task.detached(priority: priority) {
             let utf16 = text as NSString
-            return NSMaxRange(range) <= utf16.length ? TabExpansion.expand(utf16.substring(with: range)) : nil
+            guard NSMaxRange(range) <= utf16.length else { return nil }
+            return (TabExpansion.expand(utf16.substring(with: range)), ReviewText.lineNumber(at: range.location, in: utf16))
         }.value
     }
 

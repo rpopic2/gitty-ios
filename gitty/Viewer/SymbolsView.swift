@@ -65,6 +65,8 @@ struct SymbolsView: View, Equatable {
     @State private var switchAnchor: Int?
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
+    /// The Code level's line-number peek.
+    @State private var peek = CodePeek()
     /// The font and syntax colors: a new theme colors the Code level's blocks again.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
@@ -239,7 +241,7 @@ struct SymbolsView: View, Equatable {
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(symbols) { symbol in
                 Section {
-                    SymbolCode(symbol: symbol, store: codeBlocks, onTap: { onOpen(symbol) })
+                    SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, onTap: { onOpen(symbol) })
                 } header: {
                     // A file's title opens its page with the whole file (as its card does);
                     // a symbol's opens its page, like its code.
@@ -270,6 +272,18 @@ struct SymbolsView: View, Equatable {
                 }
             }
             .onEnded { _ in pinchHandled = false }
+    }
+
+    /// At the Code level: a drag from the left edge peeks at the line numbers.
+    private var peekGesture: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .global)
+            .onChanged { value in
+                guard value.startLocation.x <= CodePeek.edgeWidth else { return }
+                peek.follow(value.translation.width)
+            }
+            .onEnded { value in
+                if value.startLocation.x <= CodePeek.edgeWidth { peek.end() }
+            }
     }
 
     private func zoomIn() {
@@ -325,6 +339,7 @@ struct SymbolsView: View, Equatable {
             including: closesSearchOnSwipe ? .all : .subviews
         )
         .simultaneousGesture(pinch, including: isActive ? .all : .subviews)
+        .simultaneousGesture(peekGesture, including: isActive && zoom == .code ? .all : .subviews)
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .background(Color(uiColor: .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in
@@ -528,7 +543,11 @@ private struct SymbolTitle: View {
 private final class CodeBlock {
     let symbol: CodeSymbol
     /// The code as pieces of `CodePieces.linesPerPiece` lines (see `SymbolCodeText`).
-    private(set) var pieces: [AttributedString]?
+    private(set) var pieces: [CodePiece]?
+    /// The line of its file the code starts at, for the line peek.
+    private(set) var firstLine = 1
+    /// Each piece as one `Text` per line, numbered, made the first time it's peeked at.
+    @ObservationIgnored private var numbered: [Int: Text] = [:]
     /// The part of the file shown: the symbol, or for a type, up to its first member.
     private let range: NSRange
     /// The open file's symbol's code, plain, ready at once.
@@ -539,7 +558,8 @@ private final class CodeBlock {
 
     /// The open file's symbols get their code right away, from its text (plain: it's colored
     /// in the background).
-    init(symbol: CodeSymbol, range: NSRange, ownText: NSString?, fileExtension: String, theme: SyntaxTheme) {
+    init(symbol: CodeSymbol, range: NSRange, ownText: NSString?, ownFirstLine: Int?, fileExtension: String,
+         theme: SyntaxTheme) {
         self.symbol = symbol
         self.range = range
         self.fileExtension = fileExtension
@@ -551,6 +571,7 @@ private final class CodeBlock {
         } else {
             ownCode = nil
         }
+        if let ownFirstLine { firstLine = ownFirstLine }
     }
 
     /// Prepared in the background: another file's code is read, and either is colored. On
@@ -569,14 +590,35 @@ private final class CodeBlock {
         Task {
             var plain = ownCode
             if plain == nil, let file {
-                plain = await FileTextCache.shared.code(of: range, in: file, priority: priority)
-                    .map(CodePieces.trimmingTrailingWhitespace) ?? TabExpansion.expand(preview)
+                if let loaded = await FileTextCache.shared.code(of: range, in: file, priority: priority) {
+                    plain = CodePieces.trimmingTrailingWhitespace(loaded.code)
+                    firstLine = loaded.firstLine
+                } else {
+                    plain = TabExpansion.expand(preview)
+                }
             }
             guard let plain else { return }
-            pieces = await Task.detached(priority: priority) {
+            let made = await Task.detached(priority: priority) {
                 theme.pieces(plain, fileExtension: fileExtension)
             }.value
+            numbered = [:]
+            pieces = made
         }
+    }
+
+    /// A piece for the line peek: the same text, one `Text` per line, each carrying its line
+    /// number for `LineNumberRenderer`. The layout is the same as the plain piece's.
+    func numberedText(_ index: Int) -> Text {
+        if let text = numbered[index] { return text }
+        guard let pieces, pieces.indices.contains(index) else { return Text(verbatim: "") }
+        let piece = pieces[index]
+        var text = Text(verbatim: "")
+        for (offset, line) in piece.lines.enumerated() {
+            if offset > 0 { text = text + Text(verbatim: "\n") }
+            text = text + Text(line).customAttribute(LineNumberAttribute(number: firstLine + piece.firstLine + offset))
+        }
+        numbered[index] = text
+        return text
     }
 }
 
@@ -605,7 +647,9 @@ private final class CodeBlockStore {
 
     func block(for symbol: CodeSymbol) -> CodeBlock {
         if let block = blocks[symbol.id] { return block }
-        let block = CodeBlock(symbol: symbol, range: shownRange(of: symbol), ownText: ownText,
+        let range = shownRange(of: symbol)
+        let block = CodeBlock(symbol: symbol, range: range, ownText: ownText,
+                              ownFirstLine: symbol.fileURL == nil ? ownLine(at: range.location) : nil,
                               fileExtension: symbol.fileURL?.pathExtension ?? openFileExtension, theme: theme)
         blocks[symbol.id] = block
         return block
@@ -623,6 +667,33 @@ private final class CodeBlockStore {
               next.range.location > symbol.range.location, NSMaxRange(next.range) <= NSMaxRange(symbol.range)
         else { return symbol.range }
         return NSRange(location: symbol.range.location, length: next.range.location - symbol.range.location)
+    }
+
+    /// Where each of the open file's lines starts, worked out once per text.
+    private var ownLineStarts: (text: ObjectIdentifier, starts: [Int])?
+
+    /// The open file's line at a place in its text.
+    private func ownLine(at location: Int) -> Int {
+        guard let ownText else { return 1 }
+        if ownLineStarts?.text != ObjectIdentifier(ownText) {
+            var starts = [0]
+            var index = 0
+            while index < ownText.length {
+                let found = ownText.range(of: "\n", options: .literal,
+                                          range: NSRange(location: index, length: ownText.length - index))
+                guard found.location != NSNotFound else { break }
+                index = NSMaxRange(found)
+                starts.append(index)
+            }
+            ownLineStarts = (ObjectIdentifier(ownText), starts)
+        }
+        let starts = ownLineStarts?.starts ?? [0]
+        var low = 0, high = starts.count
+        while low < high {
+            let middle = (low + high) / 2
+            if starts[middle] <= location { low = middle + 1 } else { high = middle }
+        }
+        return max(1, low)
     }
 
     private func updatePositions() {
@@ -651,13 +722,15 @@ private final class CodeBlockStore {
 private struct SymbolCode: View {
     let symbol: CodeSymbol
     let store: CodeBlockStore
+    let peek: CodePeek
     let onTap: @MainActor () -> Void
     /// Read so a new theme makes it take its new block.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(symbol: CodeSymbol, store: CodeBlockStore, onTap: @escaping @MainActor () -> Void) {
+    init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, onTap: @escaping @MainActor () -> Void) {
         self.symbol = symbol
         self.store = store
+        self.peek = peek
         self.onTap = onTap
     }
 
@@ -665,7 +738,7 @@ private struct SymbolCode: View {
         VStack(spacing: 0) {
             if symbol.kind != .file {
                 let block = store.block(for: symbol)
-                SymbolCodeText(block: block, onTap: onTap)
+                SymbolCodeText(block: block, peek: peek, onTap: onTap)
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
@@ -679,11 +752,13 @@ private struct SymbolCode: View {
 /// out, so a long function never stalls scrolling while one huge `Text` is measured.
 private struct SymbolCodeText: View {
     let block: CodeBlock
+    let peek: CodePeek
     let onTap: @MainActor () -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(block: CodeBlock, onTap: @escaping @MainActor () -> Void) {
+    init(block: CodeBlock, peek: CodePeek, onTap: @escaping @MainActor () -> Void) {
         self.block = block
+        self.peek = peek
         self.onTap = onTap
     }
 
@@ -709,11 +784,24 @@ private struct SymbolCodeText: View {
         if let pieces = block.pieces, pieces.count > 1 {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(pieces.indices, id: \.self) { index in
-                    Text(pieces[index])
+                    piece(index, of: pieces)
                 }
             }
+        } else if let pieces = block.pieces, !pieces.isEmpty {
+            piece(0, of: pieces)
         } else {
-            Text(block.pieces?.first ?? AttributedString(TabExpansion.expand(block.symbol.preview)))
+            Text(verbatim: TabExpansion.expand(block.symbol.preview))
+        }
+    }
+
+    /// While peeking, the numbered version, drawn slid right with its numbers.
+    @ViewBuilder
+    private func piece(_ index: Int, of pieces: [CodePiece]) -> some View {
+        if peek.isActive {
+            block.numberedText(index)
+                .textRenderer(LineNumberRenderer(offset: peek.offset, width: peek.width, fontSize: codeTextStyle.size))
+        } else {
+            Text(pieces[index].text)
         }
     }
 }

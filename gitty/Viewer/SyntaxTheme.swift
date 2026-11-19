@@ -76,34 +76,50 @@ nonisolated enum SyntaxTheme: String, CaseIterable, Sendable {
     }
 
     /// `text` for SwiftUI as pieces of `CodePieces.linesPerPiece` lines (the newline between
-    /// two pieces left out), colored like `attributed`. The text is parsed once, whole.
-    func pieces(_ text: String, fileExtension: String) -> [AttributedString] {
+    /// two pieces left out), colored like `attributed`, each also line by line (for the line
+    /// peek). The text is parsed once, whole.
+    func pieces(_ text: String, fileExtension: String) -> [CodePiece] {
         let utf16 = text as NSString
         let ranges = CodePieces.ranges(in: utf16)
-        let runs = self == .none ? nil : SyntaxHighlighter.runs(in: text, fileExtension: fileExtension)
-        guard let runs, runs.contains(where: { $0.category != nil }) else {
-            return ranges.map { AttributedString(utf16.substring(with: $0)) }
-        }
+        var runs = self == .none ? nil : SyntaxHighlighter.runs(in: text, fileExtension: fileExtension)
+        if let found = runs, !found.contains(where: { $0.category != nil }) { runs = nil }
+        let all = runs ?? [SyntaxHighlighter.Run(range: NSRange(location: 0, length: utf16.length), category: nil)]
         var next = 0
+        var lineOffset = 0
         return ranges.map { range in
             var piece = AttributedString()
+            var lines: [AttributedString] = []
+            var line = AttributedString()
             // Runs are in order: start from the first that reaches this piece.
-            while next < runs.count, NSMaxRange(runs[next].range) <= range.location { next += 1 }
+            while next < all.count, NSMaxRange(all[next].range) <= range.location { next += 1 }
             var index = next
-            while index < runs.count, runs[index].range.location < NSMaxRange(range) {
-                let run = runs[index]
-                let part = NSIntersectionRange(run.range, range)
-                if part.length > 0 {
-                    var text = AttributedString(utf16.substring(with: part))
-                    if let category = run.category, let color = color(for: category) {
-                        text.swiftUI.foregroundColor = Color(uiColor: color)
-                    }
-                    piece.append(text)
-                }
+            while index < all.count, all[index].range.location < NSMaxRange(range) {
+                let run = all[index]
                 index += 1
+                let part = NSIntersectionRange(run.range, range)
+                guard part.length > 0 else { continue }
+                let color = run.category.flatMap { color(for: $0) }.map { Color(uiColor: $0) }
+                let string = utf16.substring(with: part)
+                piece.append(Self.segment(string, color: color))
+                for (number, text) in string.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                    if number > 0 {
+                        lines.append(line)
+                        line = AttributedString()
+                    }
+                    if !text.isEmpty { line.append(Self.segment(String(text), color: color)) }
+                }
             }
-            return piece
+            lines.append(line)
+            let result = CodePiece(text: piece, lines: lines, firstLine: lineOffset)
+            lineOffset += lines.count
+            return result
         }
+    }
+
+    private static func segment(_ text: String, color: Color?) -> AttributedString {
+        var segment = AttributedString(text)
+        if let color { segment.swiftUI.foregroundColor = color }
+        return segment
     }
 
     /// `text` for SwiftUI `Text`, colored (plain for `none` and file types without a grammar).
@@ -123,6 +139,16 @@ nonisolated enum SyntaxTheme: String, CaseIterable, Sendable {
         }
         return result
     }
+}
+
+/// Part of a symbol's code at the Code level (see `CodePieces`).
+nonisolated struct CodePiece: Sendable {
+    /// For drawing it plainly.
+    let text: AttributedString
+    /// The same, line by line, for numbering them while peeking.
+    let lines: [AttributedString]
+    /// Its first line, counted from the block's (0).
+    let firstLine: Int
 }
 
 private extension UIColor {
