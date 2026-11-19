@@ -429,7 +429,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
         // selects, as usual.
         let highlightPress = UILongPressGestureRecognizer(target: context.coordinator,
                                                           action: #selector(Coordinator.handleHighlightPress(_:)))
-        highlightPress.minimumPressDuration = 0.35  // before the text view's own long press
+        highlightPress.minimumPressDuration = 0.35  // before the text view's own long press selects
+        highlightPress.cancelsTouchesInView = false
         highlightPress.delegate = context.coordinator
         textView.addGestureRecognizer(highlightPress)
         context.coordinator.highlightPress = highlightPress
@@ -659,6 +660,13 @@ struct ReadOnlyTextView: UIViewRepresentable {
             let isHighlighted = highlightedRanges.contains { NSLocationInRange(index, $0) }
             UIImpactFeedbackGenerator(style: .light).impactOccurred(at: gesture.location(in: textView))
             onHighlight(isHighlighted ? nil : identifier)
+            // This hold is taken: the text view's own (selecting, its loupe) stops here. Turning
+            // a recognizer off and on cancels it for the current touch; scrolling carries on.
+            for other in textView.gestureRecognizers ?? []
+            where other !== gesture && other !== tokenTap && !(other is UIPanGestureRecognizer) && other.isEnabled {
+                other.isEnabled = false
+                other.isEnabled = true
+            }
         }
 
         /// The identifier under a point of the text view, and the character there: only right on
@@ -728,7 +736,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            gestureRecognizer === tokenTap
+            gestureRecognizer === tokenTap || gestureRecognizer === highlightPress
         }
 
         /// The peek only takes touches that start at the screen's left edge.
@@ -749,17 +757,12 @@ struct ReadOnlyTextView: UIViewRepresentable {
             return true
         }
 
-        /// The peek goes before the pages, the scrolling and going back; holding to highlight
-        /// before the text view's own long press (selecting), whatever kind of recognizer that
-        /// is on this iOS. Not before its scrolling, nor the token tap.
+        /// The peek goes before the pages, the scrolling and going back (it only takes touches at
+        /// the left edge). Nothing waits for holding to highlight: it starts while the finger is
+        /// still down, and stops the text view's own hold itself (`handleHighlightPress`).
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
             if gestureRecognizer === peek { return true }
-            if gestureRecognizer === highlightPress {
-                return otherGestureRecognizer.view === gestureRecognizer.view
-                    && !(otherGestureRecognizer is UIPanGestureRecognizer)
-                    && otherGestureRecognizer !== tokenTap
-            }
             return false
         }
 
