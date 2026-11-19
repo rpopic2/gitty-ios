@@ -276,7 +276,10 @@ struct CodeScreen: View {
             // A fresh list for each search's results, for the full list after, and for each order
             // (ids are places in the list, so they move; the list finds its symbol by name).
             // (and once the project's files are in, when the open file showed alone before them).
-            .id([shownQuery, model.activeAlbum?.id.uuidString ?? "", model.projectSymbolsLoaded ? "project" : "file"])
+            // While searching, a fresh list for each set of matches too: diffing one set into the
+            // next hung the main thread (see `CodeDocumentModel.resultsVersion`).
+            .id([shownQuery, model.activeAlbum?.id.uuidString ?? "", model.projectSymbolsLoaded ? "project" : "file",
+                 hasSymbolQuery ? String(model.resultsVersion) : ""])
         case .unsupportedLanguage:
             placeholder {
                 ContentUnavailableView(

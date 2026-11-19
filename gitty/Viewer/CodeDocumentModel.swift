@@ -37,6 +37,11 @@ final class CodeDocumentModel {
     private(set) var searchResults: [CodeSymbol] = []
     /// The search `searchResults` are for.
     private(set) var resultsQuery = ""
+    /// Goes up with each set of matches (they fill in while the search runs): the list shows
+    /// each set as a fresh list. Diffing one set into the next in place (better matches arrive
+    /// above the ones shown) made the lazy list work out where every moved item comes from,
+    /// which hung the main thread for most of a second as you typed.
+    private(set) var resultsVersion = 0
     /// A search is still going through the symbols.
     private(set) var isSearching = false
     /// The project the open file is in (once the project's symbols are loaded). `nil` for a
@@ -459,6 +464,7 @@ final class CodeDocumentModel {
         guard let index = searchIndex else { return }  // runs once the index is built
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             searchResults = index.symbols
+            resultsVersion += 1
             resultsQuery = query
             isSearching = false
             return
@@ -468,6 +474,7 @@ final class CodeDocumentModel {
             for await snapshot in SymbolSearch.stream(query, in: index) {
                 guard !Task.isCancelled else { return }
                 searchResults = snapshot
+                resultsVersion += 1
                 resultsQuery = query
             }
             guard !Task.isCancelled else { return }
