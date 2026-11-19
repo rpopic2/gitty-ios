@@ -52,8 +52,6 @@ struct SymbolsView: View, Equatable {
     /// The long-press menu's Show History: a file's info and history.
     let onShowHistory: (@MainActor (URL) -> Void)?
 
-    /// New Album… in the long-press menus.
-    @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
     /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
     /// Each file's symbol count, for its title.
@@ -227,44 +225,14 @@ struct SymbolsView: View, Equatable {
         .modifier(PeekShift(peek: peek))  // the whole list slides while peeking
     }
 
-    /// The long-press menu of a symbol's title and code (the same for both): its preview (tap it
-    /// to open the page), Add to Album, Show History, and on a file's title, Collapse All and
-    /// Expand All in it. Made when the menu opens.
-    private func contextMenu(for symbol: CodeSymbol) -> CodeContextMenu {
-        let style = codeTextStyle
-        let file = symbol.fileURL ?? openFile
-        let openFile = openFile
-        let albumContext = albumContext
-        let naming = albumNaming
-        let onShowHistory = onShowHistory
-        let onOpen = onOpen
+    /// The long-press menu of a symbol's title and code (the same for both): a small preview
+    /// (not a snapshot of what may be hundreds of lines), Open, Add to Album, Show History, and
+    /// on a file's title, Collapse All and Expand All in it.
+    private func contextMenu(for symbol: CodeSymbol) -> CodeMenu {
         let view = self
-        return CodeContextMenu(
-            preview: { CodeMenuPreview.controller(symbol: symbol, fileExtension: file.pathExtension, style: style) },
-            menu: {
-                var children: [UIMenuElement] = []
-                if let albumContext {
-                    children += AlbumTextMenu.items(for: AlbumItem(symbol, openFile: openFile), context: albumContext,
-                                                    naming: naming)
-                }
-                if albumContext != nil, let onShowHistory {
-                    children.append(UIAction(title: String(localized: "Show History"),
-                                             image: UIImage(systemName: "clock.arrow.circlepath")) { _ in
-                        onShowHistory(file)
-                    })
-                }
-                if symbol.kind == .file {
-                    children.append(UIMenu(options: .displayInline, children: [
-                        UIAction(title: String(localized: "Collapse All in File"),
-                                 image: UIImage(systemName: "chevron.right.2")) { _ in view.setFileCollapsed(true, symbol) },
-                        UIAction(title: String(localized: "Expand All in File"),
-                                 image: UIImage(systemName: "chevron.down.2")) { _ in view.setFileCollapsed(false, symbol) },
-                    ]))
-                }
-                return UIMenu(children: children)
-            },
-            onOpen: { onOpen(symbol) }
-        )
+        return CodeMenu(symbol: symbol, openFile: openFile, albumContext: albumContext,
+                        onOpen: onOpen, onShowHistory: onShowHistory,
+                        onSetFileCollapsed: { view.setFileCollapsed($0, symbol) })
     }
 
     /// A file title's Collapse All / Expand All: its symbols.
@@ -398,7 +366,7 @@ private struct CodeHeader: View {
     /// A file's: how many symbols it has.
     let symbolCount: Int
     /// Touch and hold (the same menu as the code's).
-    let contextMenu: CodeContextMenu
+    let contextMenu: CodeMenu
 
     var body: some View {
         VStack(spacing: 0) {
@@ -406,7 +374,9 @@ private struct CodeHeader: View {
                 let isCollapsed = symbol.kind == .file
                     ? collapsed.isFileCollapsed(symbol.fileURL ?? openFile, scope: scope)
                     : collapsed.isCollapsed(symbol, openFile: openFile, scope: scope)
-                Group {
+                Button {
+                    toggle(isCollapsed)
+                } label: {
                     if symbol.kind == .file {
                         FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed)
                     } else {
@@ -414,9 +384,8 @@ private struct CodeHeader: View {
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension)
                     }
                 }
-                // UIKit takes the touches here: a tap collapses, a long press shows the menu.
-                .overlay { contextMenu.onTap { _, _ in toggle(isCollapsed) } }
-                .accessibilityAction { toggle(isCollapsed) }
+                .buttonStyle(.plain)
+                .modifier(contextMenu)
             }
         }
     }
@@ -818,14 +787,14 @@ private struct SymbolCode: View {
     let openFile: URL
     let scope: String
     /// Touch and hold (the same menu as the title's).
-    let contextMenu: CodeContextMenu
+    let contextMenu: CodeMenu
     let onTap: @MainActor () -> Void
     let onTapAt: @MainActor (PageAnchor) -> Void
     /// Read so a new theme makes it take its new block.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, collapsed: CollapsedCodeStore, openFile: URL,
-         scope: String, contextMenu: CodeContextMenu, onTap: @escaping @MainActor () -> Void,
+         scope: String, contextMenu: CodeMenu, onTap: @escaping @MainActor () -> Void,
          onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.symbol = symbol
         self.store = store
@@ -843,25 +812,50 @@ private struct SymbolCode: View {
             if symbol.kind != .file, !collapsed.isHidden(symbol, openFile: openFile, scope: scope),
                !collapsed.isCollapsed(symbol, openFile: openFile, scope: scope) {
                 let block = store.block(for: symbol)
-                SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, contextMenu: contextMenu,
-                               onTap: onTap, onTapAt: onTapAt)
+                SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, onTap: onTap, onTapAt: onTapAt)
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
+                    .modifier(contextMenu)
             }
+        }
+    }
+}
+
+/// The long-press menu of a symbol's title and code: a small preview, then Open (its page),
+/// Add to Album, Show History, and on a file's title, Collapse All and Expand All in it.
+private struct CodeMenu: ViewModifier {
+    let symbol: CodeSymbol
+    let openFile: URL
+    let albumContext: AlbumMenuContext?
+    let onOpen: @MainActor (CodeSymbol) -> Void
+    let onShowHistory: (@MainActor (URL) -> Void)?
+    let onSetFileCollapsed: @MainActor (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        let file = symbol.fileURL ?? openFile
+        content.contextMenu {
+            Button("Open", systemImage: "arrow.up.left.and.arrow.down.right") { onOpen(symbol) }
+            if let albumContext {
+                AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
+                if let onShowHistory {
+                    Button("Show History", systemImage: "clock.arrow.circlepath") { onShowHistory(file) }
+                }
+            }
+            if symbol.kind == .file {
+                Section {
+                    Button("Collapse All in File", systemImage: "chevron.right.2") { onSetFileCollapsed(true) }
+                    Button("Expand All in File", systemImage: "chevron.down.2") { onSetFileCollapsed(false) }
+                }
+            }
+        } preview: {
+            CodeMenuPreview(symbol: symbol, fileExtension: file.pathExtension)
         }
     }
 }
 
 /// The long-press preview of a symbol's code: its title and first lines.
 private struct CodeMenuPreview: View {
-    /// For UIKit's context menu, sized to fit.
-    static func controller(symbol: CodeSymbol, fileExtension: String, style: CodeTextStyle) -> UIViewController {
-        let controller = UIHostingController(rootView: CodeMenuPreview(symbol: symbol, fileExtension: fileExtension)
-            .environment(\.codeTextStyle, style))
-        controller.preferredContentSize = controller.sizeThatFits(in: CGSize(width: 320, height: 2000))
-        return controller
-    }
 
     let symbol: CodeSymbol
     let fileExtension: String
@@ -891,24 +885,17 @@ private struct SymbolCodeText: View {
     let block: CodeBlock
     let peek: CodePeek
     let layoutKey: CodeLayoutKey?
-    /// Touch and hold: a small preview (not a snapshot of what may be hundreds of lines), which
-    /// opens the page when tapped, and the menu. It takes the taps too.
-    let contextMenu: CodeContextMenu
     /// Around the code, or before it's laid out: opens the page at the top.
     let onTap: @MainActor () -> Void
     /// On the code: opens the page at the line tapped.
     let onTapAt: @MainActor (PageAnchor) -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    /// The space above and below the code.
-    private static let verticalPadding: CGFloat = 8
-
-    init(block: CodeBlock, peek: CodePeek, layoutKey: CodeLayoutKey?, contextMenu: CodeContextMenu,
+    init(block: CodeBlock, peek: CodePeek, layoutKey: CodeLayoutKey?,
          onTap: @escaping @MainActor () -> Void, onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.block = block
         self.peek = peek
         self.layoutKey = layoutKey
-        self.contextMenu = contextMenu
         self.onTap = onTap
         self.onTapAt = onTapAt
     }
@@ -924,9 +911,10 @@ private struct SymbolCodeText: View {
             .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, RawTextStyle.insets.left)
-            .padding(.vertical, isEmpty ? 0 : Self.verticalPadding)
+            .padding(.vertical, isEmpty ? 0 : 8)
             .background(Color(uiColor: RawTextStyle.backgroundColor))
-            .overlay { contextMenu.onTap { local, screen in tapped(at: local, screen: screen) } }
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(block.symbol.spokenDescription)
             .accessibilityHint(Text("Opens its page"))
@@ -958,22 +946,18 @@ private struct SymbolCodeText: View {
     /// While peeking, slid right with its line numbers.
     private func piece(_ layout: CodePieceLayout) -> some View {
         CodePieceView(layout: layout, firstFileLine: block.firstLine, isPeeking: peek.isActive)
-    }
-
-    /// A tap at `local` (in this view; `screen`, on screen): the page opens at the line tapped,
-    /// found in the pieces (stacked under the top padding); around the code, at the top.
-    private func tapped(at local: CGPoint, screen: CGPoint) {
-        guard let layouts = block.layouts, !layouts.isEmpty else { return onTap() }
-        var y = local.y - Self.verticalPadding
-        guard y >= 0 else { return onTap() }
-        for layout in layouts {
-            if y < layout.height {
-                guard let found = layout.line(atY: y) else { return onTap() }
-                return onTapAt(PageAnchor(line: found.line, screenY: screen.y - (y - found.top)))
-            }
-            y -= layout.height
-        }
-        onTap()
+            .contentShape(Rectangle())
+            // Where in the piece (for the line) and where on screen (for where it goes on the page).
+            .gesture(
+                SpatialTapGesture(coordinateSpace: .local)
+                    .simultaneously(with: SpatialTapGesture(coordinateSpace: .global))
+                    .onEnded { value in
+                        guard let local = value.first?.location, let screen = value.second?.location,
+                              let found = layout.line(atY: local.y)
+                        else { return onTap() }
+                        onTapAt(PageAnchor(line: found.line, screenY: screen.y - (local.y - found.top)))
+                    }
+            )
     }
 }
 
