@@ -695,7 +695,12 @@ private struct SymbolTitle: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
-            // No line number: peek at the numbers instead.
+            Text(symbol.lineLabel)  // "Line 12", "Lines 12–30"
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .layoutPriority(1)  // the declaration gives way first
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
