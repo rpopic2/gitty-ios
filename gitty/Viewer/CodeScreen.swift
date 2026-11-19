@@ -108,7 +108,9 @@ struct CodeScreen: View {
                 // Once you page, the list (hidden behind) follows, so going back lands on the
                 // symbol you were reading.
                 onPage: { listScrollRequest = SymbolScrollRequest($0) },
-                onWillClose: { listScrollRequest = SymbolScrollRequest($0) },
+                // Closing leaves the list where it is: a card tapped near the top or bottom
+                // doesn't jump to the middle. (After paging, the list has followed already.)
+                onWillClose: { _ in },
                 openFile: model.url,
                 onRefresh: { await model.refresh(file: $0) },
                 symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
