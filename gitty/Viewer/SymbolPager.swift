@@ -425,23 +425,24 @@ struct ReadOnlyTextView: UIViewRepresentable {
         page.addGestureRecognizer(peek)
         page.peek = peek
         context.coordinator.peek = peek
-        // Double tap an identifier to highlight it (or remove its highlight).
-        let doubleTap = UITapGestureRecognizer(target: context.coordinator,
-                                               action: #selector(Coordinator.handleDoubleTap(_:)))
-        doubleTap.numberOfTapsRequired = 2
-        doubleTap.delegate = context.coordinator
-        textView.addGestureRecognizer(doubleTap)
-        context.coordinator.doubleTap = doubleTap
-        // Long press selects a code token (`view` of `self.view`) rather than a word: this only
-        // notes where the finger is, alongside the text view's own long press.
-        let tokenPress = UILongPressGestureRecognizer(target: context.coordinator,
-                                                      action: #selector(Coordinator.handleTokenPress(_:)))
-        tokenPress.minimumPressDuration = 0.2  // before the text view's selects
-        tokenPress.cancelsTouchesInView = false
-        tokenPress.delaysTouchesEnded = false
-        tokenPress.delegate = context.coordinator
-        textView.addGestureRecognizer(tokenPress)
-        context.coordinator.tokenPress = tokenPress
+        // Hold an identifier to highlight it (or remove its highlight); elsewhere holding
+        // selects, as usual.
+        let highlightPress = UILongPressGestureRecognizer(target: context.coordinator,
+                                                          action: #selector(Coordinator.handleHighlightPress(_:)))
+        highlightPress.minimumPressDuration = 0.35  // before the text view's own long press
+        highlightPress.delegate = context.coordinator
+        textView.addGestureRecognizer(highlightPress)
+        context.coordinator.highlightPress = highlightPress
+        // Double tap selects a code token (`view` of `self.view`) rather than a word: this only
+        // notes where the taps are, alongside the text view's own double tap.
+        let tokenTap = UITapGestureRecognizer(target: context.coordinator,
+                                              action: #selector(Coordinator.handleTokenTap(_:)))
+        tokenTap.numberOfTapsRequired = 2
+        tokenTap.cancelsTouchesInView = false
+        tokenTap.delaysTouchesEnded = false
+        tokenTap.delegate = context.coordinator
+        textView.addGestureRecognizer(tokenTap)
+        context.coordinator.tokenTap = tokenTap
         return page
     }
 
@@ -541,7 +542,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 + RawTextStyle.searchItems(for: range, in: textView,
                                            searchTerm: symbolSearchTerm,
                                            onSearch: onSearchSymbols)
-            // Highlight is a double tap on an identifier, not a menu item. Add to Album comes
+            // Highlight is holding an identifier, not a menu item. Add to Album comes
             // last, after Copy and Share: on the menu's second page.
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra, trailing: album)
         }
@@ -613,7 +614,6 @@ struct ReadOnlyTextView: UIViewRepresentable {
         static let peekEdgeWidth: CGFloat = 28
 
         weak var peek: UIPanGestureRecognizer?
-        weak var doubleTap: UITapGestureRecognizer?
 
         @objc func handlePeek(_ gesture: UIPanGestureRecognizer) {
             guard let page = gesture.view as? PageTextView, let lineNumbering else { return }
@@ -647,14 +647,17 @@ struct ReadOnlyTextView: UIViewRepresentable {
             }
         }
 
-        // MARK: Double tap to highlight
+        // MARK: Hold to highlight
 
-        @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
-            guard gesture.state == .ended, let textView = gesture.view as? UITextView, let onHighlight,
+        weak var highlightPress: UILongPressGestureRecognizer?
+
+        @objc func handleHighlightPress(_ gesture: UILongPressGestureRecognizer) {
+            guard gesture.state == .began, let textView = gesture.view as? UITextView, let onHighlight,
                   let found = identifierAt(gesture.location(in: textView), in: textView)
             else { return }
             let (identifier, index) = found
             let isHighlighted = highlightedRanges.contains { NSLocationInRange(index, $0) }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred(at: gesture.location(in: textView))
             onHighlight(isHighlighted ? nil : identifier)
         }
 
@@ -683,32 +686,25 @@ struct ReadOnlyTextView: UIViewRepresentable {
             return index < storage.length ? index : nil
         }
 
-        // MARK: Long press selects a token
+        // MARK: Double tap selects a token
 
-        weak var tokenPress: UILongPressGestureRecognizer?
-        /// The character under the long-pressing finger, kept a moment after it lifts (the text
-        /// view can settle its selection then).
+        weak var tokenTap: UITapGestureRecognizer?
+        /// The character double-tapped, kept a moment (the text view's own double tap may select
+        /// the word just before or just after this one sees the taps).
         private var pressIndex: Int?
         private var pressCount = 0
         private var isSnapping = false
 
-        @objc func handleTokenPress(_ gesture: UILongPressGestureRecognizer) {
-            guard let textView = gesture.view as? UITextView else { return }
-            switch gesture.state {
-            case .began, .changed:
-                pressCount += 1
-                let index = characterIndex(at: gesture.location(in: textView), in: textView)
-                // Moving within a character changes nothing.
-                guard gesture.state == .began || index != pressIndex else { return }
-                pressIndex = index
-                snapSelection(in: textView)  // in case the word was selected first
-            default:
-                let count = pressCount
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .milliseconds(400))
-                    guard let self, self.pressCount == count else { return }
-                    self.pressIndex = nil
-                }
+        @objc func handleTokenTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended, let textView = gesture.view as? UITextView else { return }
+            pressCount += 1
+            pressIndex = characterIndex(at: gesture.location(in: textView), in: textView)
+            snapSelection(in: textView)  // in case the word was selected first
+            let count = pressCount
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard let self, self.pressCount == count else { return }
+                self.pressIndex = nil
             }
         }
 
@@ -716,8 +712,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
             snapSelection(in: textView)
         }
 
-        /// The word the long press selected becomes the token under the finger. Selections made
-        /// otherwise (handles, Select All, a double tap) stay as they are.
+        /// The word the double tap selected becomes the token there. Selections made otherwise
+        /// (handles, Select All, holding off an identifier) stay as they are.
         private func snapSelection(in textView: UITextView) {
             guard !isSnapping, let index = pressIndex else { return }
             let selected = textView.selectedRange
@@ -732,7 +728,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            gestureRecognizer === tokenPress
+            gestureRecognizer === tokenTap
         }
 
         /// The peek only takes touches that start at the screen's left edge.
@@ -746,19 +742,24 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 let velocity = pan.velocity(in: pan.view)
                 return velocity.x > abs(velocity.y)  // rightwards
             }
-            if gestureRecognizer === doubleTap, let textView = gestureRecognizer.view as? UITextView {
-                // Elsewhere a double tap selects a word, as usual.
+            if gestureRecognizer === highlightPress, let textView = gestureRecognizer.view as? UITextView {
+                // Elsewhere holding selects, as usual.
                 return onHighlight != nil && identifierAt(gestureRecognizer.location(in: textView), in: textView) != nil
             }
             return true
         }
 
-        /// The peek goes before the pages, the scrolling and going back; the double tap before
-        /// the text view's own taps (selecting a word).
+        /// The peek goes before the pages, the scrolling and going back; holding to highlight
+        /// before the text view's own long press (selecting), whatever kind of recognizer that
+        /// is on this iOS. Not before its scrolling, nor the token tap.
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
             if gestureRecognizer === peek { return true }
-            if gestureRecognizer === doubleTap { return otherGestureRecognizer is UITapGestureRecognizer }
+            if gestureRecognizer === highlightPress {
+                return otherGestureRecognizer.view === gestureRecognizer.view
+                    && !(otherGestureRecognizer is UIPanGestureRecognizer)
+                    && otherGestureRecognizer !== tokenTap
+            }
             return false
         }
 
