@@ -1,0 +1,190 @@
+import SwiftUI
+
+/// The cards (pagers) and the search results pushed over the Code level, in the order they
+/// were opened: Search on a card pushes its results, and a result pushes another card on top.
+/// Only the latest results stay in the stack (an older results page is taken out when a newer
+/// search is pushed), so going back passes through cards, and those results.
+enum CardRoute: Hashable {
+    case card(UUID)
+    case results(UUID)
+
+    var isResults: Bool {
+        if case .results = self { true } else { false }
+    }
+
+    var isCard: Bool { !isResults }
+}
+
+/// What a card in the stack pages through, and where it opened.
+struct StackedCard {
+    let symbols: [CodeSymbol]
+    let initialID: Int
+    let anchor: PageAnchor?
+    /// What it zooms out of, and back into when it's swiped down.
+    let zoomSource: AnyHashable
+    /// Opened from the Code list: paging moves the list behind it.
+    let isBase: Bool
+    /// 1 for the card opened from the list, then up by one for each card on top.
+    let depth: Int
+}
+
+/// A search made from a card: on its own, so the Code list's search stays as it was. The files
+/// whose name contains it (each with all its symbols), then the symbols it matches (in the
+/// album, if one is shown), like the list's.
+@MainActor @Observable
+final class StackSearch {
+    let id = UUID()
+    /// The card it was made from: its results page zooms out of it.
+    let source: CardRoute
+    /// Edited on the results page: the search runs again.
+    var query: String {
+        didSet { if query != oldValue { start() } }
+    }
+    private(set) var results: [CodeSymbol] = []
+    /// The query `results` are for.
+    private(set) var resultsQuery = ""
+    /// Up with each set of matches: the results list is a fresh list for each (see
+    /// `CodeDocumentModel.resultsVersion`).
+    private(set) var version = 0
+    private(set) var isSearching = false
+
+    @ObservationIgnored private let model: CodeDocumentModel
+    @ObservationIgnored private var task: Task<Void, Never>?
+
+    init(query: String, source: CardRoute, model: CodeDocumentModel) {
+        self.query = query
+        self.source = source
+        self.model = model
+        start()
+    }
+
+    /// Nothing found yet, but the search hasn't finished.
+    var isPending: Bool {
+        isSearching || resultsQuery != query
+    }
+
+    private func start() {
+        task?.cancel()
+        task = nil
+        let query = query
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let stream = model.searchStream(query)
+        else {
+            results = []
+            resultsQuery = query
+            version += 1
+            isSearching = false
+            return
+        }
+        isSearching = true
+        let all = model.listSymbols
+        let album: Set<Int>? = model.activeAlbum == nil ? nil : Set(model.albumSymbols.map(\.id))
+        task = Task { [weak self] in
+            let files = await Task.detached(priority: .userInitiated) {
+                FileNameSearch.symbols(inFilesNamed: query, in: all, maxRank: 5)
+            }.value
+            for await matches in stream {
+                guard !Task.isCancelled, let self else { return }
+                let shown = album.map { ids in matches.filter { ids.contains($0.id) } } ?? matches
+                var ids = Set(files.map(\.id))
+                self.results = files + shown.filter { ids.insert($0.id).inserted }
+                self.resultsQuery = query
+                self.version += 1
+            }
+            guard !Task.isCancelled, let self else { return }
+            if self.results.isEmpty, self.resultsQuery != query {  // nothing came at all
+                self.resultsQuery = query
+                self.version += 1
+            }
+            self.isSearching = false
+        }
+    }
+}
+
+/// A search's results, stacked over the card it was made from: the same code blocks as the Code
+/// level's, with the search in a capsule at the bottom (tap it to change the search). Tap a
+/// result's code for its card, stacked on top. Swipe down to go back to the card.
+struct StackResultsView<Results: View>: View {
+    @Bindable var search: StackSearch
+    /// The list, for the results so far and their query.
+    @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String, _ onScrollDown: @escaping @MainActor (Bool) -> Void) -> Results
+
+    @State private var isEditing = false
+    /// Scrolling down hides the capsule; scrolling up shows it.
+    @State private var isBarHidden = false
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            content
+            bottom
+                .animation(.smooth(duration: 0.25), value: isBarHidden)
+        }
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if search.results.isEmpty && search.isPending {
+            placeholder { ProgressView() }
+        } else if search.results.isEmpty {
+            placeholder { ContentUnavailableView.search(text: search.query) }
+        } else {
+            list(search.results, search.resultsQuery) { isBarHidden = $0 }
+                .id(search.version)
+        }
+    }
+
+    @ViewBuilder
+    private var bottom: some View {
+        if isEditing {
+            SymbolSearchEditor(query: $search.query, isSearching: search.isPending,
+                               placeholder: String(localized: "Search Files and Symbols"),
+                               onClose: { isEditing = false })
+        } else {
+            capsule
+                .padding(.bottom, 8)
+                .offset(y: isBarHidden ? 120 : 0)
+                .opacity(isBarHidden ? 0 : 1)
+                .allowsHitTesting(!isBarHidden)
+        }
+    }
+
+    private var capsule: some View {
+        let label = HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.tint)
+            Text(search.query)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if search.isPending {
+                ProgressView().controlSize(.small)
+            } else {
+                Text(verbatim: "· \(search.results.count)")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 16)
+        .frame(height: 36)
+        .contentShape(Capsule())
+        .onTapGesture { isEditing = true }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(Text("Changes the search"))
+        return Group {
+            if #available(iOS 26.0, *) {
+                label.glassEffect(.regular.interactive(), in: Capsule())
+            } else {
+                label.background(.bar, in: Capsule())
+            }
+        }
+        .padding(.horizontal, 24)
+    }
+
+    private func placeholder<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(uiColor: .systemGroupedBackground))
+    }
+}

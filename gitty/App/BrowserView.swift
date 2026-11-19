@@ -34,6 +34,9 @@ struct BrowserView: View {
     @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
     @AppStorage(CodeTextStyle.themeKey) private var syntaxTheme: SyntaxTheme = .default
 
+    /// The cards and search results stacked over the open file's Code level.
+    @State private var cardPath: [CardRoute] = []
+
     private var currentURL: URL? {
         currentURLString.isEmpty ? nil : URL(string: currentURLString)
     }
@@ -44,10 +47,10 @@ struct BrowserView: View {
 
     var body: some View {
         SideBarContainer(state: sideBar) {
-            NavigationStack {
+            NavigationStack(path: $cardPath) {
                 if let url = currentURL {
                     CodeScreen(url: url, mode: modeBinding, projectID: openProjectID,
-                               opensAtFile: url == openedURL, albumID: openAlbumID,
+                               opensAtFile: url == openedURL, albumID: openAlbumID, cardPath: $cardPath,
                                isEditingAddress: $isEditingAddress, rejectedAddress: rejectedAddress,
                                onOpen: open, onPasteAndGo: pasteAndGo, onOpenAlbum: showAlbum,
                                onShowProject: showWholeProject)
@@ -83,6 +86,11 @@ struct BrowserView: View {
         .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize), theme: syntaxTheme))
         .sheet(isPresented: $isShowingSettings) { SettingsView() }
         .onOpenURL(perform: openShared)
+        // Another file: its own Code level, with nothing stacked on it.
+        .onChange(of: currentURLString) { cardPath = [] }
+        // Swiping from the right edge pages cards (and scrolls results), so it doesn't open the
+        // sidebar while anything is stacked.
+        .onChange(of: cardPath.isEmpty) { sideBar.isEdgeSwipeEnabled = cardPath.isEmpty }
         .task(id: [openProjectID, currentURLString]) {
             let current = currentURL
             projectStartURL = nil  // until it's known: the open file stays

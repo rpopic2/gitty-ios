@@ -482,6 +482,12 @@ final class CodeDocumentModel {
         }
     }
 
+    /// The symbol search on its own, for a search made from a card: the list's own search
+    /// stays as it is. `nil` until the search index is built.
+    func searchStream(_ query: String) -> AsyncStream<[CodeSymbol]>? {
+        searchIndex.map { SymbolSearch.stream(query, in: $0) }
+    }
+
     /// Builds the search index for a new list of symbols, away from the main thread, then runs
     /// the current search on it.
     private func prepareSearch(for symbols: [CodeSymbol]) {

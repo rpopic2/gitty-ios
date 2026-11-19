@@ -26,7 +26,7 @@ struct SymbolPager: View {
     let openFile: URL
     /// Pull to refresh on a file's page: download that file (`nil`: the open file) again.
     let onRefresh: @MainActor (URL?) async -> Void
-    /// Search in a page's text menu: close the pager and search symbols.
+    /// Search in a page's text menu: search symbols, on a results page stacked over this one.
     let symbolSearchTerm: @MainActor (String) -> String?
     let onSearchSymbols: @MainActor (String) -> Void
     /// Comment in a page's text menu, with the range in the symbol's text.
@@ -35,6 +35,9 @@ struct SymbolPager: View {
     let firstLine: @MainActor (CodeSymbol) -> Int
     /// Add to Album in a page's text menu, for the selected lines (range in the symbol's text).
     let albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)?
+    /// Where this pager is in the stack of cards (1 at the bottom): the caption shows it once
+    /// there's a card under this one.
+    let stackDepth: Int
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
@@ -44,8 +47,6 @@ struct SymbolPager: View {
     @State private var isCaptionHidden = false
     /// Paged away from the tapped symbol at least once.
     @State private var hasPaged = false
-    /// Swiping from the right edge pages here, so it doesn't open the sidebar.
-    @Environment(SideBarState.self) private var sideBar: SideBarState?
     /// The identifier highlighted on every page (Highlight in the text menu).
     @Environment(HighlightState.self) private var highlights: HighlightState?
     /// A review set aside stays docked at the bottom, above the caption.
@@ -65,7 +66,8 @@ struct SymbolPager: View {
          onSearchSymbols: @escaping @MainActor (String) -> Void,
          onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void,
          firstLine: @escaping @MainActor (CodeSymbol) -> Int,
-         albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)? = nil) {
+         albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)? = nil,
+         stackDepth: Int = 1) {
         self.symbols = symbols
         self.initialID = initialID
         self.initialAnchor = initialAnchor
@@ -80,6 +82,7 @@ struct SymbolPager: View {
         self.onComment = onComment
         self.firstLine = firstLine
         self.albumMenu = albumMenu
+        self.stackDepth = stackDepth
     }
 
     private var visibleID: Int { scrolledID ?? initialID }
@@ -157,7 +160,7 @@ struct SymbolPager: View {
                 VStack(spacing: 0) {
                     if let current {
                         SymbolCaption(symbol: current, fileName: (current.fileURL ?? openFile).displayFileName,
-                                      onInfo: infoAction(for: current))
+                                      stackDepth: stackDepth, onInfo: infoAction(for: current))
                             .padding(.bottom, 8)
                     }
                     if let review, review.isDocked {
@@ -182,8 +185,6 @@ struct SymbolPager: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        .onAppear { sideBar?.isEdgeSwipeEnabled = false }
-        .onDisappear { sideBar?.isEdgeSwipeEnabled = true }
         .background(WillDisappearObserver { onWillClose(visibleID) })
         .onChange(of: scrolledID) { _, id in
             // Until the pager is on the tapped symbol, don't let the first layout overwrite it.
@@ -303,15 +304,18 @@ private struct SymbolCaption: View {
     let symbol: CodeSymbol
     /// The symbol's file's name, after its name.
     let fileName: String
+    /// The card's place in the stack: shown before the symbol from 2 up.
+    let stackDepth: Int
     let onInfo: @MainActor () -> Void
 
     static let height: CGFloat = 36
     /// Space kept free under the text so its end isn't hidden behind the caption.
     static let reservedHeight: CGFloat = height + 16
 
-    init(symbol: CodeSymbol, fileName: String, onInfo: @escaping @MainActor () -> Void) {
+    init(symbol: CodeSymbol, fileName: String, stackDepth: Int, onInfo: @escaping @MainActor () -> Void) {
         self.symbol = symbol
         self.fileName = fileName
+        self.stackDepth = stackDepth
         self.onInfo = onInfo
     }
 
@@ -326,6 +330,18 @@ private struct SymbolCaption: View {
     @ViewBuilder
     private var capsule: some View {
         let label = HStack(spacing: 6) {
+            if stackDepth > 1 {
+                // Stacked on another card: how deep (swipe down to go back one).
+                HStack(spacing: 2) {
+                    Image(systemName: "square.stack")
+                    Text(stackDepth, format: .number)
+                        .monospacedDigit()
+                }
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Card \(stackDepth) in the stack"))
+                Divider().frame(height: 14)
+            }
             Image(systemName: symbol.kind.systemImage)
                 .foregroundStyle(.tint)
             Text(symbol.name)

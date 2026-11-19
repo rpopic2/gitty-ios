@@ -32,12 +32,14 @@ struct CodeScreen: View {
     /// open file's project).
     let albumID: UUID?
 
-    /// The symbol opened in the pager (drives the navigation push).
-    @State private var openedSymbolID: Int?
-    /// Where its code was tapped at the Code level: the page opens at those lines, and fades in
-    /// over them (zooming from the whole screen) instead of zooming from the middle.
-    @State private var openedAnchor: PageAnchor?
-    /// The symbol on screen in the pager.
+    /// The cards and search results pushed over the Code level (`CardRoute`).
+    @Binding var cardPath: [CardRoute]
+    /// The cards in `cardPath`. Ones no longer in it are dropped when the next card opens (not
+    /// when they close: they're still on screen while they zoom away).
+    @State private var stackedCards: [UUID: StackedCard] = [:]
+    /// The latest search made from a card, its results page in `cardPath`.
+    @State private var stackSearch: StackSearch?
+    /// The symbol on screen in the card opened from the list.
     @State private var pagerSymbolID: Int?
     /// Brings a symbol into view in the Code list (the pager closing on another symbol).
     @State private var listScrollRequest: SymbolScrollRequest?
@@ -51,8 +53,6 @@ struct CodeScreen: View {
         let url: URL
         var id: URL { url }
     }
-    /// The symbols the pager pages through: the list's (search results, too) when one is tapped.
-    @State private var pagerSymbols: [CodeSymbol] = []
     /// Symbol search. Stays until it's cleared or another file is opened.
     @State private var symbolQuery = ""
     @State private var isSearchingSymbols = false
@@ -71,13 +71,14 @@ struct CodeScreen: View {
     @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
 
     init(url: URL, mode: Binding<ViewMode>, projectID: String, opensAtFile: Bool = false, albumID: UUID? = nil,
-         isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
+         cardPath: Binding<[CardRoute]>, isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
          onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
          onOpenAlbum: @escaping @MainActor (UUID) -> Void = { _ in },
          onShowProject: @escaping @MainActor () -> Void = {},
          store: DocumentStore = .shared) {
         _model = State(initialValue: CodeDocumentModel(url: url, store: store))
         _mode = mode
+        _cardPath = cardPath
         self.projectID = projectID
         self.opensAtFile = opensAtFile
         self.albumID = albumID
@@ -129,33 +130,13 @@ struct CodeScreen: View {
         }
         .onChange(of: symbolQuery, initial: true) { model.search(symbolQuery) }
         .onChange(of: codeTextStyle) { Task { await model.restyle() } }
-        .navigationDestination(item: $openedSymbolID) { openedID in
-            SymbolPager(
-                symbols: pagerSymbols,
-                initialID: openedID,
-                initialAnchor: openedAnchor,
-                currentID: $pagerSymbolID,
-                text: model.text(of:),
-                // Once you page, the list (hidden behind) follows, so going back lands on the
-                // symbol you were reading.
-                onPage: { listScrollRequest = SymbolScrollRequest($0) },
-                // Closing leaves the list where it is: a card tapped near the top or bottom
-                // doesn't jump to the middle. (After paging, the list has followed already.)
-                onWillClose: { _ in },
-                openFile: model.url,
-                onRefresh: { await model.refresh(file: $0) },
-                symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
-                onSearchSymbols: { searchSymbols(for: $0) },
-                // The page shows the symbol's own text, which starts where the symbol does.
-                onComment: { symbol, range in
-                    comment(on: NSRange(location: symbol.range.location + range.location, length: range.length),
-                            inFile: symbol.fileURL)
-                },
-                firstLine: { model.firstLine(of: $0) },
-                albumMenu: albumMenuAction
-            )
-            .navigationTransition(.zoom(sourceID: openedAnchor == nil ? AnyHashable(openedID) : Self.screenSourceID,
-                                        in: pagerNamespace))
+        .navigationDestination(for: CardRoute.self) { route in
+            switch route {
+            case .card(let id):
+                if let card = stackedCards[id] { cardView(card, route: route) }
+            case .results(let id):
+                if let search = stackSearch, search.id == id { resultsView(search, route: route) }
+            }
         }
         .sheet(item: $historyFile) { file in
             // All the way up, for the history: it can be pulled down to half.
@@ -301,10 +282,102 @@ struct CodeScreen: View {
     private static let screenSourceID = AnyHashable("codeScreen")
 
     private func openPager(at symbol: CodeSymbol, anchor: PageAnchor?) {
-        pagerSymbols = shownSymbols  // page through the search results only
+        let id = UUID()
+        // Where its code was tapped, the page opens at those lines and fades in over them
+        // (zooming from the whole screen) instead of zooming from the middle.
+        stackedCards = [id: StackedCard(symbols: shownSymbols,  // page through the search results only
+                                        initialID: symbol.id, anchor: anchor,
+                                        zoomSource: anchor == nil ? AnyHashable(symbol.id) : Self.screenSourceID,
+                                        isBase: true, depth: 1)]
+        stackSearch = nil
         pagerSymbolID = symbol.id
-        openedAnchor = anchor
-        openedSymbolID = symbol.id
+        cardPath = [.card(id)]
+    }
+
+    /// A card in the stack: the one opened from the list, or one opened from search results.
+    private func cardView(_ card: StackedCard, route: CardRoute) -> some View {
+        SymbolPager(
+            symbols: card.symbols,
+            initialID: card.initialID,
+            initialAnchor: card.anchor,
+            currentID: card.isBase ? $pagerSymbolID : .constant(nil),
+            text: model.text(of:),
+            // Once you page, the list (hidden behind) follows, so going back lands on the
+            // symbol you were reading.
+            onPage: { id in if card.isBase { listScrollRequest = SymbolScrollRequest(id) } },
+            // Closing leaves the list where it is: a card tapped near the top or bottom
+            // doesn't jump to the middle. (After paging, the list has followed already.)
+            onWillClose: { _ in },
+            openFile: model.url,
+            onRefresh: { await model.refresh(file: $0) },
+            symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
+            onSearchSymbols: { searchInStack(for: $0, from: route) },
+            // The page shows the symbol's own text, which starts where the symbol does.
+            onComment: { symbol, range in
+                comment(on: NSRange(location: symbol.range.location + range.location, length: range.length),
+                        inFile: symbol.fileURL)
+            },
+            firstLine: { model.firstLine(of: $0) },
+            albumMenu: albumMenuAction,
+            stackDepth: card.depth
+        )
+        // A results page stacked on it zooms out of it.
+        .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
+        .navigationTransition(.zoom(sourceID: card.zoomSource, in: pagerNamespace))
+    }
+
+    /// A search's results, stacked over the card it was made from.
+    private func resultsView(_ search: StackSearch, route: CardRoute) -> some View {
+        StackResultsView(search: search) { symbols, query, onScrollDown in
+            SymbolsView(
+                symbols: symbols,
+                query: query,
+                isActive: true,
+                ownText: ownText,
+                scrollRequest: nil,
+                collapseRequest: nil,
+                onCenteredSymbolChange: { _ in },
+                isBarCollapsed: { false },
+                barTapCount: 0,
+                openFile: model.url,
+                collapseScope: model.collapseScope,
+                rootFolderName: model.symbolsProjectTitle ?? model.fileName,
+                onOpen: { openStackedCard(at: $0, anchor: nil, from: search) },
+                onOpenAt: { openStackedCard(at: $0, anchor: $1, from: search) },
+                onBarCollapsedChange: onScrollDown,
+                albumContext: albumContext,
+                onShowHistory: {
+                    historyDetent = .large
+                    historyFile = HistoryFile(url: $0)
+                },
+                onDownloadFile: { model.download(file: $0) },
+                downloadingFiles: model.downloadingFiles,
+                onOpenURL: { onOpen($0) }
+            )
+            .equatable()
+        }
+        // Its cards zoom out of it; it zooms out of (and back into) its card.
+        .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
+        .navigationTransition(.zoom(sourceID: AnyHashable(search.source), in: pagerNamespace))
+    }
+
+    /// Search on a card: its results go on top of it. Only the latest results stay in the stack:
+    /// an older results page (under this card) is taken out.
+    private func searchInStack(for query: String, from card: CardRoute) {
+        let search = StackSearch(query: query, source: card, model: model)
+        stackSearch = search
+        cardPath = cardPath.filter(\.isCard) + [.results(search.id)]
+    }
+
+    /// A result's card, on top of the results, paging through them.
+    private func openStackedCard(at symbol: CodeSymbol, anchor: PageAnchor?, from search: StackSearch) {
+        // Cards that have closed since are gone for good.
+        stackedCards = stackedCards.filter { cardPath.contains(.card($0.key)) }
+        let id = UUID()
+        stackedCards[id] = StackedCard(symbols: search.results, initialID: symbol.id, anchor: anchor,
+                                       zoomSource: AnyHashable(CardRoute.results(search.id)),
+                                       isBase: false, depth: cardPath.filter(\.isCard).count + 1)
+        cardPath.append(.card(id))
     }
 
     /// The open file's text, for its symbols' code at the Code level (the same object until
@@ -486,14 +559,6 @@ struct CodeScreen: View {
     /// Search in the text menu: what to search for, for any selection.
     private func symbolSearchTerm(forSelection selection: String) -> String? {
         SymbolSearch.query(fromSelection: selection)
-    }
-
-    /// Search (from a page's text menu): the page closes, and the list filters with the
-    /// selection in the focused search field.
-    private func searchSymbols(for name: String) {
-        openedSymbolID = nil
-        symbolQuery = name
-        isSearchingSymbols = true
     }
 
     /// Comment on a range of the file: add it to the end of the review and open the review.
