@@ -34,6 +34,55 @@ nonisolated enum FileNameSearch {
     }
 }
 
+/// A folder of the list's files, for grouping them under a header (at the Code level, while
+/// every file is folded).
+nonisolated struct FolderGroup: Identifiable, Sendable {
+    /// The folder's path in the project ("" for its top).
+    let path: String
+    /// Its files' entries and symbols, in list order.
+    let symbols: [CodeSymbol]
+    let fileCount: Int
+
+    var id: String { path }
+
+    /// Groups the list (path order: each file's entry, then its symbols) by the files'
+    /// folders, in the order each folder's first file comes, so a folder's files are together
+    /// even when its subfolders' come between them in path order.
+    /// - Parameters:
+    ///   - openFile: the file that symbols without a `fileURL` are in.
+    ///   - scope: where the project's files start (their paths are after it).
+    static func groups(of symbols: [CodeSymbol], openFile: URL, scope: String) -> [FolderGroup] {
+        var order: [String] = []
+        var byFolder: [String: [CodeSymbol]] = [:]
+        var files: [String: Int] = [:]
+        var folder = ""
+        var current: URL?
+        for symbol in symbols {
+            // Each file's folder, worked out once (an album may list a file's symbols without
+            // its entry).
+            let file = symbol.fileURL ?? openFile
+            if file != current {
+                current = file
+                folder = path(of: file, scope: scope)
+            }
+            if byFolder[folder] == nil { order.append(folder) }
+            byFolder[folder, default: []].append(symbol)
+            if symbol.kind == .file { files[folder, default: 0] += 1 }
+        }
+        return order.map { FolderGroup(path: $0, symbols: byFolder[$0] ?? [], fileCount: files[$0] ?? 0) }
+    }
+
+    /// The folder a file is in, inside the project: "" at its top.
+    static func path(of file: URL, scope: String) -> String {
+        let address = file.absoluteString
+        guard address.hasPrefix(scope) else { return "" }
+        let relative = String(address.dropFirst(scope.count))
+        let decoded = relative.removingPercentEncoding ?? relative
+        guard let slash = decoded.lastIndex(of: "/") else { return "" }
+        return String(decoded[..<slash])
+    }
+}
+
 /// What's collapsed at the Code level, saved in `UserDefaults`:
 /// - symbols, whose code is hidden under their titles (tap a title);
 /// - files, whose symbols are all hidden under the file's title (tap a file's title).
@@ -56,6 +105,9 @@ final class CollapsedCodeStore {
     private(set) var collapsedScopes: Set<String>
     /// Scopes whose files are folded by default (pinching in on all titles).
     private(set) var foldedScopes: Set<String>
+    /// Folders folded under their header (while every file is folded, the files are grouped by
+    /// folder): `folder#` + scope + the folder's path.
+    private(set) var folders: Set<String>
     @ObservationIgnored private let defaults: UserDefaults
 
     private enum Key {
@@ -63,6 +115,7 @@ final class CollapsedCodeStore {
         static let files = "collapsedCode.files"
         static let scopes = "collapsedCode.scopes"
         static let foldedScopes = "collapsedCode.foldedScopes"
+        static let folders = "collapsedCode.folders"
         /// Before Collapse All: symbols and `file#` keys together.
         static let old = "collapsedCode"
     }
@@ -81,6 +134,17 @@ final class CollapsedCodeStore {
         self.files = files
         collapsedScopes = Set(defaults.stringArray(forKey: Key.scopes) ?? [])
         foldedScopes = Set(defaults.stringArray(forKey: Key.foldedScopes) ?? [])
+        folders = Set(defaults.stringArray(forKey: Key.folders) ?? [])
+    }
+
+    func isFolderFolded(_ path: String, scope: String) -> Bool {
+        folders.contains("folder#" + scope + path)
+    }
+
+    func toggleFolder(_ path: String, scope: String) {
+        let key = "folder#" + scope + path
+        if folders.contains(key) { folders.remove(key) } else { folders.insert(key) }
+        save()
     }
 
     /// - Parameter openFile: the file that symbols without a `fileURL` are in.
@@ -176,5 +240,6 @@ final class CollapsedCodeStore {
         defaults.set(files.sorted(), forKey: Key.files)
         defaults.set(collapsedScopes.sorted(), forKey: Key.scopes)
         defaults.set(foldedScopes.sorted(), forKey: Key.foldedScopes)
+        defaults.set(folders.sorted(), forKey: Key.folders)
     }
 }

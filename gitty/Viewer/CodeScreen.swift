@@ -59,7 +59,6 @@ struct CodeScreen: View {
     /// The project chosen in the sidebar, for the bar in Project mode (`nil` for Files).
     @State private var project: ProjectInfo?
     /// The Project tab's order for that project (the sort button beside the mode selector).
-    @State private var projectSorting = ListSorting()
     /// The review that Comment adds to.
     @Environment(ReviewDraft.self) private var review
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
@@ -100,7 +99,6 @@ struct CodeScreen: View {
         .task { await model.load() }
         .task(id: projectID) {
             project = projectID.isEmpty ? nil : await ProjectStore.shared.project(id: projectID)
-            projectSorting = ListSortingStore.standard.sorting(for: .project, projectID: projectID)
         }
         .onChange(of: mode) { old, _ in
             model.setBarCollapsed(false)
@@ -173,7 +171,7 @@ struct CodeScreen: View {
             // instant: it doesn't read and group the project's files again.
             if hasShownProject {
                 ProjectView(projectID: projectID, currentURL: model.url, isActive: mode == .project,
-                            sorting: projectSorting) { url in
+                            sorting: ListSorting()) { url in
                     open(url)
                 }
                 .equatable()  // hidden, its big list mustn't redraw each time this screen does
@@ -255,6 +253,7 @@ struct CodeScreen: View {
                 barTapCount: model.barTapCount,
                 openFile: model.url,
                 collapseScope: model.collapseScope,
+                rootFolderName: model.symbolsProjectTitle ?? model.fileName,
                 onOpen: { openPager(at: $0, anchor: nil) },
                 onOpenAt: { openPager(at: $0, anchor: $1) },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
@@ -269,8 +268,8 @@ struct CodeScreen: View {
             .equatable()
             // A fresh list for each search's results, for the full list after, and for each order
             // (ids are places in the list, so they move; the list finds its symbol by name).
-            .id([shownQuery, model.symbolSorting.order.rawValue, model.symbolSorting.isReversed ? "reversed" : "",
-                 model.activeAlbum?.id.uuidString ?? ""])
+            // (and once the project's files are in, when the open file showed alone before them).
+            .id([shownQuery, model.activeAlbum?.id.uuidString ?? "", model.projectSymbolsLoaded ? "project" : "file"])
         case .unsupportedLanguage:
             placeholder {
                 ContentUnavailableView(
@@ -329,8 +328,9 @@ struct CodeScreen: View {
     /// was left last time this file was open.
     private func savedListSymbolID() -> Int? {
         if startsAtFile {
-            startsAtFile = false
-            return 0  // the open file's entry comes first
+            // Until the project's files are in: the list starts again with them (see `.id`).
+            if model.projectSymbolsLoaded { startsAtFile = false }
+            return ownEntryID
         }
         return ReadingPositionStore.standard.symbolsPosition(for: model.url)?.symbolID(in: model.listSymbols)
     }
@@ -412,27 +412,9 @@ struct CodeScreen: View {
                 // The symbol levels show the active search in the bar; Project edits the address.
                 searchQuery: barSearchesSymbols ? symbolQuery : nil,
                 onClearSearch: { symbolQuery = "" },
-                sorting: barSorting,
                 onCollapseAll: collapseAllAction(true),
                 onExpandAll: collapseAllAction(false)
             )
-        }
-    }
-
-    /// The sort button beside the mode selector: the project's files in Project mode, and the
-    /// project's files at the symbol levels. None for Files (it has its own order), or for a file
-    /// outside a project.
-    private var barSorting: Binding<ListSorting>? {
-        switch mode {
-        case .project where !projectID.isEmpty:
-            return Binding(get: { projectSorting }, set: { sorting in
-                projectSorting = sorting
-                ListSortingStore.standard.save(sorting, for: .project, projectID: projectID)
-            })
-        case _ where mode.showsSymbols && model.symbolsProjectID != nil:
-            return Binding(get: { model.symbolSorting }, set: { model.setSymbolSorting($0) })
-        default:
-            return nil
         }
     }
 
@@ -526,11 +508,16 @@ struct CodeScreen: View {
     }
 
     /// Opening a file from Project: the Code level, at the file's own entry. The open file just
-    /// scrolls there; another file opens (and becomes the open one, first in the list).
+    /// scrolls there; another file opens (and becomes the open one).
     private func open(_ url: URL) {
         guard url == model.url else { return onOpen(url) }
         withAnimation(.smooth(duration: 0.3)) { mode = .code }
-        listScrollRequest = SymbolScrollRequest(0)
+        if let ownEntryID { listScrollRequest = SymbolScrollRequest(ownEntryID) }
+    }
+
+    /// The open file's own entry in the list (in path order among the project's files).
+    private var ownEntryID: Int? {
+        model.listSymbols.first { $0.kind == .file && $0.fileURL == nil }?.id
     }
 
     /// The bar menu's Collapse All and Expand All, at the Code level once the list shows.

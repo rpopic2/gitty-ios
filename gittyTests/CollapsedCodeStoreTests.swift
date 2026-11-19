@@ -87,6 +87,16 @@ struct CollapsedCodeStoreTests {
         #expect(!store.areAllFilesFolded(scope: scope) && !store.isFileCollapsed(open, scope: scope))
     }
 
+    @Test func foldersFoldAndAreSaved() throws {
+        let (store, defaults) = try store()
+        store.toggleFolder("src", scope: scope)
+        #expect(store.isFolderFolded("src", scope: scope))
+        #expect(!store.isFolderFolded("src/lib", scope: scope))
+        #expect(CollapsedCodeStore(defaults: defaults).isFolderFolded("src", scope: scope))
+        store.toggleFolder("src", scope: scope)
+        #expect(!store.isFolderFolded("src", scope: scope))
+    }
+
     @Test func theOldSavedFormIsKept() throws {
         let defaults = try #require(UserDefaults(suiteName: "CollapsedCodeStoreTests-\(UUID().uuidString)"))
         defaults.set([CollapsedCodeStore.key(for: symbol("main"), openFile: open),

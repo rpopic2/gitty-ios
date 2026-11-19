@@ -40,6 +40,8 @@ struct SymbolsView: View, Equatable {
     let openFile: URL
     /// Where the list's files are, for what's collapsed (see `CollapsedCodeStore`).
     let collapseScope: String
+    /// The top folder's name, in the grouped view (the project's).
+    let rootFolderName: String
     let onOpen: @MainActor (CodeSymbol) -> Void
     /// A tap on a symbol's code: open its page with the tapped line where it was on screen.
     let onOpenAt: (@MainActor (CodeSymbol, PageAnchor) -> Void)?
@@ -56,6 +58,8 @@ struct SymbolsView: View, Equatable {
     @State private var codeBlocks = CodeBlockStore()
     /// Each file's symbol count, for its title.
     @State private var fileCounts = FileSymbolCounts()
+    /// The files by folder, while every file is folded.
+    @State private var folderGroups = FolderGroupCache()
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
     /// The line-number peek.
@@ -80,6 +84,7 @@ struct SymbolsView: View, Equatable {
          onCenteredSymbolChange: @escaping @MainActor (Int) -> Void,
          isBarCollapsed: @escaping @MainActor () -> Bool, barTapCount: Int, openFile: URL,
          collapseScope: String,
+         rootFolderName: String = "",
          onOpen: @escaping @MainActor (CodeSymbol) -> Void,
          onOpenAt: (@MainActor (CodeSymbol, PageAnchor) -> Void)? = nil,
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
@@ -98,6 +103,7 @@ struct SymbolsView: View, Equatable {
         self.barTapCount = barTapCount
         self.openFile = openFile
         self.collapseScope = collapseScope
+        self.rootFolderName = rootFolderName
         self.onOpen = onOpen
         self.onOpenAt = onOpenAt
         self.onBarCollapsedChange = onBarCollapsedChange
@@ -114,6 +120,7 @@ struct SymbolsView: View, Equatable {
             && lhs.scrollRequest == rhs.scrollRequest && lhs.collapseRequest == rhs.collapseRequest
             && lhs.barTapCount == rhs.barTapCount
             && lhs.openFile == rhs.openFile && lhs.collapseScope == rhs.collapseScope
+            && lhs.rootFolderName == rhs.rootFolderName
             && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
             && lhs.albumContext == rhs.albumContext && (lhs.onShowHistory == nil) == (rhs.onShowHistory == nil)
     }
@@ -205,24 +212,69 @@ struct SymbolsView: View, Equatable {
             ? CodeLayoutKey(width: codeWidth - 2 * RawTextStyle.insets.left, style: codeTextStyle,
                             isDark: colorScheme == .dark)
             : nil
-        return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-            ForEach(symbols) { symbol in
-                Section {
-                    SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, collapsed: collapsed, openFile: openFile,
-                               scope: scope, contextMenu: contextMenu(for: symbol), onTap: { onOpen(symbol) },
-                               onTapAt: { anchor in
-                                   if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
-                               })
-                } header: {
-                    // Tap to collapse: a symbol's code, or a whole file's symbols.
-                    CodeHeader(symbol: symbol, collapsed: collapsed, blocks: codeBlocks, openFile: openFile, scope: scope,
-                               symbolCount: symbol.kind == .file ? fileCounts.count(of: symbol, in: symbols) : 0,
-                               contextMenu: contextMenu(for: symbol))
-                }
+        return Group {
+            if collapsed.areAllFilesFolded(scope: scope) {
+                groupedByFolder
+            } else {
+                outline
             }
         }
         .scrollTargetLayout()
         .modifier(PeekShift(peek: peek))  // the whole list slides while peeking
+    }
+
+    /// Each symbol under its title, which sticks while you read its code.
+    private var outline: some View {
+        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+            ForEach(symbols) { symbol in
+                Section {
+                    code(for: symbol)
+                } header: {
+                    // Tap to collapse: a symbol's code, or a whole file's symbols.
+                    header(for: symbol)
+                }
+            }
+        }
+    }
+
+    /// Every file folded: the files grouped by folder, under a header that sticks while its
+    /// files scroll under it (tap it to fold the folder). A file unfolded here shows its
+    /// symbols under it, in its folder (their titles don't stick: the folder's does).
+    private var groupedByFolder: some View {
+        let collapsed = collapsed
+        let scope = collapseScope
+        return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+            ForEach(folderGroups.groups(of: symbols, openFile: openFile, scope: scope)) { group in
+                let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
+                Section {
+                    ForEach(isFolded ? [] : group.symbols) { symbol in
+                        VStack(spacing: 0) {
+                            header(for: symbol)
+                            code(for: symbol)
+                        }
+                    }
+                } header: {
+                    FolderHeader(path: group.path.isEmpty ? rootFolderName : group.path, fileCount: group.fileCount,
+                                 isFolded: isFolded) {
+                        withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func code(for symbol: CodeSymbol) -> some View {
+        SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, collapsed: collapsed, openFile: openFile,
+                   scope: collapseScope, contextMenu: contextMenu(for: symbol), onTap: { onOpen(symbol) },
+                   onTapAt: { anchor in
+                       if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
+                   })
+    }
+
+    private func header(for symbol: CodeSymbol) -> some View {
+        CodeHeader(symbol: symbol, collapsed: collapsed, blocks: codeBlocks, openFile: openFile, scope: collapseScope,
+                   symbolCount: symbol.kind == .file ? fileCounts.count(of: symbol, in: symbols) : 0,
+                   contextMenu: contextMenu(for: symbol))
     }
 
     /// The long-press menu of a symbol's title and code (the same for both): a small preview
@@ -448,6 +500,71 @@ private struct FileTitle: View {
         .accessibilityValue(isFolded ? Text("Folded") : Text("Unfolded"))
         .accessibilityHint(isFolded ? Text("Shows the file’s symbols") : Text("Hides the file’s symbols"))
         .accessibilityAddTraits([.isHeader, .isButton])
+    }
+}
+
+/// A folder's header while every file is folded: its path (the project's name for its top) and
+/// how many files it has, with a chevron; tap it to fold the folder. Sticks while its files
+/// scroll under it.
+private struct FolderHeader: View {
+    let path: String
+    let fileCount: Int
+    let isFolded: Bool
+    let onToggle: @MainActor () -> Void
+
+    init(path: String, fileCount: Int, isFolded: Bool, onToggle: @escaping @MainActor () -> Void) {
+        self.path = path
+        self.fileCount = fileCount
+        self.isFolded = isFolded
+        self.onToggle = onToggle
+    }
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isFolded ? 0 : 90))
+                Image(systemName: "folder")
+                    .foregroundStyle(.tint)
+                Text(path)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Text("· \(fileCount)")
+                    .font(.subheadline)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 40)
+            .background(.bar)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(path), \(fileCount) files")
+        .accessibilityValue(isFolded ? Text("Folded") : Text("Unfolded"))
+        .accessibilityHint(isFolded ? Text("Shows the folder’s files") : Text("Hides the folder’s files"))
+        .accessibilityAddTraits([.isHeader, .isButton])
+    }
+}
+
+/// The files by folder, worked out again only when the list changes. Not observed.
+private final class FolderGroupCache {
+    private var key: [String] = []
+    private var groups: [FolderGroup] = []
+
+    func groups(of symbols: [CodeSymbol], openFile: URL, scope: String) -> [FolderGroup] {
+        let key = ["\(symbols.count)", "\(symbols.first?.id ?? -1)", "\(symbols.last?.id ?? -1)", scope,
+                   openFile.absoluteString]
+        if key != self.key {
+            self.key = key
+            groups = FolderGroup.groups(of: symbols, openFile: openFile, scope: scope)
+        }
+        return groups
     }
 }
 

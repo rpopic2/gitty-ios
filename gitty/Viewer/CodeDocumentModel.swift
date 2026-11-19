@@ -39,15 +39,14 @@ final class CodeDocumentModel {
     private(set) var resultsQuery = ""
     /// A search is still going through the symbols.
     private(set) var isSearching = false
-    /// The project the open file is in (once the project's symbols are loaded), whose Symbols
-    /// order `symbolSorting` is. `nil` for a file that isn't in a project.
+    /// The project the open file is in (once the project's symbols are loaded). `nil` for a
+    /// file that isn't in a project.
     private(set) var symbolsProjectID: String?
+    /// That project's name, for its top folder at the Code level.
+    private(set) var symbolsProjectTitle: String?
     /// Where the list's files are, for what's collapsed at the Code level (`CollapsedCodeStore`):
     /// the project's raw address prefix, or the open file's address outside projects.
     private(set) var collapseScope: String
-    /// The order of the project's other files in Symbols (the open file always comes first;
-    /// each file's symbols stay in file order).
-    private(set) var symbolSorting = ListSorting()
     /// Other files' text, for their symbols' pages. Loaded when a page needs it; a few are kept.
     private var otherTexts: [URL: NSAttributedString] = [:]
     /// The album the list shows instead of the whole project, when it's this project's.
@@ -92,8 +91,6 @@ final class CodeDocumentModel {
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     /// The latest search asked for, run again when the symbols change.
     @ObservationIgnored private var wantedQuery = ""
-    /// When files were last opened, for recently opened order.
-    @ObservationIgnored private var openDates: [String: Date] = [:]
     /// The project filter the other files were indexed with.
     @ObservationIgnored private var loadedFilter: FileFilter?
     @ObservationIgnored private var loadingTexts: Set<URL> = []
@@ -249,9 +246,8 @@ final class CodeDocumentModel {
             }
             if let project, symbolsProjectID != project.id {
                 symbolsProjectID = project.id
-                symbolSorting = ListSortingStore.standard.sorting(for: .symbols, projectID: project.id)
+                symbolsProjectTitle = project.title
             }
-            openDates = await OpenHistory.shared.snapshot()
             let filter = project.map { ProjectFilterStore.standard.filter(for: $0.id) } ?? .none
             if projectSymbolsLoaded, filter == loadedFilter {
                 isLoadingProjectSymbols = false
@@ -267,8 +263,8 @@ final class CodeDocumentModel {
         }
     }
 
-    /// One flat list: the open file's entry and its symbols in file order, then each other
-    /// file's entry and symbols, in path order. Ids are positions in this list.
+    /// One flat list, in path order, the open file in its place among the project's: each
+    /// file's entry, then its symbols in file order. Ids are positions in this list.
     private func publishSymbols() {
         guard let ownSymbols else { return }
         var combined: [CodeSymbol] = []
@@ -276,15 +272,23 @@ final class CodeDocumentModel {
         // another language) is just its entry: its page is the whole file.
         var own: [CodeSymbol] = []
         if case .symbols(let symbols) = ownSymbols { own = symbols }
-        combined = ((ownFileEntry.map { [$0] } ?? []) + own).enumerated().map { $1.moved(to: $0, file: nil) }
-        let files = symbolSorting.arrange(otherFiles, key: { $0.url.absoluteString },
-                                          name: { $0.url.absoluteString }, history: openDates)
-        for file in files {
+        let ownEntries = (ownFileEntry.map { [$0] } ?? []) + own
+        let ownAddress = url.absoluteString
+        // The other files come in path order: the open file goes before the first that's after it.
+        let ownPlace = otherFiles.firstIndex {
+            ownAddress.localizedStandardCompare($0.url.absoluteString) == .orderedAscending
+        } ?? otherFiles.count
+        func appendOwn() {
+            for symbol in ownEntries { combined.append(symbol.moved(to: combined.count, file: nil)) }
+        }
+        for (index, file) in otherFiles.enumerated() {
+            if index == ownPlace { appendOwn() }
             combined.append(file.file.moved(to: combined.count, file: file.url))
             for symbol in file.symbols {
                 combined.append(symbol.moved(to: combined.count, file: file.url))
             }
         }
+        if ownPlace == otherFiles.count { appendOwn() }
         symbolIndex = .ready(combined)
         prepareSearch(for: combined)
         publishAlbum()
@@ -377,17 +381,6 @@ final class CodeDocumentModel {
 
     @ObservationIgnored private var albumSearch: (key: AlbumSearchKey, result: [CodeSymbol])?
 
-    /// The sort button in Symbols: reorders the project's other files and saves the choice for
-    /// the project.
-    func setSymbolSorting(_ sorting: ListSorting) {
-        guard sorting != symbolSorting else { return }
-        symbolSorting = sorting
-        if let symbolsProjectID {
-            ListSortingStore.standard.save(sorting, for: .symbols, projectID: symbolsProjectID)
-        }
-        publishSymbols()
-    }
-
     // MARK: - Symbol search
 
     /// Searches the symbols in the background. Matches fill `searchResults` as they're found
@@ -434,7 +427,7 @@ final class CodeDocumentModel {
         guard symbolIndex.isReady else { return [] }
         let all = listSymbols
         let key = FileSearchKey(query: query, count: all.count, first: all.first?.id, last: all.last?.id,
-                                sorting: symbolSorting, album: activeAlbum?.id)
+                                album: activeAlbum?.id)
         if let fileSearch, fileSearch.key == key { return fileSearch.result }
         let result = FileNameSearch.symbols(inFilesNamed: query, in: all, maxRank: 5)
         fileSearch = (key, result)
@@ -446,7 +439,6 @@ final class CodeDocumentModel {
         let count: Int
         let first: Int?
         let last: Int?
-        let sorting: ListSorting
         let album: UUID?
     }
 
