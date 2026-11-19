@@ -97,6 +97,21 @@ struct CollapsedCodeStoreTests {
         #expect(!store.isFolderFolded("src", scope: scope))
     }
 
+    @Test func pinchingInOnTheFoldersFoldsThemAll() throws {
+        let (store, defaults) = try store()
+        store.setAllFoldersFolded(true, scope: scope)
+        #expect(store.isFolderFolded("src", scope: scope) && store.isFolderFolded("", scope: scope))
+        store.toggleFolder("src", scope: scope)  // one unfolded: the others stay folded
+        #expect(!store.isFolderFolded("src", scope: scope) && store.isFolderFolded("lib", scope: scope))
+        #expect(CollapsedCodeStore(defaults: defaults).isFolderFolded("lib", scope: scope))
+        store.setAllFoldersFolded(false, scope: scope)
+        #expect(!store.isFolderFolded("src", scope: scope) && !store.isFolderFolded("lib", scope: scope))
+        // Expand All starts the folders over too.
+        store.setAllFoldersFolded(true, scope: scope)
+        store.setAllCollapsed(false, scope: scope)
+        #expect(!store.areAllFoldersFolded(scope: scope))
+    }
+
     @Test func theOldSavedFormIsKept() throws {
         let defaults = try #require(UserDefaults(suiteName: "CollapsedCodeStoreTests-\(UUID().uuidString)"))
         defaults.set([CollapsedCodeStore.key(for: symbol("main"), openFile: open),

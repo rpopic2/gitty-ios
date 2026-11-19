@@ -341,9 +341,10 @@ struct SymbolsView: View, Equatable {
             }
     }
 
-    /// Pinching zooms out and in through three steps, one per pinch (when it passes the
+    /// Pinching zooms out and in through four steps, one per pinch (when it passes the
     /// threshold): the code; every symbol collapsed to its title (an outline); every file folded
-    /// to its title. Pinching in (fingers together) goes out a step, pinching out back in.
+    /// to its title (grouped by folder); every folder folded to its header. Pinching in (fingers
+    /// together) goes out a step, pinching out back in.
     private func pinch(_ reader: ScrollViewProxy) -> some Gesture {
         MagnifyGesture()
             .onChanged { value in
@@ -351,14 +352,18 @@ struct SymbolsView: View, Equatable {
                 let scope = collapseScope
                 if value.magnification < 0.8 {
                     pinchHandled = true
-                    if collapsed.areAllCollapsed(scope: scope) {
+                    if !collapsed.areAllCollapsed(scope: scope) {
+                        setAllCollapsed(true, reader)
+                    } else if !collapsed.areAllFilesFolded(scope: scope) {
                         setAllFilesFolded(true, reader)
                     } else {
-                        setAllCollapsed(true, reader)
+                        withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(true, scope: scope) }
                     }
                 } else if value.magnification > 1.25 {
                     pinchHandled = true
-                    if collapsed.areAllFilesFolded(scope: scope) {
+                    if collapsed.areAllFoldersFolded(scope: scope) {
+                        withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(false, scope: scope) }
+                    } else if collapsed.areAllFilesFolded(scope: scope) {
                         setAllFilesFolded(false, reader)
                     } else {
                         setAllCollapsed(false, reader)

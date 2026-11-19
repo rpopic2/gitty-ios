@@ -105,9 +105,12 @@ final class CollapsedCodeStore {
     private(set) var collapsedScopes: Set<String>
     /// Scopes whose files are folded by default (pinching in on all titles).
     private(set) var foldedScopes: Set<String>
-    /// Folders folded under their header (while every file is folded, the files are grouped by
-    /// folder): `folder#` + scope + the folder's path.
+    /// Folders that differ from their scope's default (folded under their header, unless the
+    /// scope's are): `folder#` + scope + the folder's path. While every file is folded, the
+    /// files are grouped by folder.
     private(set) var folders: Set<String>
+    /// Scopes whose folders are folded by default (pinching in once more on the folders).
+    private(set) var foldedFolderScopes: Set<String>
     @ObservationIgnored private let defaults: UserDefaults
 
     private enum Key {
@@ -116,6 +119,7 @@ final class CollapsedCodeStore {
         static let scopes = "collapsedCode.scopes"
         static let foldedScopes = "collapsedCode.foldedScopes"
         static let folders = "collapsedCode.folders"
+        static let foldedFolderScopes = "collapsedCode.foldedFolderScopes"
         /// Before Collapse All: symbols and `file#` keys together.
         static let old = "collapsedCode"
     }
@@ -135,10 +139,23 @@ final class CollapsedCodeStore {
         collapsedScopes = Set(defaults.stringArray(forKey: Key.scopes) ?? [])
         foldedScopes = Set(defaults.stringArray(forKey: Key.foldedScopes) ?? [])
         folders = Set(defaults.stringArray(forKey: Key.folders) ?? [])
+        foldedFolderScopes = Set(defaults.stringArray(forKey: Key.foldedFolderScopes) ?? [])
     }
 
     func isFolderFolded(_ path: String, scope: String) -> Bool {
-        folders.contains("folder#" + scope + path)
+        foldedFolderScopes.contains(scope) != folders.contains("folder#" + scope + path)
+    }
+
+    /// Every folder is folded in the scope (unless tapped open since).
+    func areAllFoldersFolded(scope: String) -> Bool {
+        foldedFolderScopes.contains(scope)
+    }
+
+    /// Folds (or unfolds) every folder in a scope, down to the folders' headers.
+    func setAllFoldersFolded(_ isFolded: Bool, scope: String) {
+        if isFolded { foldedFolderScopes.insert(scope) } else { foldedFolderScopes.remove(scope) }
+        folders = folders.filter { !$0.hasPrefix("folder#" + scope) }
+        save()
     }
 
     func toggleFolder(_ path: String, scope: String) {
@@ -207,6 +224,8 @@ final class CollapsedCodeStore {
     func setAllCollapsed(_ isCollapsed: Bool, scope: String) {
         if isCollapsed { collapsedScopes.insert(scope) } else { collapsedScopes.remove(scope) }
         foldedScopes.remove(scope)
+        foldedFolderScopes.remove(scope)
+        folders = folders.filter { !$0.hasPrefix("folder#" + scope) }
         flipped = flipped.filter { !$0.hasPrefix(scope) }
         files = files.filter { !$0.hasPrefix("file#" + scope) }
         save()
@@ -241,5 +260,6 @@ final class CollapsedCodeStore {
         defaults.set(collapsedScopes.sorted(), forKey: Key.scopes)
         defaults.set(foldedScopes.sorted(), forKey: Key.foldedScopes)
         defaults.set(folders.sorted(), forKey: Key.folders)
+        defaults.set(foldedFolderScopes.sorted(), forKey: Key.foldedFolderScopes)
     }
 }
