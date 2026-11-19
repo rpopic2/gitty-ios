@@ -311,7 +311,7 @@ struct SymbolsView: View, Equatable {
         ScrollView {
             content()
         }
-        .scrollPosition(id: centeredID, anchor: .center)
+        .modifier(PositionTracking(position: centeredID, byVisibility: zoom == .code))
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe that
         // closes the search mustn't scroll; scrolling comes back for the next swipe.
@@ -714,6 +714,27 @@ private struct SymbolCodeText: View {
             }
         } else {
             Text(block.pieces?.first ?? AttributedString(TabExpansion.expand(block.symbol.preview)))
+        }
+    }
+}
+
+/// Which symbol is in the middle (at the Code level, at the top), for coming back to it.
+///
+/// The other levels use `scrollPosition(id:)`. The Code level's blocks vary a lot in height (a
+/// one-line macro, a 300-line function), and `scrollPosition` keeps its symbol anchored while
+/// the ones scrolling in are measured, which stalled scrolling each time a long one came in.
+/// There, the list is only watched: the first symbol on screen is reported.
+private struct PositionTracking: ViewModifier {
+    let position: Binding<Int?>
+    let byVisibility: Bool
+
+    func body(content: Content) -> some View {
+        if byVisibility {
+            content.onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.01) { ids in
+                if let first = ids.first { position.wrappedValue = first }
+            }
+        } else {
+            content.scrollPosition(id: position, anchor: .center)
         }
     }
 }

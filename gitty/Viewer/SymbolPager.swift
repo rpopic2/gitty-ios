@@ -35,6 +35,8 @@ struct SymbolPager: View {
     @State private var isPositioned = false
     /// The file whose info panel is open.
     @State private var infoFile: InfoFile?
+    /// Scrolling down a page hides the caption; scrolling up shows it.
+    @State private var isCaptionHidden = false
     /// Paged away from the tapped symbol at least once.
     @State private var hasPaged = false
     /// Swiping from the right edge pages here, so it doesn't open the sidebar.
@@ -111,7 +113,8 @@ struct SymbolPager: View {
                                     positionURL: isFilePage ? symbol.fileURL ?? openFile : nil,
                                     onRefresh: refreshAction(for: symbol),
                                     onPullUp: infoAction(for: symbol),
-                                    lineNumbering: .counted(firstLine: { firstLine(symbol) })
+                                    lineNumbering: .counted(firstLine: { firstLine(symbol) }),
+                                    onScrollDown: { isCaptionHidden = $0 }
                                 )
                                 // The text starts below the status bar and never scrolls under
                                 // it: just the page's background shows there.
@@ -138,6 +141,11 @@ struct SymbolPager: View {
                 if let current {
                     SymbolCaption(symbol: current, onInfo: infoAction(for: current))
                         .padding(.bottom, 8)
+                        .offset(y: isCaptionHidden ? SymbolCaption.reservedHeight + 40 : 0)
+                        .opacity(isCaptionHidden ? 0 : 1)
+                        .allowsHitTesting(!isCaptionHidden)
+                        .accessibilityHidden(isCaptionHidden)
+                        .animation(.smooth(duration: 0.25), value: isCaptionHidden)
                 }
             }
         }
@@ -154,6 +162,7 @@ struct SymbolPager: View {
             // Until the pager is on the tapped symbol, don't let the first layout overwrite it.
             guard isPositioned, let id else { return }
             currentID = id
+            isCaptionHidden = false  // each page starts with it
             if id != initialID { hasPaged = true }
             if hasPaged { onPage(id) }
         }
@@ -309,6 +318,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var onPullUp: (@MainActor () -> Void)? = nil
     /// Swiping in from the left edge and holding shows the line numbers, numbered this way.
     var lineNumbering: LineNumbering? = nil
+    /// The reader scrolled down (`true`: hide what covers the text) or back up.
+    var onScrollDown: (@MainActor (Bool) -> Void)? = nil
     var positionStore: ReadingPositionStore = .standard
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -354,6 +365,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.onRefresh = onRefresh
         coordinator.onPullUp = onPullUp
         coordinator.lineNumbering = lineNumbering
+        coordinator.onScrollDown = onScrollDown
         textView.accessibilityCustomActions = onPullUp == nil ? nil : [
             UIAccessibilityCustomAction(name: String(localized: "File Info")) { _ in
                 coordinator.onPullUp?()
@@ -529,24 +541,23 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 gutter.numbering = lineNumbering
                 gutter.prepare()
                 let width = gutter.preferredWidth(font: LineNumberGutter.font(for: textView))
-                gutter.transform = .identity  // a frame is only meaningful without one
-                gutter.frame = CGRect(x: 0, y: textView.contentOffset.y, width: width, height: textView.bounds.height)
-                gutter.transform = CGAffineTransform(translationX: -width, y: 0)
+                // Just left of the text: the whole page slides right to show it (the text view
+                // scrolls sideways, which nothing else does, so the text isn't laid out again).
+                gutter.frame = CGRect(x: -width, y: textView.contentOffset.y, width: width, height: textView.bounds.height)
                 textView.addSubview(gutter)
                 gutter.setNeedsDisplay()
-                UISelectionFeedbackGenerator().selectionChanged()
                 fallthrough
             case .changed:
                 guard let gutter else { return }
                 // Follows the finger until it's all out, then stays while held.
                 let shown = min(max(gesture.translation(in: textView).x, 0), gutter.bounds.width)
-                gutter.transform = CGAffineTransform(translationX: shown - gutter.bounds.width, y: 0)
+                textView.contentOffset.x = -shown
             default:
                 guard let gutter else { return }
                 UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
-                    gutter.transform = CGAffineTransform(translationX: -gutter.bounds.width, y: 0)
+                    textView.contentOffset.x = 0
                 } completion: { _ in
-                    if gutter.transform.tx <= -gutter.bounds.width + 0.5 { gutter.removeFromSuperview() }
+                    if textView.contentOffset.x == 0 { gutter.removeFromSuperview() }
                 }
             }
         }
@@ -563,10 +574,41 @@ struct ReadOnlyTextView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            reportScrollDirection(scrollView)
             // The peek stays over the screen while the text scrolls under it.
-            guard let gutter, gutter.superview != nil else { return }
-            gutter.center.y = scrollView.contentOffset.y + gutter.bounds.height / 2
+            guard let gutter, gutter.superview != nil, gutter.frame.minY != scrollView.contentOffset.y else { return }
+            gutter.frame.origin.y = scrollView.contentOffset.y
             gutter.setNeedsDisplay()
+        }
+
+        // MARK: Scrolling down hides the caption
+
+        var onScrollDown: (@MainActor (Bool) -> Void)?
+        private var lastY: CGFloat?
+        private var isScrolledDown = false
+
+        /// Reading on (scrolling down) hides the caption; scrolling back up, or reaching the end,
+        /// shows it again. Only the reader's own scrolling counts.
+        private func reportScrollDirection(_ scrollView: UIScrollView) {
+            guard let onScrollDown else { return }
+            let y = scrollView.contentOffset.y
+            defer { lastY = y }
+            guard scrollView.isTracking || scrollView.isDecelerating, let lastY else { return }
+            let inset = scrollView.adjustedContentInset
+            let end = scrollView.contentSize.height + inset.bottom - scrollView.bounds.height
+            let down: Bool
+            if y >= end - 1 || y <= -inset.top {
+                down = false
+            } else if y - lastY > 4 {
+                down = true
+            } else if lastY - y > 4 {
+                down = false
+            } else {
+                return
+            }
+            guard down != isScrolledDown else { return }
+            isScrolledDown = down
+            onScrollDown(down)
         }
 
         /// Let go while pulled this far past the end: the file's info opens.
