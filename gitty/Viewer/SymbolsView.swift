@@ -718,24 +718,30 @@ private struct SymbolTitle: View {
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     var body: some View {
+        // The declaration starts where the code under it does; its kind's icon and the chevron
+        // are at the end.
         HStack(spacing: 6) {
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(isCollapsed ? 0 : 90))
-                .opacity(canCollapse ? 1 : 0)  // still there, so the declarations line up
-                .accessibilityHidden(true)
-            Image(systemName: symbol.kind.systemImage)
-                .font(.caption)
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
             title
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
-            // No line number: peek at the numbers instead.
+            Image(systemName: symbol.kind.systemImage)
+                .font(.caption)
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            if canCollapse {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                    .frame(width: 10)
+                    .accessibilityHidden(true)
+            } else {
+                Color.clear.frame(width: 10, height: 1)  // the icons stay lined up
+            }
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, RawTextStyle.insets.left)
+        .padding(.trailing, 12)
         .padding(.vertical, 4)
         .frame(minHeight: symbol.kind == .file ? 36 : 28)
         .background(.bar)
