@@ -401,7 +401,7 @@ struct SymbolsView: View, Equatable {
                         withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(false, scope: scope) }
                     } else if collapsed.areAllFilesFolded(scope: scope) {
                         setAllFilesFolded(false, reader)
-                    } else if collapsed.areAllCollapsed(scope: scope) || !openCard(at: value.startLocation) {
+                    } else {
                         setAllCollapsed(false, reader)
                     }
                 }
@@ -410,19 +410,6 @@ struct SymbolsView: View, Equatable {
                 pinchHandled = false
                 pinchZoom.settle()  // let go before the next step: back as it was
             }
-    }
-
-    /// Pinching out on code at the last level (the code showing): its full-screen card opens at
-    /// the lines under the fingers, as a photo opens from Photos' grid. The list has grown
-    /// toward the fingers (`PinchZoom`) and the card takes over from there. `false` when the
-    /// pinch isn't on code (a title, say).
-    private func openCard(at location: CGPoint) -> Bool {
-        let point = CGPoint(x: scroll.globalOrigin.x + location.x, y: scroll.globalOrigin.y + location.y)
-        guard let window = UIApplication.shared.connectedScenes
-                .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first,
-              let piece = CodePieceUIView.piece(at: point, in: window)
-        else { return false }
-        return piece.open(at: point)
     }
 
     // MARK: Scrolling
@@ -451,8 +438,6 @@ struct SymbolsView: View, Equatable {
             including: closesSearchOnSwipe ? .all : .subviews
         )
         .simultaneousGesture(peekGesture, including: isActive ? .all : .subviews)
-        // Where the list is on screen, for a pinch's place in the window (`openCard(at:)`).
-        .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: { scroll.globalOrigin = $0 }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
             if width != codeWidth { codeWidth = width }
         }
@@ -1230,7 +1215,7 @@ private struct SymbolCodeText: View {
 
     /// While peeking, slid right with its line numbers.
     private func piece(_ layout: CodePieceLayout) -> some View {
-        CodePieceView(layout: layout, firstFileLine: block.firstLine, isPeeking: peek.isActive, onOpenAt: onTapAt)
+        CodePieceView(layout: layout, firstFileLine: block.firstLine, isPeeking: peek.isActive)
             .contentShape(Rectangle())
             // Where in the piece (for the line) and where on screen (for where it goes on the page).
             .gesture(
@@ -1262,8 +1247,6 @@ private struct PositionTracking: ViewModifier {
 
 private final class ScrollTracking {
     var tracker = BarCollapseTracker()
-    /// The list's top left corner in the window.
-    var globalOrigin: CGPoint = .zero
     var isUserScrolling = false
     /// Decelerating after a fling.
     var isCoasting = false
