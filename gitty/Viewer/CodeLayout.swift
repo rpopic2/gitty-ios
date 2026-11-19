@@ -200,6 +200,11 @@ final class CodePieceUIView: UIView {
         return nil
     }
 
+    /// Whether there's a line at a point of the window, to open the page at.
+    func canOpen(at point: CGPoint) -> Bool {
+        onOpenAt != nil && layout?.line(atY: convert(point, from: nil).y) != nil
+    }
+
     /// Opens its symbol's page at the line at a point of the window, that line staying where
     /// it is on screen. `false` if it's not on a line.
     func open(at point: CGPoint) -> Bool {
