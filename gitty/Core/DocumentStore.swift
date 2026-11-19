@@ -42,6 +42,8 @@ nonisolated enum DocumentStoreError: LocalizedError, Equatable {
 /// - Files live in Application Support, which iOS never purges (unlike Caches/tmp).
 /// - Nothing here refreshes on its own: no timers, no launch checks, no HTTP cache.
 /// - `fetch` is a conditional GET when a copy exists, so an unchanged file costs a 304.
+/// - A cloned project's files (`CloneIndex`) come from its clone instead: they count as
+///   saved, opening one never downloads it, and they can't be deleted one by one.
 actor DocumentStore {
     static let shared = DocumentStore()
 
@@ -52,13 +54,16 @@ actor DocumentStore {
     private let session: URLSession
     /// Adds the GitHub token to files from private repositories. It decides which hosts get it.
     private let authorizer: (any RequestAuthorizer)?
+    private let clones: CloneIndex?
     private var directoryReady = false
 
     init(directory: URL = DocumentStore.defaultDirectory,
          configuration: URLSessionConfiguration = .ephemeral,
-         authorizer: (any RequestAuthorizer)? = GitHubAuth.shared) {
+         authorizer: (any RequestAuthorizer)? = GitHubAuth.shared,
+         clones: CloneIndex? = .shared) {
         self.directory = directory
         self.authorizer = authorizer
+        self.clones = clones
         // Our saved copy is the only cache. Never let URLSession keep (or consult) another one.
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -66,8 +71,9 @@ actor DocumentStore {
         self.session = URLSession(configuration: configuration)
     }
 
-    /// The saved copy, read from disk only. Never touches the network.
+    /// The saved copy (or the cloned file), read from disk only. Never touches the network.
     func cached(_ url: URL) -> StoredDocument? {
+        if let cloned = clones?.document(for: url) { return cloned }
         let paths = paths(for: url)
         guard let metadataBytes = try? Data(contentsOf: paths.metadata),
               let metadata = try? JSONDecoder().decode(DocumentMetadata.self, from: metadataBytes),
@@ -81,19 +87,41 @@ actor DocumentStore {
     func savedDocuments() -> [DocumentMetadata] {
         if let savedList { return savedList }
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        let list = files
+        let downloaded = files
             .filter { $0.pathExtension == "json" }
             .compactMap { try? JSONDecoder().decode(DocumentMetadata.self, from: Data(contentsOf: $0)) }
-            .sorted { $0.fetchedAt > $1.fetchedAt }
+        let list = (downloaded + (clones?.allFiles() ?? [])).sorted { $0.fetchedAt > $1.fetchedAt }
         savedList = list
         return list
+    }
+
+    /// A project was cloned, switched or its clone deleted: its files changed.
+    func clonesChanged() {
+        savedList = nil
+    }
+
+    /// Deletes the files downloaded one by one under `prefix` (a project just cloned: its files
+    /// come from the clone now).
+    func deleteDownloads(under prefix: String) {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.pathExtension == "json" {
+            guard let metadata = try? JSONDecoder().decode(DocumentMetadata.self, from: Data(contentsOf: file)),
+                  metadata.url.absoluteString.hasPrefix(prefix)
+            else { continue }
+            let paths = paths(for: metadata.url)
+            try? FileManager.default.removeItem(at: paths.metadata)
+            try? FileManager.default.removeItem(at: paths.data)
+        }
+        savedList = nil
     }
 
     /// `savedDocuments()`, once read. Cleared whenever a saved copy changes.
     private var savedList: [DocumentMetadata]?
 
-    /// Deletes the saved copy of `url`, if there is one. Opening it again downloads it.
+    /// Deletes the saved copy of `url`, if there is one. Opening it again downloads it. A
+    /// cloned file stays: only deleting the clone removes it.
     func delete(_ url: URL) {
+        guard clones?.location(of: url) == nil else { return }
         savedList = nil
         let paths = paths(for: url)
         try? FileManager.default.removeItem(at: paths.metadata)
@@ -126,6 +154,8 @@ actor DocumentStore {
     ///
     /// - Parameter progress: called with the download fraction, or `nil` while the size is unknown.
     func fetch(_ url: URL, progress: (@Sendable (Double?) -> Void)? = nil) async throws -> FetchResult {
+        // A cloned file is current as of the clone's checkout.
+        if let cloned = clones?.document(for: url) { return .notModified(cloned) }
         let existing = cached(url)
 
         var request = URLRequest(url: url)

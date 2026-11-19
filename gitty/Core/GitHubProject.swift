@@ -173,6 +173,12 @@ nonisolated enum ProjectError: LocalizedError, Equatable {
     }
 }
 
+/// A repository's branch and tag names.
+nonisolated struct ProjectRefs: Equatable, Sendable {
+    let branches: [String]
+    let tags: [String]
+}
+
 /// Projects and their file lists. The list is fetched when a project is added and again only on
 /// pull-to-refresh (as a conditional request, so an unchanged repository costs a 304). Files are
 /// downloaded separately, through `DocumentStore`, when they're opened.
@@ -222,6 +228,7 @@ actor ProjectStore {
 
     func remove(id: String) {
         trees[id] = nil
+        refsCache[id] = nil
         saveIndex(loadIndex().filter { $0.id != id })
         try? FileManager.default.removeItem(at: treeURL(for: id))
     }
@@ -262,6 +269,48 @@ actor ProjectStore {
             }
         }
         throw ProjectError.notFound
+    }
+
+    // MARK: Branches and tags
+
+    /// The repository's branches and tags, from GitHub's API: fetched once per run (or on
+    /// `refresh`), for the branch row and for Clone.
+    func refs(for id: String, refresh: Bool = false) async throws -> ProjectRefs {
+        guard let project = project(id: id) else { throw ProjectError.unknownProject }
+        if !refresh, let known = refsCache[id] { return known }
+        let link = project.link
+        async let branches = names(at: "/repos/\(link.owner)/\(link.repo)/branches")
+        async let tags = names(at: "/repos/\(link.owner)/\(link.repo)/tags")
+        let refs = ProjectRefs(branches: try await branches, tags: try await tags)
+        refsCache[id] = refs
+        return refs
+    }
+
+    private var refsCache: [String: ProjectRefs] = [:]
+
+    /// Every `name` in a paged list (up to 1,000).
+    private func names(at path: String) async throws -> [String] {
+        nonisolated struct Item: Decodable { let name: String }
+        var names: [String] = []
+        for page in 1...10 {
+            let (data, response) = try await get(path: path, query: "per_page=100&page=\(page)", etag: nil)
+            try check(response)
+            let items = try JSONDecoder().decode([Item].self, from: data)
+            names += items.map(\.name)
+            if items.count < 100 { break }
+        }
+        return names
+    }
+
+    /// Moves the project to another branch or tag (same folder): its file list is fetched for
+    /// it, and its files' addresses change with it.
+    func setRef(_ ref: String, for id: String) async throws -> (ProjectInfo, ProjectTree) {
+        guard var project = project(id: id) else { throw ProjectError.unknownProject }
+        guard let tree = try await fetchTree(project.link, ref: ref, etag: nil) else { throw ProjectError.notFound }
+        project.ref = ref
+        update(project)
+        saveTree(tree, for: id)
+        return (project, tree)
     }
 
     /// (ref, folder) pairs to try, most likely first.

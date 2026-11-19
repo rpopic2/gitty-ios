@@ -12,7 +12,7 @@ struct DocumentStoreTests {
     private func makeStore() -> DocumentStore {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
-        return DocumentStore(directory: directory, configuration: configuration, authorizer: nil)
+        return DocumentStore(directory: directory, configuration: configuration, authorizer: nil, clones: nil)
     }
 
     private func ok(_ body: String, etag: String = "\"v1\"") -> StubURLProtocol.Handler {
@@ -116,7 +116,7 @@ struct DocumentStoreTests {
     private func makeStore(authorizer: FakeAuthorizer) -> DocumentStore {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
-        return DocumentStore(directory: directory, configuration: configuration, authorizer: authorizer)
+        return DocumentStore(directory: directory, configuration: configuration, authorizer: authorizer, clones: nil)
     }
 
     @Test func sendsTheTokenWhereTheAuthorizerSaysSo() async throws {

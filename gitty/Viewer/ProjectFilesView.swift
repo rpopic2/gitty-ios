@@ -3,9 +3,10 @@ import UIKit
 
 /// The open project in the Project tab: every file, grouped under a header per directory, code
 /// files first in each. Tap a file to open its code (the Code level). Pull to refresh the list;
-/// Download All saves every file for offline reading. The filter under the header (`*.cs *.md`,
-/// see `FileFilter`) narrows the list, Download All, and the project's symbols. In recently
-/// opened order (the sort button beside the mode selector) the files are one flat list instead.
+/// Clone downloads the whole project with Git (its latest commit) for offline reading and
+/// history. The filter under the header (`*.cs *.md`, see `FileFilter`) narrows the list and the
+/// project's symbols, and the branch row under it switches branch or tag. In recently opened
+/// order (the sort button beside the mode selector) the files are one flat list instead.
 struct ProjectFilesView: View {
     let projectID: String
     /// The file on screen, marked in the list.
@@ -19,7 +20,17 @@ struct ProjectFilesView: View {
     @State private var state: LoadState = .loading
     /// Files with a saved copy (they open offline).
     @State private var saved: Set<URL> = []
-    @State private var download: DownloadProgress?
+    /// The project's clone, if it's cloned.
+    @State private var clone: CloneRecord?
+    /// While cloning: the fraction received.
+    @State private var cloneProgress: Double?
+    @State private var cloneError: (any Error)?
+    @State private var isConfirmingDeleteClone = false
+    /// The whole repository's files' size, roughly what Clone downloads (compressed, less).
+    @State private var repositoryBytes: Int64 = 0
+    /// Branches and tags, for the branch row.
+    @State private var refs: ProjectRefs?
+    @State private var isSwitchingRef = false
     @State private var isSignedIn = false
     @State private var isSigningIn = false
     /// The filter as typed. It's applied (and saved) when editing ends.
@@ -50,25 +61,6 @@ struct ProjectFilesView: View {
         }
     }
 
-    private struct DownloadProgress {
-        var done: Int
-        let total: Int
-    }
-
-    /// What Download All would fetch now: the files the filter lets through that aren't saved
-    /// (and aren't too big), and their size. Worked out when the list, the filter or the saved
-    /// files change, not on every redraw.
-    @State private var pending = PendingDownload()
-    @State private var pendingTask: Task<Void, Never>?
-
-    private nonisolated struct PendingDownload: Sendable {
-        var urls: [URL] = []
-        var bytes: Int64 = 0
-    }
-
-    /// Files bigger than this are left out of Download All (they still open one by one).
-    nonisolated private static let downloadAllSizeLimit = 5_000_000
-
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(projectID: String, currentURL: URL?, isActive: Bool, sorting: ListSorting,
@@ -92,6 +84,19 @@ struct ProjectFilesView: View {
                     isSigningIn = false
                     Task { await load(refresh: true) }
                 }
+            }
+            .alert("Couldn’t Clone", isPresented: cloneErrorIsPresented, presenting: cloneError) { _ in
+                if cloneNeedsSignIn {
+                    Button("Sign In to GitHub") { isSigningIn = true }
+                }
+                Button("OK", role: .cancel) {}
+            } message: { error in
+                Text(error.localizedDescription)
+            }
+            .confirmationDialog("Delete the clone?", isPresented: $isConfirmingDeleteClone, titleVisibility: .visible) {
+                Button("Delete Clone", role: .destructive) { deleteClone() }
+            } message: {
+                Text("Its files are removed from this device. They download one by one again when you open them.")
             }
     }
 
@@ -123,6 +128,7 @@ struct ProjectFilesView: View {
             Section {
                 header(project: project, tree: tree)
                 filterRow
+                branchRow(project: project)
             } footer: {
                 headerFooter(tree: tree, layout: layout)
             }
@@ -169,7 +175,7 @@ struct ProjectFilesView: View {
         .scrollDisabled(!isActive)  // hidden: leaves status-bar taps to the mode on screen
     }
 
-    /// The project's name, owner · branch, and Download All.
+    /// The project's name, its owner, and Clone.
     private func header(project: ProjectInfo, tree: ProjectTree) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "shippingbox")
@@ -180,13 +186,13 @@ struct ProjectFilesView: View {
                 Text(project.title)
                     .font(.headline)
                     .lineLimit(1)
-                Text([project.link.owner, project.ref].compactMap { $0 }.joined(separator: " · "))
+                Text(clone == nil ? project.link.owner : project.link.owner + " · " + String(localized: "Cloned"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            downloadButton
+            cloneButton(project: project)
         }
     }
 
@@ -239,10 +245,7 @@ struct ProjectFilesView: View {
         guard new != filter else { return }
         filter = new
         guard case .loaded = state else { return }
-        Task {
-            await rearrange()
-            updatePending()
-        }
+        Task { await rearrange() }
     }
 
     /// Lists the files again for the filter and the sorting, away from the main thread.
@@ -296,14 +299,12 @@ struct ProjectFilesView: View {
         let now = Set(await DocumentStore.shared.savedDocuments().map(\.url))
         guard now != saved else { return }
         saved = now
-        updatePending()
     }
 
     /// Swiping a saved file: deletes its saved copy. It stays in the list and downloads again
     /// when opened; its reading position is kept. A file that's open stays on screen.
     private func deleteDownload(_ url: URL) {
         saved.remove(url)
-        updatePending()
         Task { await DocumentStore.shared.delete(url) }
     }
 
@@ -317,7 +318,7 @@ struct ProjectFilesView: View {
                              folder: showsFolder ? folder(of: entry, in: project) : nil)
             }
             .swipeActions {
-                if isSaved {
+                if isSaved && clone == nil {  // a cloned file goes with the clone
                     // Not `.destructive`: the row stays, only its saved copy goes.
                     Button { deleteDownload(url) } label: {
                         Label("Delete Download", systemImage: "trash")
@@ -371,7 +372,10 @@ struct ProjectFilesView: View {
     private func load(refresh: Bool) async {
         do {
             let (project, tree) = try await ProjectStore.shared.tree(for: projectID, refresh: refresh)
+            clone = await CloneStore.shared.record(forProject: projectID)
             saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
+            repositoryBytes = Self.bytes(of: tree)
+            if refs == nil || refresh { Task { await loadRefs() } }
             if !hasLoadedFilter {  // the saved filter, once
                 filterText = ProjectFilterStore.standard.text(for: projectID)
                 filter = FileFilter(filterText)
@@ -382,7 +386,6 @@ struct ProjectFilesView: View {
             if layout == nil { layout = await arrange(project: project, tree: tree) }  // sorting changed meanwhile
             fileCount = tree.files(under: project.folder ?? "").count
             state = .loaded(project, tree, layout ?? .directories([]))
-            updatePending()
         } catch {
             if case .loaded = state, refresh { return }  // keep the list; the pull just ends
             isSignedIn = await GitHubAuth.shared.isSignedIn
@@ -390,95 +393,188 @@ struct ProjectFilesView: View {
         }
     }
 
-    // MARK: Download All
+    // MARK: Clone
 
     @ViewBuilder
-    private var downloadButton: some View {
-        if let download {
+    private func cloneButton(project: ProjectInfo) -> some View {
+        if let cloneProgress {
             HStack(spacing: 6) {
                 ProgressView()
-                Text("\(download.done)/\(download.total)")
+                Text(cloneProgress, format: .percent.precision(.fractionLength(0)))
                     .monospacedDigit()
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Downloading \(download.done) of \(download.total)")
-        } else if pending.urls.isEmpty {
-            Image(systemName: "arrow.down.circle.fill")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel(filter.isEmpty ? "All files saved" : "All matching files saved")
+            .accessibilityLabel("Cloning")
+            .accessibilityValue(Text(cloneProgress, format: .percent.precision(.fractionLength(0))))
+        } else if clone != nil {
+            Menu {
+                Button("Delete Clone", systemImage: "trash", role: .destructive) { isConfirmingDeleteClone = true }
+            } label: {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)  // only the button, not the whole row
+            .accessibilityLabel("Cloned")
         } else {
-            Button { downloadAll(pending.urls) } label: {
+            Button { startClone(project) } label: {
                 HStack(spacing: 6) {
-                    Text(pending.bytes, format: .byteCount(style: .file))
-                        .font(.footnote)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                    if repositoryBytes > 0 {
+                        Text(repositoryBytes, format: .byteCount(style: .file))
+                            .font(.footnote)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
                     Image(systemName: "arrow.down.circle")
                         .font(.title2)
                 }
             }
-            .buttonStyle(.borderless)  // only the button, not the whole row
-            .accessibilityLabel("Download All")
-            .accessibilityValue(Text("\(pending.urls.count) files, ") + Text(pending.bytes, format: .byteCount(style: .file)))
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Clone")
+            .accessibilityHint("Downloads the whole project with Git, its latest commit only, for offline reading and history.")
         }
     }
 
-    /// Works out what Download All would fetch: the files the filter lets through that aren't
-    /// saved yet and aren't too big.
-    private func updatePending() {
-        pendingTask?.cancel()
-        guard case .loaded(let project, let tree, _) = state else {
-            pending = PendingDownload()
-            return
-        }
-        let filter = filter, saved = saved
-        pendingTask = Task {
-            let result = await Task.detached(priority: .userInitiated) {
-                Self.pendingDownload(project: project, tree: tree, filter: filter, saved: saved)
-            }.value
-            guard !Task.isCancelled else { return }
-            pending = result
-        }
-    }
-
-    nonisolated private static func pendingDownload(project: ProjectInfo, tree: ProjectTree,
-                                                    filter: FileFilter, saved: Set<URL>) -> PendingDownload {
-        var result = PendingDownload()
-        for entry in tree.files(under: project.folder ?? "", matching: filter)
-        where (entry.size ?? 0) <= downloadAllSizeLimit {
-            guard let url = project.rawURL(for: entry.path), !saved.contains(url) else { continue }
-            result.urls.append(url)
-            result.bytes += Int64(entry.size ?? 0)
-        }
-        return result
-    }
-
-    /// Downloads a few files at a time. Each lands in the saved copies, like opening it would.
-    private func downloadAll(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
-        download = DownloadProgress(done: 0, total: urls.count)
+    /// Clones the project (the latest commit). Its files then come from the clone, and the ones
+    /// downloaded one by one are deleted.
+    private func startClone(_ project: ProjectInfo) {
+        cloneProgress = 0
+        let (fractions, continuation) = AsyncStream.makeStream(of: Double.self, bufferingPolicy: .bufferingNewest(1))
         Task {
-            await withTaskGroup(of: URL?.self) { group in
-                var pending = urls.makeIterator()
-                func startNext() {
-                    guard let url = pending.next() else { return }
-                    group.addTask {
-                        (try? await DocumentStore.shared.fetch(url)) == nil ? nil : url
+            // Not after it's finished (a last fraction can arrive late).
+            for await fraction in fractions where cloneProgress != nil { cloneProgress = fraction }
+        }
+        Task {
+            do {
+                try await CloneStore.shared.clone(project) { continuation.yield($0) }
+                continuation.finish()
+                clone = await CloneStore.shared.record(forProject: projectID)
+                saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
+            } catch {
+                continuation.finish()
+                isSignedIn = await GitHubAuth.shared.isSignedIn
+                cloneError = error
+            }
+            cloneProgress = nil
+        }
+    }
+
+    private func deleteClone() {
+        Task {
+            await CloneStore.shared.delete(projectID: projectID)
+            clone = nil
+            saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
+        }
+    }
+
+    /// Clone failed: why, and signing in when GitHub turned it away.
+    private var cloneErrorIsPresented: Binding<Bool> {
+        Binding(get: { cloneError != nil }, set: { if !$0 { cloneError = nil } })
+    }
+
+    private var cloneNeedsSignIn: Bool {
+        (cloneError as? GitError)?.isAuthentication == true && !isSignedIn
+    }
+
+    // MARK: Branch
+
+    /// The branch or tag the project shows. Choosing another lists its files (and switches the
+    /// clone, if there is one).
+    private func branchRow(project: ProjectInfo) -> some View {
+        Menu {
+            if let refs {
+                if !refs.branches.isEmpty {
+                    Section("Branches") {
+                        ForEach(refs.branches, id: \.self) { name in
+                            refButton(name, isTag: false, current: project.ref)
+                        }
                     }
                 }
-                for _ in 0..<4 { startNext() }
-                while let finished = await group.next() {
-                    if let finished { saved.insert(finished) }
-                    download?.done += 1
-                    startNext()
+                if !refs.tags.isEmpty {
+                    Section("Tags") {
+                        ForEach(refs.tags, id: \.self) { name in
+                            refButton(name, isTag: true, current: project.ref)
+                        }
+                    }
+                }
+            } else {
+                Button("Load Branches and Tags") { Task { await loadRefs() } }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text(project.ref ?? "")
+                    .font(.body.monospaced())
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                if isSwitchingRef {
+                    ProgressView()
+                } else {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                 }
             }
-            download = nil
-            updatePending()  // what failed is still to do
+            .contentShape(Rectangle())
         }
+        .disabled(isSwitchingRef || cloneProgress != nil)
+        .accessibilityLabel("Branch")
+        .accessibilityValue(project.ref ?? "")
+    }
+
+    private func refButton(_ name: String, isTag: Bool, current: String?) -> some View {
+        Button {
+            switchRef(to: name, isTag: isTag)
+        } label: {
+            if name == current {
+                Label(name, systemImage: "checkmark")
+            } else {
+                Text(name)
+            }
+        }
+    }
+
+    private func loadRefs() async {
+        refs = try? await ProjectStore.shared.refs(for: projectID)
+    }
+
+    /// Lists the files at another branch or tag. A cloned project fetches its latest commit
+    /// and checks it out first, so its files come from the clone there too.
+    private func switchRef(to name: String, isTag: Bool) {
+        guard case .loaded(let project, _, _) = state, name != project.ref else { return }
+        isSwitchingRef = true
+        Task {
+            defer { isSwitchingRef = false }
+            do {
+                if clone != nil {
+                    var moved = project
+                    moved.ref = name
+                    if let prefix = moved.rawURL(for: "")?.absoluteString {
+                        try await CloneStore.shared.switchTo(isTag ? .tag(name) : .branch(name),
+                                                             projectID: projectID, rawPrefix: prefix)
+                        clone = await CloneStore.shared.record(forProject: projectID)
+                    }
+                }
+                let (moved, tree) = try await ProjectStore.shared.setRef(name, for: projectID)
+                saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
+                fileCount = tree.files(under: moved.folder ?? "").count
+                repositoryBytes = Self.bytes(of: tree)
+                state = .loaded(moved, tree, await arrange(project: moved, tree: tree) ?? .directories([]))
+            } catch {
+                cloneError = error
+            }
+        }
+    }
+
+    nonisolated private static func bytes(of tree: ProjectTree) -> Int64 {
+        tree.entries.reduce(0) { $0 + Int64($1.size ?? 0) }
     }
 }
 

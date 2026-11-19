@@ -341,12 +341,16 @@ struct SideBarView: View {
         .overlay(alignment: .top) { Divider() }
     }
 
-    /// Removes the project from the list. Its saved files stay on the device.
+    /// Removes the project from the list, and its clone. Files downloaded one by one stay on
+    /// the device.
     private func delete(_ project: ProjectInfo) {
         projects.removeAll { $0.id == project.id }
         ProjectFilterStore.standard.remove(for: project.id)
         onDelete(project.id)
-        Task { await ProjectStore.shared.remove(id: project.id) }
+        Task {
+            await CloneStore.shared.delete(projectID: project.id)
+            await ProjectStore.shared.remove(id: project.id)
+        }
     }
 }
 
