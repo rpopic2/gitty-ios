@@ -7,13 +7,14 @@ extension EnvironmentValues {
 }
 
 extension CodeTextStyle {
-    /// For SwiftUI text: the same font, at a fixed size (code doesn't follow Dynamic Type).
+    /// For SwiftUI text: the same font as pages (no ligatures, see `uiFont`), at a fixed size
+    /// (code doesn't follow Dynamic Type).
     var swiftUIFont: Font {
-        .custom(font.postScriptName, fixedSize: size)
+        Font(uiFont)
     }
 
     /// The cards' smaller preview text.
     var previewFont: Font {
-        .custom(font.postScriptName, fixedSize: max(9, size - 2))
+        Font(uiFont(size: max(9, size - 2)))
     }
 }

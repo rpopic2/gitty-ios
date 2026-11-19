@@ -199,7 +199,27 @@ nonisolated struct CodeTextStyle: Equatable, Hashable, Sendable {
     }
 
     var uiFont: UIFont {
-        UIFont(name: font.postScriptName, size: size) ?? .monospacedSystemFont(ofSize: size, weight: .regular)
+        uiFont(size: size)
+    }
+
+    /// The font at `size`, without ligatures or contextual alternates. JetBrains Mono's
+    /// (`->` as an arrow and the like) are hundreds of OpenType substitutions that Core Text
+    /// runs on every glyph each time text is laid out and again when it's drawn: in hang reports
+    /// from scrolling the Code level, that shaping was almost all of the main thread's time.
+    /// Code reads the same without them, every character as typed.
+    func uiFont(size: CGFloat) -> UIFont {
+        guard let base = UIFont(name: font.postScriptName, size: size) else {
+            return .monospacedSystemFont(ofSize: size, weight: .regular)
+        }
+        let plain = base.fontDescriptor.addingAttributes([
+            .featureSettings: [
+                [UIFontDescriptor.FeatureKey.type: kLigaturesType,
+                 UIFontDescriptor.FeatureKey.selector: kCommonLigaturesOffSelector],
+                [UIFontDescriptor.FeatureKey.type: kContextualAlternatesType,
+                 UIFontDescriptor.FeatureKey.selector: kContextualAlternatesOffSelector],
+            ],
+        ])
+        return UIFont(descriptor: plain, size: size)
     }
 
     /// Registers the bundled fonts (JetBrains Mono) for this app, at launch. Does nothing if
