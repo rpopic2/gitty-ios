@@ -363,7 +363,7 @@ struct CodeScreen: View {
 
     /// The latest search's results.
     private func resultsView(_ search: StackSearch) -> some View {
-        StackResultsView(search: search) { symbols, query, onScrollDown in
+        StackResultsView(search: search, stackDepth: stackedResults[search.id]?.depth ?? 2) { symbols, query, onScrollDown in
             SymbolsView(
                 symbols: symbols,
                 query: query,
@@ -399,7 +399,7 @@ struct CodeScreen: View {
         pruneStack()
         keepQuery()
         let search = StackSearch(query: query, source: card, model: model)
-        stackedResults[search.id] = StackedResults(query: query, source: card)
+        stackedResults[search.id] = StackedResults(query: query, source: card, depth: cardPath.count + 1)
         stackSearch = search
         cardPath.append(.results(search.id))
     }
@@ -417,7 +417,7 @@ struct CodeScreen: View {
         let id = UUID()
         stackedCards[id] = StackedCard(symbols: search.results, initialID: symbol.id, anchor: anchor,
                                        zoomSource: AnyHashable(CardRoute.results(search.id)),
-                                       isBase: false, depth: cardPath.filter(\.isCard).count + 1)
+                                       isBase: false, depth: cardPath.count + 1)
         cardPath.append(.card(id))
     }
 

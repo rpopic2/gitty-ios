@@ -35,8 +35,8 @@ struct SymbolPager: View {
     let firstLine: @MainActor (CodeSymbol) -> Int
     /// Add to Album in a page's text menu, for the selected lines (range in the symbol's text).
     let albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)?
-    /// Where this pager is in the stack of cards (1 at the bottom): the caption shows it once
-    /// there's a card under this one.
+    /// Where this pager is in the stack (1 at the bottom, results pages counting too): the
+    /// caption shows it once there's anything under this one.
     let stackDepth: Int
 
     @State private var scrolledID: Int?
@@ -315,7 +315,7 @@ private struct SymbolCaption: View {
     let symbol: CodeSymbol
     /// The symbol's file's name, after its name.
     let fileName: String
-    /// The card's place in the stack: shown before the symbol from 2 up.
+    /// The card's place in the stack (`StackDepthLabel`): shown before the symbol from 2 up.
     let stackDepth: Int
     let onInfo: @MainActor () -> Void
 
@@ -342,16 +342,7 @@ private struct SymbolCaption: View {
     private var capsule: some View {
         let label = HStack(spacing: 6) {
             if stackDepth > 1 {
-                // Stacked on another card: how deep (swipe down to go back one).
-                HStack(spacing: 2) {
-                    Image(systemName: "square.stack")
-                    Text(stackDepth, format: .number)
-                        .monospacedDigit()
-                }
-                .foregroundStyle(.secondary)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text("Card \(stackDepth) in the stack"))
-                Divider().frame(height: 14)
+                StackDepthLabel(depth: stackDepth)
             }
             Image(systemName: symbol.kind.systemImage)
                 .foregroundStyle(.tint)

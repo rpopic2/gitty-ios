@@ -8,18 +8,14 @@ import SwiftUI
 enum CardRoute: Hashable {
     case card(UUID)
     case results(UUID)
-
-    var isResults: Bool {
-        if case .results = self { true } else { false }
-    }
-
-    var isCard: Bool { !isResults }
 }
 
 /// A results page in the stack: what it searches for, and the card it was searched from.
 struct StackedResults {
     var query: String
     let source: CardRoute
+    /// Its place in the stack, as a card's.
+    let depth: Int
 }
 
 /// What a card in the stack pages through, and where it opened.
@@ -31,7 +27,8 @@ struct StackedCard {
     let zoomSource: AnyHashable
     /// Opened from the Code list: paging moves the list behind it.
     let isBase: Bool
-    /// 1 for the card opened from the list, then up by one for each card on top.
+    /// Its place in the stack: 1 for the card opened from the list, then up by one for each
+    /// page on top (results pages too). Nothing under a page is ever taken out, so it stays.
     let depth: Int
 }
 
@@ -115,6 +112,8 @@ final class StackSearch {
 /// result's code for its card, stacked on top. Swipe down to go back to the card.
 struct StackResultsView<Results: View>: View {
     @Bindable var search: StackSearch
+    /// Its place in the stack, shown before the search.
+    let stackDepth: Int
     /// The list, for the results so far and their query.
     @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String, _ onScrollDown: @escaping @MainActor (Bool) -> Void) -> Results
 
@@ -160,6 +159,7 @@ struct StackResultsView<Results: View>: View {
 
     private var capsule: some View {
         let label = HStack(spacing: 6) {
+            StackDepthLabel(depth: stackDepth)
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.tint)
             Text(search.query)
@@ -195,5 +195,25 @@ struct StackResultsView<Results: View>: View {
         content()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(uiColor: .systemGroupedBackground))
+    }
+}
+
+/// A page's place in the stack, before what its caption names: "▣ 3 |". Swipe down to go
+/// back one.
+struct StackDepthLabel: View {
+    let depth: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 2) {
+                Image(systemName: "square.stack")
+                Text(depth, format: .number)
+                    .monospacedDigit()
+            }
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("Page \(depth) in the stack"))
+            Divider().frame(height: 14)
+        }
     }
 }
