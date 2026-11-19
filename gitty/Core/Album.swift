@@ -96,73 +96,61 @@ nonisolated struct AlbumLines: Codable, Hashable, Sendable {
 // MARK: - What an album shows
 
 nonisolated enum AlbumContents {
-    /// The album's entries in the list `symbols` (the open file's entry and symbols, then the
-    /// project's other files', each file's in file order; see `CodeDocumentModel`):
-    /// - a whole file's entry and all its symbols;
-    /// - each symbol in it that's still there, matched by kind and name;
-    /// - its lines, from `texts` (the files' text; a file that's missing there leaves its lines
-    ///   out until it's loaded), as entries of their own, ids from `symbols.count` up.
+    /// The album's entries, in the order they were added, from the list `symbols` (each file's
+    /// entry, then its symbols; see `CodeDocumentModel`):
+    /// - a whole file: its entry and all its symbols, in file order;
+    /// - a symbol that's still there, matched by kind and name (the nearest to where it was);
+    /// - lines, from `texts` (the files' text; a file that's missing there leaves its lines out
+    ///   until it's loaded), as entries of their own, ids from `symbols.count` up.
     ///
-    /// Everything stays in the list's order: files as in the list, and in a file, by where it
-    /// starts. Symbols keep their ids (places in the full list), so a place saved in the album is
-    /// one in the full list too.
+    /// Something added twice (a symbol, then its whole file) shows once, where it came first.
+    /// Symbols keep their ids (places in the full list), so a place saved in the album is one in
+    /// the full list too.
     /// - Parameter openFile: the file that symbols without a `fileURL` are in.
     static func symbols(of album: Album, in symbols: [CodeSymbol], openFile: URL,
                         texts: [URL: NSString]) -> [CodeSymbol] {
         guard !album.items.isEmpty else { return [] }
-        var wholeFiles: Set<URL> = []
-        var symbolItems: [URL: [AlbumSymbol]] = [:]
-        var lineItems: [URL: [AlbumLines]] = [:]
-        for item in album.items {
-            switch item {
-            case .file(let url): wholeFiles.insert(url)
-            case .symbol(let symbol): symbolItems[symbol.file, default: []].append(symbol)
-            case .lines(let lines): lineItems[lines.file, default: []].append(lines)
-            }
-        }
-
-        var result: [CodeSymbol] = []
-        var nextID = symbols.count
+        // Each file's run of the list: its entry, then its symbols.
+        var runs: [URL: Range<Int>] = [:]
         var start = 0
         while start < symbols.count {
-            // One file's run of the list: its entry, then its symbols.
             let fileURL = symbols[start].fileURL
             var end = start + 1
             while end < symbols.count, symbols[end].kind != .file, symbols[end].fileURL == fileURL { end += 1 }
             let file = fileURL ?? openFile
-            let run = symbols[start..<end]
+            if runs[file] == nil { runs[file] = start..<end }
             start = end
+        }
 
-            if wholeFiles.contains(file) {
-                result.append(contentsOf: run)
-                continue
-            }
-            var picked: [CodeSymbol] = []
-            var used: Set<Int> = []
-            for wanted in symbolItems[file] ?? [] {
-                let match = run
-                    .filter { $0.kind.rawValue == wanted.kind && $0.name == wanted.name && !used.contains($0.id) }
+        var result: [CodeSymbol] = []
+        var shown: Set<Int> = []
+        var nextID = symbols.count
+        var lineStartsByFile: [URL: [Int]] = [:]
+        for item in album.items {
+            switch item {
+            case .file(let url):
+                guard let run = runs[url] else { continue }
+                for symbol in symbols[run] where shown.insert(symbol.id).inserted {
+                    result.append(symbol)
+                }
+            case .symbol(let wanted):
+                guard let run = runs[wanted.file] else { continue }
+                let match = symbols[run]
+                    .filter { $0.kind.rawValue == wanted.kind && $0.name == wanted.name && !shown.contains($0.id) }
                     .min { abs($0.range.location - wanted.location) < abs($1.range.location - wanted.location) }
                 if let match {
-                    used.insert(match.id)
-                    picked.append(match)
+                    shown.insert(match.id)
+                    result.append(match)
                 }
+            case .lines(let lines):
+                guard let run = runs[lines.file], let text = texts[lines.file] else { continue }
+                let starts = lineStartsByFile[lines.file] ?? lineStarts(of: text)
+                lineStartsByFile[lines.file] = starts
+                guard let entry = entry(for: lines, in: text, lineStarts: starts, id: nextID,
+                                        fileURL: symbols[run.lowerBound].fileURL) else { continue }
+                nextID += 1
+                result.append(entry)
             }
-            if let wanted = lineItems[file], let text = texts[file] {
-                let starts = lineStarts(of: text)
-                for lines in wanted {
-                    guard let entry = entry(for: lines, in: text, lineStarts: starts, id: nextID,
-                                            fileURL: fileURL) else { continue }
-                    nextID += 1
-                    picked.append(entry)
-                }
-            }
-            // In file order; at the same place, the longer first (a function before lines in it).
-            picked.sort {
-                $0.range.location != $1.range.location ? $0.range.location < $1.range.location
-                    : $0.range.length > $1.range.length
-            }
-            result.append(contentsOf: picked)
         }
         return result
     }

@@ -31,11 +31,18 @@ struct AlbumTests {
         .symbol(AlbumSymbol(file: file, name: name, kind: CodeSymbol.Kind.function.rawValue, location: location))
     }
 
-    @Test func showsItsSymbolsInListOrderWithTheirIDs() {
-        // Added b1 first, then main: shown in the list's order.
+    @Test func showsItsSymbolsInTheOrderTheyWereAddedWithTheirIDs() {
+        // Added b1 first, then main.
         let album = album([symbolItem("b1", in: other, at: 0), symbolItem("main", in: open, at: 0)])
         let shown = AlbumContents.symbols(of: album, in: list, openFile: open, texts: [:])
-        #expect(shown.map(\.id) == [1, 5])
+        #expect(shown.map(\.id) == [5, 1])
+    }
+
+    @Test func somethingAddedTwiceShowsOnceWhereItCameFirst() {
+        // b2, then the whole of b.c: its entry and b1 follow, b2 stays first.
+        let album = album([symbolItem("b2", in: other, at: 30), .file(other)])
+        let shown = AlbumContents.symbols(of: album, in: list, openFile: open, texts: [:])
+        #expect(shown.map(\.id) == [6, 4, 5])
     }
 
     @Test func aWholeFileBringsItsEntryAndEverySymbol() {
@@ -55,7 +62,7 @@ struct AlbumTests {
         #expect(shown.isEmpty)
     }
 
-    @Test func linesAreEntriesOfTheirOwnInFileOrder() {
+    @Test func linesAreEntriesOfTheirOwn() {
         let text = "int a;\n\n  int b = 1;\nint c;\nint d;\n" as NSString
         let lines = AlbumItem.lines(AlbumLines(file: other, start: 2, end: 4))
         let shown = AlbumContents.symbols(of: album([lines, symbolItem("b2", in: other, at: 30)]), in: list,
