@@ -250,29 +250,38 @@ struct SymbolsView: View, Equatable {
         }
     }
 
-    /// Every file folded: the files grouped by folder, under a header that sticks while its
-    /// files scroll under it (tap it to fold the folder). A file unfolded here shows its
-    /// symbols under it, in its folder (their titles don't stick: the folder's does).
+    /// Every file folded: the files grouped by folder, each folder's header (tap it to fold the
+    /// folder) a plain row above its files. The titles stick, as in the outline: a file's, and
+    /// a symbol's under a file unfolded here. A folder's header can't be a row of its own and
+    /// still keep each symbol one item, so it's part of the item before it (the first folder's
+    /// comes before the list).
     private var groupedByFolder: some View {
         let collapsed = collapsed
         let scope = collapseScope
+        let layout = FolderRows(groups: folderGroups.groups(of: symbols, openFile: openFile, scope: scope)) {
+            collapsed.isFolderFolded($0.path, scope: scope)
+        }
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-            ForEach(folderGroups.groups(of: symbols, openFile: openFile, scope: scope)) { group in
-                let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
+            ForEach(layout.leading) { folderHeader($0) }
+            ForEach(layout.rows, id: \.symbol.id) { row in
                 Section {
-                    ForEach(isFolded ? [] : group.symbols) { symbol in
-                        VStack(spacing: 0) {
-                            header(for: symbol)
-                            code(for: symbol)
-                        }
+                    VStack(spacing: 0) {
+                        code(for: row.symbol)
+                        ForEach(row.folders) { folderHeader($0) }
                     }
                 } header: {
-                    FolderHeader(path: group.path.isEmpty ? rootFolderName : group.path, fileCount: group.fileCount,
-                                 isFolded: isFolded) {
-                        withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) }
-                    }
+                    header(for: row.symbol)
                 }
             }
+        }
+    }
+
+    private func folderHeader(_ group: FolderGroup) -> some View {
+        let collapsed = collapsed
+        let scope = collapseScope
+        return FolderHeader(path: group.path.isEmpty ? rootFolderName : group.path, fileCount: group.fileCount,
+                            isFolded: collapsed.isFolderFolded(group.path, scope: scope)) {
+            withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) }
         }
     }
 
@@ -548,8 +557,7 @@ private struct FileTitle: View {
 }
 
 /// A folder's header while every file is folded: its path (the project's name for its top) and
-/// how many files it has, with a chevron; tap it to fold the folder. Sticks while its files
-/// scroll under it.
+/// how many files it has, with a chevron; tap it to fold the folder.
 private struct FolderHeader: View {
     let path: String
     let fileCount: Int
@@ -593,6 +601,26 @@ private struct FolderHeader: View {
         .accessibilityValue(isFolded ? Text("Folded") : Text("Unfolded"))
         .accessibilityHint(isFolded ? Text("Shows the folder’s files") : Text("Hides the folder’s files"))
         .accessibilityAddTraits([.isHeader, .isButton])
+    }
+}
+
+/// The grouped view's rows: each shown symbol (a folded folder's aren't), with the headers of
+/// the folders that start after it, and the folders that start before the first one.
+private struct FolderRows {
+    struct Row {
+        let symbol: CodeSymbol
+        var folders: [FolderGroup] = []
+    }
+
+    private(set) var leading: [FolderGroup] = []
+    private(set) var rows: [Row] = []
+
+    init(groups: [FolderGroup], isFolded: (FolderGroup) -> Bool) {
+        for group in groups {
+            if rows.isEmpty { leading.append(group) } else { rows[rows.count - 1].folders.append(group) }
+            guard !isFolded(group) else { continue }
+            rows += group.symbols.map { Row(symbol: $0) }
+        }
     }
 }
 
