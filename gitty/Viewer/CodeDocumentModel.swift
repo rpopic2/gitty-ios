@@ -32,18 +32,6 @@ final class CodeDocumentModel {
     private(set) var symbolIndex: SymbolIndex = .indexing
     /// The project's other files have been indexed (or the file isn't in a project).
     private(set) var projectSymbolsLoaded = false
-    /// The symbol search's matches so far, best first (every symbol, in order, without a search).
-    /// They fill in while `isSearching`; see `search(_:)`.
-    private(set) var searchResults: [CodeSymbol] = []
-    /// The search `searchResults` are for.
-    private(set) var resultsQuery = ""
-    /// Goes up with each set of matches (they fill in while the search runs): the list shows
-    /// each set as a fresh list. Diffing one set into the next in place (better matches arrive
-    /// above the ones shown) made the lazy list work out where every moved item comes from,
-    /// which hung the main thread for most of a second as you typed.
-    private(set) var resultsVersion = 0
-    /// A search is still going through the symbols.
-    private(set) var isSearching = false
     /// The project the open file is in (once the project's symbols are loaded). `nil` for a
     /// file that isn't in a project.
     private(set) var symbolsProjectID: String?
@@ -93,9 +81,6 @@ final class CodeDocumentModel {
     /// The symbols' names, prepared for searching (built in the background for each new list).
     @ObservationIgnored private var searchIndex: SymbolSearch.Index?
     @ObservationIgnored private var indexTask: Task<Void, Never>?
-    @ObservationIgnored private var searchTask: Task<Void, Never>?
-    /// The latest search asked for, run again when the symbols change.
-    @ObservationIgnored private var wantedQuery = ""
     /// The project filter the other files were indexed with.
     @ObservationIgnored private var loadedFilter: FileFilter?
     @ObservationIgnored private var loadingTexts: Set<URL> = []
@@ -430,124 +415,25 @@ final class CodeDocumentModel {
         return []
     }
 
-    /// The search's matches in the album (all of them without an album).
-    func albumSearchResults() -> [CodeSymbol] {
-        guard activeAlbum != nil else { return searchResults }
-        let key = AlbumSearchKey(query: resultsQuery, count: searchResults.count, first: searchResults.first?.id,
-                                 albumCount: albumSymbols.count, albumLast: albumSymbols.last?.id)
-        if let albumSearch, albumSearch.key == key { return albumSearch.result }
-        let ids = Set(albumSymbols.map(\.id))
-        let result = searchResults.filter { ids.contains($0.id) }
-        albumSearch = (key, result)
-        return result
-    }
-
-    private struct AlbumSearchKey: Equatable {
-        let query: String
-        let count: Int
-        let first: Int?
-        let albumCount: Int
-        let albumLast: Int?
-    }
-
-    @ObservationIgnored private var albumSearch: (key: AlbumSearchKey, result: [CodeSymbol])?
-
     // MARK: - Symbol search
 
-    /// Searches the symbols in the background. Matches fill `searchResults` as they're found
-    /// (the open file's first, since its symbols come first), and a newer search replaces this
-    /// one, which stops. An empty search shows every symbol at once.
-    func search(_ query: String) {
-        wantedQuery = query
-        searchTask?.cancel()
-        searchTask = nil
-        guard let index = searchIndex else { return }  // runs once the index is built
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            searchResults = index.symbols
-            resultsVersion += 1
-            resultsQuery = query
-            isSearching = false
-            return
-        }
-        isSearching = true
-        searchTask = Task {
-            for await snapshot in SymbolSearch.stream(query, in: index) {
-                guard !Task.isCancelled else { return }
-                searchResults = snapshot
-                resultsVersion += 1
-                resultsQuery = query
-            }
-            guard !Task.isCancelled else { return }
-            isSearching = false
-        }
+    /// A symbol search (`StackSearch` runs them, on results pages): matches, best first, as
+    /// they're found (the open file's first, since its symbols come first). Waits for the
+    /// search index while it's being built; `nil` if there's still none (no symbols).
+    func searchStream(_ query: String) async -> AsyncStream<[CodeSymbol]>? {
+        if searchIndex == nil { await indexTask?.value }
+        return searchIndex.map { SymbolSearch.stream(query, in: $0) }
     }
 
-    /// The symbol search on its own, for a search made from a card: the list's own search
-    /// stays as it is. `nil` until the search index is built.
-    func searchStream(_ query: String) -> AsyncStream<[CodeSymbol]>? {
-        searchIndex.map { SymbolSearch.stream(query, in: $0) }
-    }
-
-    /// Builds the search index for a new list of symbols, away from the main thread, then runs
-    /// the current search on it.
+    /// Builds the search index for a new list of symbols, away from the main thread.
     private func prepareSearch(for symbols: [CodeSymbol]) {
         indexTask?.cancel()
         indexTask = Task {
             let index = await Task.detached(priority: .userInitiated) { SymbolSearch.Index(symbols) }.value
             guard !Task.isCancelled else { return }
             searchIndex = index
-            search(wantedQuery)
         }
     }
-
-    /// The search by file name (see `FileNameSearch`), worked out once per search and list:
-    /// files whose name contains the query, each with all its symbols.
-    func symbols(inFilesNamed query: String) -> [CodeSymbol] {
-        guard symbolIndex.isReady else { return [] }
-        let all = listSymbols
-        let key = FileSearchKey(query: query, count: all.count, first: all.first?.id, last: all.last?.id,
-                                album: activeAlbum?.id)
-        if let fileSearch, fileSearch.key == key { return fileSearch.result }
-        let result = FileNameSearch.symbols(inFilesNamed: query, in: all, maxRank: 5)
-        fileSearch = (key, result)
-        return result
-    }
-
-    private struct FileSearchKey: Equatable {
-        let query: String
-        let count: Int
-        let first: Int?
-        let last: Int?
-        let album: UUID?
-    }
-
-    @ObservationIgnored private var fileSearch: (key: FileSearchKey, result: [CodeSymbol])?
-
-    /// The search at the Code level: the files whose name contains it (each with all its
-    /// symbols), then the symbols it matches so far (in the album, if one is shown), best first.
-    /// Worked out once per search and set of matches.
-    func combinedSearchResults(_ query: String) -> [CodeSymbol] {
-        let files = symbols(inFilesNamed: query)
-        let matches = albumSearchResults()
-        let key = CombinedSearchKey(query: query, files: files.count, firstFile: files.first?.id,
-                                    matches: matches.count, firstMatch: matches.first?.id, lastMatch: matches.last?.id)
-        if let combinedSearch, combinedSearch.key == key { return combinedSearch.result }
-        var ids = Set(files.map(\.id))
-        let result = files + matches.filter { ids.insert($0.id).inserted }
-        combinedSearch = (key, result)
-        return result
-    }
-
-    private struct CombinedSearchKey: Equatable {
-        let query: String
-        let files: Int
-        let firstFile: Int?
-        let matches: Int
-        let firstMatch: Int?
-        let lastMatch: Int?
-    }
-
-    @ObservationIgnored private var combinedSearch: (key: CombinedSearchKey, result: [CodeSymbol])?
 
     /// The text of one symbol, styled like the file. `nil` while another file's text is loading.
     /// A file's own entry gets the file's text object itself, the same one until it's refreshed.

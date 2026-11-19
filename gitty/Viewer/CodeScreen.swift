@@ -55,7 +55,7 @@ struct CodeScreen: View {
         let url: URL
         var id: URL { url }
     }
-    /// Symbol search. Stays until it's cleared or another file is opened.
+    /// The bar's search field, while it's open. Search pushes a results page (`searchFromList`).
     @State private var symbolQuery = ""
     @State private var isSearchingSymbols = false
     /// The list hasn't started yet: when `opensAtFile`, it starts at the file's own entry.
@@ -130,7 +130,6 @@ struct CodeScreen: View {
         .onChange(of: model.symbolIndex.isReady, initial: true) {
             if model.symbolIndex.isReady { model.loadProjectSymbols() }
         }
-        .onChange(of: symbolQuery, initial: true) { model.search(symbolQuery) }
         .onChange(of: codeTextStyle) { Task { await model.restyle() } }
         .navigationDestination(for: CardRoute.self) { route in
             switch route {
@@ -227,14 +226,10 @@ struct CodeScreen: View {
                     description: Text("Nothing in this album yet. To add a symbol or a file, touch and hold it, then choose Add to Album; on a page, select lines.")
                 )
             }
-        case .ready where shownSymbols.isEmpty && isSearchPending:
-            placeholder { ProgressView() }  // nothing found yet
-        case .ready where shownSymbols.isEmpty:
-            placeholder { ContentUnavailableView.search(text: symbolQuery) }
         case .ready:
             SymbolsView(
-                symbols: shownSymbols,
-                query: shownQuery,
+                symbols: model.listSymbols,
+                query: "",
                 isActive: mode.showsSymbols,
                 ownText: ownText,
                 scrollRequest: listScrollRequest,
@@ -249,7 +244,6 @@ struct CodeScreen: View {
                 onOpen: { openPager(at: $0, anchor: nil) },
                 onOpenAt: { openPager(at: $0, anchor: $1) },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
-                onCloseSearch: closeSearchAction,
                 albumContext: albumContext,
                 onShowHistory: {
                     historyDetent = .large
@@ -261,13 +255,10 @@ struct CodeScreen: View {
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()
-            // A fresh list for each search's results, for the full list after, and for each order
-            // (ids are places in the list, so they move; the list finds its symbol by name).
-            // (and once the project's files are in, when the open file showed alone before them).
-            // While searching, a fresh list for each set of matches too: diffing one set into the
-            // next hung the main thread (see `CodeDocumentModel.resultsVersion`).
-            .id([shownQuery, model.activeAlbum?.id.uuidString ?? "", model.projectSymbolsLoaded ? "project" : "file",
-                 hasSymbolQuery ? String(model.resultsVersion) : ""])
+            // A fresh list for each album, and once the project's files are in, when the open file
+            // showed alone before them (ids are places in the list, so they move; the list finds
+            // its symbol by name). Searches go on results pages: this list is never filtered.
+            .id([model.activeAlbum?.id.uuidString ?? "", model.projectSymbolsLoaded ? "project" : "file"])
         case .unsupportedLanguage:
             placeholder {
                 ContentUnavailableView(
@@ -287,7 +278,7 @@ struct CodeScreen: View {
         let id = UUID()
         // Where its code was tapped, the page opens at those lines and fades in over them
         // (zooming from the whole screen) instead of zooming from the middle.
-        stackedCards = [id: StackedCard(symbols: shownSymbols,  // page through the search results only
+        stackedCards = [id: StackedCard(symbols: model.listSymbols,
                                         initialID: symbol.id, anchor: anchor,
                                         zoomSource: anchor == nil ? AnyHashable(symbol.id) : Self.screenSourceID,
                                         isBase: true, depth: 1)]
@@ -346,7 +337,7 @@ struct CodeScreen: View {
         // Its cards zoom out of it; it zooms out of (and back into) its card. Outside the `if`, so
         // they stay the same while it searches again.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
-        .navigationTransition(.zoom(sourceID: AnyHashable(entry.source), in: pagerNamespace))
+        .navigationTransition(.zoom(sourceID: entry.source, in: pagerNamespace))
     }
 
     /// An older results page is back on screen: it's the latest one now, searching again.
@@ -363,7 +354,7 @@ struct CodeScreen: View {
 
     /// The latest search's results.
     private func resultsView(_ search: StackSearch) -> some View {
-        StackResultsView(search: search, stackDepth: stackedResults[search.id]?.depth ?? 2) { symbols, query, onScrollDown in
+        StackResultsView(search: search, stackDepth: stackedResults[search.id]?.depth ?? 1) { symbols, query, onScrollDown in
             SymbolsView(
                 symbols: symbols,
                 query: query,
@@ -393,13 +384,27 @@ struct CodeScreen: View {
         }
     }
 
+    /// Search in the bar: the results page is the first in the stack, zooming out of the whole
+    /// screen. The search field empties for next time.
+    private func searchFromList() {
+        let query = symbolQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        isSearchingSymbols = false
+        symbolQuery = ""
+        guard !query.isEmpty else { return }
+        let search = StackSearch(query: query, source: Self.screenSourceID, model: model)
+        stackedCards = [:]
+        stackedResults = [search.id: StackedResults(query: query, source: Self.screenSourceID, depth: 1)]
+        stackSearch = search
+        cardPath = [.results(search.id)]
+    }
+
     /// Search on a card: its results go on top of it. Older results pages stay where they are,
     /// keeping only their query.
     private func searchInStack(for query: String, from card: CardRoute) {
         pruneStack()
         keepQuery()
-        let search = StackSearch(query: query, source: card, model: model)
-        stackedResults[search.id] = StackedResults(query: query, source: card, depth: cardPath.count + 1)
+        let search = StackSearch(query: query, source: AnyHashable(card), model: model)
+        stackedResults[search.id] = StackedResults(query: query, source: AnyHashable(card), depth: cardPath.count + 1)
         stackSearch = search
         cardPath.append(.results(search.id))
     }
@@ -466,36 +471,12 @@ struct CodeScreen: View {
 
     /// Saves the card in the middle of the Symbols list, like File saves its place. It changes
     /// only when another card reaches the middle (a few times a second at most), and the save is
-    /// a few bytes. Not while searching: a search reorders the cards, and isn't kept.
+    /// a few bytes. (Searches go on results pages, so this list is always the whole one.)
     private func saveListPosition(_ id: Int) {
-        guard symbolQuery.isEmpty else { return }
         // Ids are places in the full list, so no need to look through it.
         let symbols = indexedSymbols
         guard symbols.indices.contains(id), symbols[id].id == id else { return }
         ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbols[id]), for: model.url)
-    }
-
-    /// Without a search, every symbol in file order (or the album's). With one: the files whose
-    /// name contains it (each with all its symbols), then the symbols it matches, best first.
-    /// The symbol search runs in the background (`CodeDocumentModel.search`): these are the
-    /// matches so far, which fill in while it runs.
-    private var shownSymbols: [CodeSymbol] {
-        guard hasSymbolQuery else { return model.listSymbols }
-        return model.combinedSearchResults(symbolQuery)
-    }
-
-    /// The search `shownSymbols` are for: "" while the full list shows.
-    private var shownQuery: String {
-        hasSymbolQuery ? model.resultsQuery : ""
-    }
-
-    private var hasSymbolQuery: Bool {
-        !symbolQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// The search hasn't finished going through the symbols (or hasn't started on this query).
-    private var isSearchPending: Bool {
-        hasSymbolQuery && (model.isSearching || model.resultsQuery != symbolQuery)
     }
 
     /// Full-screen, opaque, so the hidden file text never shows through.
@@ -511,9 +492,11 @@ struct CodeScreen: View {
     @ViewBuilder
     private var bottom: some View {
         if isSearchingSymbols && barSearchesSymbols {
-            SymbolSearchEditor(query: $symbolQuery, isSearching: isSearchPending,
+            // Search pushes a results page (as Search on a card does): the list stays as it is.
+            SymbolSearchEditor(query: $symbolQuery,
                                placeholder: String(localized: "Search Files and Symbols"),
-                               onClose: { isSearchingSymbols = false })
+                               onClose: { isSearchingSymbols = false },
+                               onSubmit: { searchFromList() })
         } else if isEditingAddress {
             AddressEditor(
                 initialText: rejectedAddress ?? barAddress,
@@ -539,8 +522,7 @@ struct CodeScreen: View {
                 onPasteAndGo: onPasteAndGo,
                 onOpenInBrowser: openInBrowserAction,
                 // The symbol levels show the active search in the bar; Project edits the address.
-                searchQuery: barSearchesSymbols ? symbolQuery : nil,
-                onClearSearch: { symbolQuery = "" },
+                searchQuery: barSearchesSymbols ? "" : nil,
                 onCollapseAll: collapseAllAction(true),
                 onExpandAll: collapseAllAction(false),
                 // In an album: its icon before its name (the selector's Project leaves it).
@@ -589,12 +571,6 @@ struct CodeScreen: View {
     private var barSearchesSymbols: Bool {
         guard mode.showsSymbols, case .loaded = model.phase else { return false }
         return true
-    }
-
-    /// While searching, a swipe on the list closes the search.
-    private var closeSearchAction: (@MainActor () -> Void)? {
-        guard isSearchingSymbols else { return nil }
-        return { isSearchingSymbols = false }
     }
 
     /// Search in the text menu: what to search for, for any selection.

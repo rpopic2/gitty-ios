@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The cards (pagers) and the search results pushed over the Code level, in the order they
-/// were opened: Search on a card pushes its results, and a result pushes another card on top.
+/// were opened: tapping a symbol in the list opens a card, searching (in the bar, or Search on
+/// a card) pushes the results, and a result pushes another card on top.
 /// Nothing is ever taken out from under the page on screen (that cost the card above its
 /// swipe-down): every results page stays, but only the latest keeps its results. An older one
 /// keeps its query and searches again when you come back to it.
@@ -10,10 +11,11 @@ enum CardRoute: Hashable {
     case results(UUID)
 }
 
-/// A results page in the stack: what it searches for, and the card it was searched from.
+/// A results page in the stack: what it searches for, and what it zooms out of (the card it
+/// was searched from, or the Code level).
 struct StackedResults {
     var query: String
-    let source: CardRoute
+    let source: AnyHashable
     /// Its place in the stack, as a card's.
     let depth: Int
 }
@@ -32,15 +34,15 @@ struct StackedCard {
     let depth: Int
 }
 
-/// A search made from a card: on its own, so the Code list's search stays as it was. The files
-/// whose name contains it (each with all its symbols), then the symbols it matches (in the
-/// album, if one is shown), like the list's.
+/// A search, for a results page: the files whose name contains it (each with all its symbols),
+/// then the symbols it matches (in the album, if one is shown). The Code list itself is never
+/// filtered.
 @MainActor @Observable
 final class StackSearch {
     /// Its results page's (`CardRoute.results`).
     let id: UUID
-    /// The card it was made from: its results page zooms out of it.
-    let source: CardRoute
+    /// What its results page zooms out of.
+    let source: AnyHashable
     /// Edited on the results page: the search runs again.
     var query: String {
         didSet { if query != oldValue { start() } }
@@ -56,7 +58,7 @@ final class StackSearch {
     @ObservationIgnored private let model: CodeDocumentModel
     @ObservationIgnored private var task: Task<Void, Never>?
 
-    init(id: UUID = UUID(), query: String, source: CardRoute, model: CodeDocumentModel) {
+    init(id: UUID = UUID(), query: String, source: AnyHashable, model: CodeDocumentModel) {
         self.id = id
         self.query = query
         self.source = source
@@ -73,9 +75,7 @@ final class StackSearch {
         task?.cancel()
         task = nil
         let query = query
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let stream = model.searchStream(query)
-        else {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             results = []
             resultsQuery = query
             version += 1
@@ -83,9 +83,15 @@ final class StackSearch {
             return
         }
         isSearching = true
-        let all = model.listSymbols
-        let album: Set<Int>? = model.activeAlbum == nil ? nil : Set(model.albumSymbols.map(\.id))
+        let model = model
         task = Task { [weak self] in
+            // The symbols may still be getting ready (a search right after opening a file).
+            guard let stream = await model.searchStream(query), !Task.isCancelled else {
+                self?.isSearching = false
+                return
+            }
+            let all = model.listSymbols
+            let album: Set<Int>? = model.activeAlbum == nil ? nil : Set(model.albumSymbols.map(\.id))
             let files = await Task.detached(priority: .userInitiated) {
                 FileNameSearch.symbols(inFilesNamed: query, in: all, maxRank: 5)
             }.value
@@ -112,7 +118,7 @@ final class StackSearch {
 /// result's code for its card, stacked on top. Swipe down to go back to the card.
 struct StackResultsView<Results: View>: View {
     @Bindable var search: StackSearch
-    /// Its place in the stack, shown before the search.
+    /// Its place in the stack, shown before the search from 2 up.
     let stackDepth: Int
     /// The list, for the results so far and their query.
     @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String, _ onScrollDown: @escaping @MainActor (Bool) -> Void) -> Results
@@ -159,7 +165,9 @@ struct StackResultsView<Results: View>: View {
 
     private var capsule: some View {
         let label = HStack(spacing: 6) {
-            StackDepthLabel(depth: stackDepth)
+            if stackDepth > 1 {
+                StackDepthLabel(depth: stackDepth)
+            }
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.tint)
             Text(search.query)

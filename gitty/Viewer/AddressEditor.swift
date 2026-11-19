@@ -223,13 +223,16 @@ struct SymbolSearchEditor: View {
     /// What it searches: "Search Symbols", or "Search Files" at the Files level.
     let placeholder: String
     let onClose: @MainActor () -> Void
+    /// Return on the keyboard (`nil`: it closes, like a swipe down).
+    let onSubmit: (@MainActor () -> Void)?
 
     init(query: Binding<String>, isSearching: Bool = false, placeholder: String = String(localized: "Search Symbols"),
-         onClose: @escaping @MainActor () -> Void) {
+         onClose: @escaping @MainActor () -> Void, onSubmit: (@MainActor () -> Void)? = nil) {
         _query = query
         self.isSearching = isSearching
         self.placeholder = placeholder
         self.onClose = onClose
+        self.onSubmit = onSubmit
     }
 
     var body: some View {
@@ -237,7 +240,7 @@ struct SymbolSearchEditor: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            BarTextField(style: .search, text: $query, onSubmit: onClose, placeholder: placeholder)
+            BarTextField(style: .search, text: $query, onSubmit: onSubmit ?? onClose, placeholder: placeholder)
             if isSearching {
                 ProgressView()
                     .controlSize(.small)
