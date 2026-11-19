@@ -71,8 +71,10 @@ nonisolated enum RawTextStyle {
     /// The menu shown for selected text: only Copy, Select All, Share and Search Web.
     /// Call it from `textView(_:editMenuForTextIn:suggestedActions:)`.
     @MainActor
-    static func editMenu(from suggested: [UIMenuElement], adding extra: [UIMenuElement] = []) -> UIMenu {
-        UIMenu(children: extra + keptMenuElements(suggested))
+    /// `extra` goes first, `trailing` after the system's items (on the menu's next page).
+    static func editMenu(from suggested: [UIMenuElement], adding extra: [UIMenuElement] = [],
+                         trailing: [UIMenuElement] = []) -> UIMenu {
+        UIMenu(children: extra + keptMenuElements(suggested) + trailing)
     }
 
     /// "Comment" for any selection: adds a comment on it to the review.

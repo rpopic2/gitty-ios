@@ -538,12 +538,12 @@ struct ReadOnlyTextView: UIViewRepresentable {
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
             let album: [UIMenuElement] = range.length > 0 ? (albumMenu?(range).map { [$0] } ?? []) : []
             let extra = RawTextStyle.commentItems(for: range, onComment: onComment)
-                + album
                 + RawTextStyle.searchItems(for: range, in: textView,
                                            searchTerm: symbolSearchTerm,
                                            onSearch: onSearchSymbols)
-            // Highlight is a double tap on an identifier, not a menu item.
-            return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
+            // Highlight is a double tap on an identifier, not a menu item. Add to Album comes
+            // last, after Copy and Share: on the menu's second page.
+            return RawTextStyle.editMenu(from: suggestedActions, adding: extra, trailing: album)
         }
 
         // MARK: Highlight
