@@ -194,6 +194,30 @@ struct SymbolPager: View {
     }
 }
 
+/// A page's text view, with the line numbers beside it (hidden until you peek at them).
+final class PageTextView: UIView {
+    let textView: UITextView
+    let gutter = LineNumberGutter()
+
+    init(textView: UITextView) {
+        self.textView = textView
+        super.init(frame: .zero)
+        clipsToBounds = true
+        backgroundColor = RawTextStyle.backgroundColor
+        addSubview(textView)
+        gutter.isHidden = true
+        addSubview(gutter)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // Not while sliding: a frame is only meaningful without a transform.
+        if textView.transform == .identity { textView.frame = bounds }
+    }
+}
+
 /// A file whose info panel is open.
 private struct InfoFile: Identifiable {
     let url: URL
@@ -324,7 +348,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> UITextView {
+    func makeUIView(context: Context) -> PageTextView {
         // TextKit 1, with a layout manager that also draws whole-line backgrounds (a diff's).
         let storage = NSTextStorage()
         let layoutManager = LineBackgroundLayoutManager()
@@ -345,15 +369,25 @@ struct ReadOnlyTextView: UIViewRepresentable {
                                      for: .valueChanged)
             textView.refreshControl = refreshControl
         }
-        let peek = UIScreenEdgePanGestureRecognizer(target: context.coordinator,
-                                                    action: #selector(Coordinator.handlePeek(_:)))
-        peek.edges = .left
+        let page = PageTextView(textView: textView)
+        // Peeking at the line numbers: a drag from the left edge (a plain pan that only takes
+        // touches starting there; the screen-edge recognizer lost to the pager and going back).
+        let peek = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePeek(_:)))
         peek.delegate = context.coordinator
-        textView.addGestureRecognizer(peek)
-        return textView
+        page.addGestureRecognizer(peek)
+        context.coordinator.peek = peek
+        // Double tap an identifier to highlight it (or remove its highlight).
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator,
+                                               action: #selector(Coordinator.handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.delegate = context.coordinator
+        textView.addGestureRecognizer(doubleTap)
+        context.coordinator.doubleTap = doubleTap
+        return page
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIView(_ page: PageTextView, context: Context) {
+        let textView = page.textView
         let coordinator = context.coordinator
         textView.scrollsToTop = isCurrent
         coordinator.symbolSearchTerm = symbolSearchTerm
@@ -410,8 +444,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
         }
     }
 
-    static func dismantleUIView(_ textView: UITextView, coordinator: Coordinator) {
-        coordinator.save(textView)
+    static func dismantleUIView(_ page: PageTextView, coordinator: Coordinator) {
+        coordinator.save(page.textView)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
@@ -531,54 +565,107 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
         // MARK: Line numbers (swipe in from the left edge and hold)
 
-        @objc func handlePeek(_ gesture: UIScreenEdgePanGestureRecognizer) {
-            guard let textView = gesture.view as? UITextView, let lineNumbering else { return }
+        /// Touches starting this close to the screen's left edge can peek.
+        static let peekEdgeWidth: CGFloat = 28
+
+        weak var peek: UIPanGestureRecognizer?
+        weak var doubleTap: UITapGestureRecognizer?
+
+        @objc func handlePeek(_ gesture: UIPanGestureRecognizer) {
+            guard let page = gesture.view as? PageTextView, let lineNumbering else { return }
+            let textView = page.textView
+            let gutter = page.gutter
             switch gesture.state {
             case .began:
-                let gutter = self.gutter ?? LineNumberGutter()
-                self.gutter = gutter
                 gutter.textView = textView
                 gutter.numbering = lineNumbering
                 gutter.prepare()
                 let width = gutter.preferredWidth(font: LineNumberGutter.font(for: textView))
-                // Just left of the text: the whole page slides right to show it (the text view
-                // scrolls sideways, which nothing else does, so the text isn't laid out again).
-                gutter.frame = CGRect(x: -width, y: textView.contentOffset.y, width: width, height: textView.bounds.height)
-                textView.addSubview(gutter)
+                gutter.transform = .identity  // a frame is only meaningful without one
+                gutter.frame = CGRect(x: -width, y: 0, width: width, height: page.bounds.height)
+                gutter.isHidden = false
                 gutter.setNeedsDisplay()
                 fallthrough
             case .changed:
-                guard let gutter else { return }
-                // Follows the finger until it's all out, then stays while held.
-                let shown = min(max(gesture.translation(in: textView).x, 0), gutter.bounds.width)
-                textView.contentOffset.x = -shown
+                // The page and the numbers slide right together, following the finger until the
+                // numbers are all out, then stay while held.
+                let shown = min(max(gesture.translation(in: page).x, 0), gutter.bounds.width)
+                let slide = CGAffineTransform(translationX: shown, y: 0)
+                textView.transform = slide
+                gutter.transform = slide
             default:
-                guard let gutter else { return }
                 UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
-                    textView.contentOffset.x = 0
+                    textView.transform = .identity
+                    gutter.transform = .identity
                 } completion: { _ in
-                    if textView.contentOffset.x == 0 { gutter.removeFromSuperview() }
+                    if textView.transform == .identity { gutter.isHidden = true }
                 }
             }
         }
 
-        /// The peek goes first: the pages, the scrolling and going back wait for it to fail,
-        /// which it does at once away from the left edge.
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            gestureRecognizer is UIScreenEdgePanGestureRecognizer && lineNumbering != nil
+        // MARK: Double tap to highlight
+
+        @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended, let textView = gesture.view as? UITextView, let onHighlight,
+                  let found = identifierAt(gesture.location(in: textView), in: textView)
+            else { return }
+            let (identifier, index) = found
+            let isHighlighted = highlightedRanges.contains { NSLocationInRange(index, $0) }
+            onHighlight(isHighlighted ? nil : identifier)
+        }
+
+        /// The identifier under a point of the text view, and the character there: only right on
+        /// a character, not in the space after a line's end.
+        private func identifierAt(_ point: CGPoint, in textView: UITextView) -> (IdentifierHighlight, Int)? {
+            let storage = textView.textStorage
+            guard storage.length > 0 else { return nil }
+            let layoutManager = textView.layoutManager
+            let container = textView.textContainer
+            let location = CGPoint(x: point.x - textView.textContainerInset.left,
+                                   y: point.y - textView.textContainerInset.top)
+            let glyph = layoutManager.glyphIndex(for: location, in: container)
+            let bounds = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+            guard bounds.insetBy(dx: -3, dy: -2).contains(location) else { return nil }
+            let index = layoutManager.characterIndexForGlyph(at: glyph)
+            guard index < storage.length else { return nil }
+            let map = identifiers ?? IdentifierMap(text: storage.string, fileExtension: fileExtension)
+            identifiers = map
+            return map.identifier(containing: NSRange(location: index, length: 1)).map { ($0, index) }
+        }
+
+        /// The peek only takes touches that start at the screen's left edge.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard gestureRecognizer === peek else { return true }
+            return lineNumbering != nil && touch.location(in: nil).x <= Self.peekEdgeWidth
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            !(gestureRecognizer is UIScreenEdgePanGestureRecognizer) || lineNumbering != nil
+            if gestureRecognizer === peek, let pan = gestureRecognizer as? UIPanGestureRecognizer {
+                let velocity = pan.velocity(in: pan.view)
+                return velocity.x > abs(velocity.y)  // rightwards
+            }
+            if gestureRecognizer === doubleTap, let textView = gestureRecognizer.view as? UITextView {
+                // Elsewhere a double tap selects a word, as usual.
+                return onHighlight != nil && identifierAt(gestureRecognizer.location(in: textView), in: textView) != nil
+            }
+            return true
+        }
+
+        /// The peek goes before the pages, the scrolling and going back; the double tap before
+        /// the text view's own taps (selecting a word).
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            if gestureRecognizer === peek { return true }
+            if gestureRecognizer === doubleTap { return otherGestureRecognizer is UITapGestureRecognizer }
+            return false
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             reportScrollDirection(scrollView)
-            // The peek stays over the screen while the text scrolls under it.
-            guard let gutter, gutter.superview != nil, gutter.frame.minY != scrollView.contentOffset.y else { return }
-            gutter.frame.origin.y = scrollView.contentOffset.y
-            gutter.setNeedsDisplay()
+            // The numbers follow the text while it scrolls under them.
+            if let page = scrollView.superview as? PageTextView, !page.gutter.isHidden {
+                page.gutter.setNeedsDisplay()
+            }
         }
 
         // MARK: Scrolling down hides the caption

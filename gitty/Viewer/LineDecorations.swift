@@ -39,8 +39,9 @@ final class LineBackgroundLayoutManager: NSLayoutManager {
     }
 }
 
-/// The line numbers, peeked at by swiping in from the left edge and holding: a strip down
-/// the left of the page with the number of each line on screen, beside its first row.
+/// The line numbers, peeked at by swiping in from the left edge and holding: a strip beside
+/// the page (which slides right to show it) with the number of each line on screen, level with
+/// its first row.
 final class LineNumberGutter: UIView {
     weak var textView: UITextView?
     var numbering: LineNumbering = .marked {
@@ -89,8 +90,8 @@ final class LineNumberGutter: UIView {
         let text = storage.string as NSString
         let top = textView.textContainerInset.top
         // The gutter sits over the visible part of the page: what's on screen, in the container.
-        // Where the gutter is in the page (its transform only slides it sideways).
-        let originY = center.y - bounds.height / 2
+        // The gutter's top is the text view's: what's at the top of the screen.
+        let originY = textView.contentOffset.y
         let visible = CGRect(x: 0, y: originY - top, width: container.size.width, height: bounds.height)
         let glyphs = layoutManager.glyphRange(forBoundingRect: visible, in: container)
         let font = Self.font(for: textView)
