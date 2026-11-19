@@ -53,7 +53,7 @@ struct CodeScreen: View {
     @State private var stackJump: CardRoute?
     /// What's folded in that sheet: its own, not the Code level's.
     @State private var stackSheetFolds = CollapsedCodeStore.temporary()
-    /// Brings a symbol into view in the Code list (the pager closing on another symbol).
+    /// Brings a symbol into view in the Code list (the open file's entry, chosen in Project).
     @State private var listScrollRequest: SymbolScrollRequest?
     /// Collapse All or Expand All, from the bar's menu.
     @State private var collapseRequest: CollapseRequest?
@@ -314,7 +314,7 @@ struct CodeScreen: View {
         stackedCards = [id: StackedCard(symbols: model.listSymbols,
                                         initialID: symbol.id, anchor: anchor,
                                         zoomSource: anchor == nil ? AnyHashable(symbol.id) : Self.screenSourceID,
-                                        isBase: true, depth: 1)]
+                                        depth: 1)]
         stackedResults = [:]
         stackSearch = nil
         cardPlaces.current = [:]
@@ -330,11 +330,9 @@ struct CodeScreen: View {
             initialAnchor: card.anchor,
             currentID: Binding(get: { places.current[id] }, set: { places.current[id] = $0 }),
             text: model.text(of:),
-            // Once you page, the list (hidden behind) follows, so going back lands on the
-            // symbol you were reading.
-            onPage: { id in if card.isBase { listScrollRequest = SymbolScrollRequest(id) } },
-            // Closing leaves the list where it is: a card tapped near the top or bottom
-            // doesn't jump to the middle. (After paging, the list has followed already.)
+            // The list behind stays where it was, whatever you page to: following the card
+            // (to land on the symbol you were reading) took you somewhere unexpected at times.
+            onPage: { _ in },
             onWillClose: { _ in },
             openFile: model.url,
             onRefresh: { await model.refresh(file: $0) },
@@ -532,7 +530,7 @@ struct CodeScreen: View {
         let id = UUID()
         stackedCards[id] = StackedCard(symbols: search.results, initialID: symbol.id, anchor: anchor,
                                        zoomSource: isBrowsing ? Self.screenSourceID : AnyHashable(CardRoute.results(search.id)),
-                                       isBase: false, depth: cardPath.count + 1)
+                                       depth: cardPath.count + 1)
         cardPath.append(.card(id))
     }
 

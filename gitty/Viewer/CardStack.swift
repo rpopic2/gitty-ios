@@ -28,8 +28,6 @@ struct StackedCard {
     let anchor: PageAnchor?
     /// What it zooms out of, and back into when it's swiped down.
     let zoomSource: AnyHashable
-    /// Opened from the Code list: paging moves the list behind it.
-    let isBase: Bool
     /// Its place in the stack: 1 for the card opened from the list, then up by one for each
     /// page on top (results pages too). Nothing under a page is ever taken out, so it stays.
     let depth: Int
