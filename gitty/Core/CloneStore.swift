@@ -282,6 +282,28 @@ actor CloneStore {
         await documents.clonesChanged()
     }
 
+    /// Pull to refresh on a cloned file: fetches the branch or tag's latest commit (as much
+    /// history as before) and checks it out. Returns whether anything changed.
+    @discardableResult
+    func pull(projectID: String) async throws -> Bool {
+        guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        let token = await GitHubAuth.shared.token()
+        let ref = record.ref
+        let depth = record.depth
+        let commit = try await serially(projectID) {
+            let repository = try GitRepository(at: folder)
+            try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
+            return try repository.checkout(ref)
+        }
+        guard commit != record.commit else { return false }
+        record.commit = commit
+        record.checkedOutAt = .now
+        index.save(record)
+        await documents.clonesChanged()
+        return true
+    }
+
     // MARK: History
 
     /// The commits that changed a file (its path in the repository), newest first.

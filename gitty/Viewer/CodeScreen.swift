@@ -117,7 +117,8 @@ struct CodeScreen: View {
                 onComment: { symbol, range in
                     comment(on: NSRange(location: symbol.range.location + range.location, length: range.length),
                             inFile: symbol.fileURL)
-                }
+                },
+                firstLine: { model.firstLine(of: $0) }
             )
             .navigationTransition(.zoom(sourceID: openedID, in: pagerNamespace))
         }

@@ -29,6 +29,12 @@ actor FileTextCache {
         }.value
     }
 
+    /// Forgets every file's text under `prefix` (a clone was pulled: any of them may have changed).
+    func forget(under prefix: String) {
+        for file in texts.keys where file.absoluteString.hasPrefix(prefix) { texts[file] = nil }
+        order.removeAll { $0.absoluteString.hasPrefix(prefix) }
+    }
+
     /// Forgets a file's text (it was downloaded again).
     func forget(_ file: URL) {
         texts[file] = nil

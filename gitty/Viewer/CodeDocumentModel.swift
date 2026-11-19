@@ -99,9 +99,30 @@ final class CodeDocumentModel {
         }
     }
 
-    /// Pull-to-refresh: the only way a saved file is ever downloaded again.
+    /// Pull-to-refresh: the only way a saved file is ever downloaded again. A cloned file pulls
+    /// its project instead.
     func refresh() async {
+        guard await pullIfCloned(url) == nil else { return }
         await download(isRefresh: true)
+    }
+
+    /// For a file in a clone: pulls the clone (the branch's latest commit) and, if that changed
+    /// anything, shows the new text and indexes the project again. `nil` for other files.
+    private func pullIfCloned(_ file: URL) async -> Bool? {
+        guard let location = CloneIndex.shared.location(of: file) else { return nil }
+        do {
+            guard try await CloneStore.shared.pull(projectID: location.record.projectID) else { return false }
+        } catch {
+            refreshError = error.localizedDescription
+            return false
+        }
+        await FileTextCache.shared.forget(under: location.record.rawPrefix)
+        otherTexts.removeAll()
+        textOrder.removeAll()
+        if let document = await store.cached(url) { await show(document) }
+        loadedFilter = nil  // index the project's files again
+        loadProjectSymbols()
+        return true
     }
 
     /// The code font changed: style the text again (the same text, so the symbols stay). Other
@@ -121,6 +142,7 @@ final class CodeDocumentModel {
     /// page shows the new text once it's loaded, and its symbols are indexed again.
     func refresh(file: URL?) async {
         guard let file, file != url else { return await refresh() }
+        guard await pullIfCloned(file) == nil else { return }
         do {
             _ = try await store.fetch(file)
             await FileTextCache.shared.forget(file)
@@ -301,6 +323,23 @@ final class CodeDocumentModel {
         guard let full = fullText(of: symbol.fileURL), NSMaxRange(symbol.range) <= full.length else { return nil }
         if symbol.range == NSRange(location: 0, length: full.length) { return full }
         return full.attributedSubstring(from: symbol.range)
+    }
+
+    /// The line of its file a symbol's page starts at (its leading comment's, if it has one).
+    /// Counted in the file's text when the page needs it, for the line-number peek.
+    func firstLine(of symbol: CodeSymbol) -> Int {
+        guard symbol.kind != .file, let full = fullText(of: symbol.fileURL) else { return 1 }
+        let text = full.string as NSString
+        let end = min(symbol.range.location, text.length)
+        var lines = 1
+        var index = 0
+        while index < end {
+            let found = text.range(of: "\n", options: .literal, range: NSRange(location: index, length: end - index))
+            guard found.location != NSNotFound else { break }
+            lines += 1
+            index = NSMaxRange(found)
+        }
+        return lines
     }
 
     /// The whole text of the open file (`nil` or its URL) or of another project file. Another

@@ -44,7 +44,8 @@ struct CommitDiffView: View {
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 0) {
                         ForEach(changes) { change in
-                            DiffPage(projectID: projectID, commit: commit.id, change: change)
+                            DiffPage(projectID: projectID, commit: commit.id, change: change,
+                                     isCurrent: change.path == currentPath)
                                 .containerRelativeFrame([.horizontal, .vertical])
                         }
                     }
@@ -95,26 +96,38 @@ struct CommitDiffView: View {
     }
 }
 
-/// One file's changes in a commit: a unified diff, added lines green and removed lines red,
-/// each with its line number, in the code font and syntax colors.
+/// One file's changes in a commit, as a unified diff on the same text view as a file's page:
+/// added lines on green and removed lines on red, across the whole width, hunk headers
+/// dimmed, in the code font and syntax colors. The text selects and copies like a page's (no
+/// `+` or `-` in it); swipe in from the left edge and hold for the lines' numbers in the file.
 private struct DiffPage: View {
     let projectID: String
     let commit: String
     let change: GitChange
+    let isCurrent: Bool
 
-    @State private var diff: UnifiedDiff?
+    @State private var text: NSAttributedString?
+    @State private var isEmpty = false
     @State private var errorMessage: String?
     @Environment(\.codeTextStyle) private var codeTextStyle
+    @Environment(HighlightState.self) private var highlights: HighlightState?
 
     var body: some View {
         Group {
-            if let diff {
-                if diff.lines.isEmpty {
-                    ContentUnavailableView(change.kind == .renamed ? "Renamed, Not Changed" : "No Changes to Show",
-                                           systemImage: "doc")
-                } else {
-                    lines(diff)
-                }
+            if isEmpty {
+                ContentUnavailableView(change.kind == .renamed ? "Renamed, Not Changed" : "No Changes to Show",
+                                       systemImage: "doc")
+            } else if let text {
+                ReadOnlyTextView(
+                    text: text,
+                    textID: ObjectIdentifier(text).hashValue,
+                    insets: EdgeInsets(),
+                    isCurrent: isCurrent,
+                    fileExtension: (change.path as NSString).pathExtension,
+                    highlight: highlights?.current,
+                    onHighlight: { highlights?.current = $0 },
+                    lineNumbering: .marked
+                )
             } else if let errorMessage {
                 ContentUnavailableView("Couldn’t Show This File", systemImage: "exclamationmark.triangle",
                                        description: Text(errorMessage))
@@ -124,99 +137,78 @@ private struct DiffPage: View {
             }
         }
         .background(Color(uiColor: RawTextStyle.backgroundColor))
-        .task(id: change.path) {
+        // Again for another font or colors.
+        .task(id: codeTextStyle) {
             do {
                 let patch = try await CloneStore.shared.patch(projectID: projectID, commit: commit, path: change.path)
-                diff = await Task.detached(priority: .userInitiated) { UnifiedDiff(patch) }.value
+                let style = codeTextStyle
+                let fileExtension = (change.path as NSString).pathExtension
+                let rendered = await Task.detached(priority: .userInitiated) {
+                    DiffText.render(UnifiedDiff(patch), fileExtension: fileExtension, style: style)
+                }.value
+                isEmpty = rendered == nil
+                text = rendered?.attributedString
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
     }
-
-    private func lines(_ diff: UnifiedDiff) -> some View {
-        let fileExtension = (change.path as NSString).pathExtension
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(diff.lines.indices, id: \.self) { index in
-                    DiffLineRow(line: diff.lines[index], fileExtension: fileExtension, style: codeTextStyle)
-                }
-            }
-            .padding(.vertical, 8)
-        }
-    }
 }
 
-private struct DiffLineRow: View {
-    let line: UnifiedDiff.Line
-    let fileExtension: String
-    let style: CodeTextStyle
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 0) {
-            Text(number)
-                .font(.system(size: max(9, style.size - 3), design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 40, alignment: .trailing)
-                .padding(.trailing, 6)
-            Text(marker)
-                .font(style.swiftUIFont)
-                .foregroundStyle(markerColor)
-                .frame(width: style.size * 0.75, alignment: .leading)
-            content
-                .font(style.swiftUIFont)
-                .frame(maxWidth: .infinity, alignment: .leading)
+/// A unified diff styled like a raw-text page. Safe off the main thread.
+nonisolated enum DiffText {
+    /// `nil` when there are no lines to show.
+    static func render(_ diff: UnifiedDiff, fileExtension: String, style: CodeTextStyle) -> RenderedText? {
+        guard !diff.lines.isEmpty else { return nil }
+        let font = style.uiFont
+        let text = NSMutableAttributedString(string: diff.lines.map(\.text).joined(separator: "\n"), attributes: [
+            .font: font,
+            .foregroundColor: RawTextStyle.textColor,
+            .paragraphStyle: RawTextStyle.paragraphStyle(for: font),
+        ])
+        // Code colors over the code lines; the headers are blanked out of what's parsed (same
+        // length, so the ranges line up), then dimmed.
+        var code = ""
+        var location = 0
+        var headers: [NSRange] = []
+        for (index, line) in diff.lines.enumerated() {
+            let length = (line.text as NSString).length
+            let range = NSRange(location: location, length: length)
+            switch line.kind {
+            case .hunk, .note:
+                headers.append(range)
+                code += String(repeating: " ", count: length)
+            case .added, .removed, .context:
+                code += line.text
+            }
+            let decorated = NSRange(location: location, length: length + (index < diff.lines.count - 1 ? 1 : 0))
+            if let number = line.newNumber ?? line.oldNumber, line.kind != .hunk {
+                text.addAttribute(.lineNumber, value: number, range: decorated)
+            }
+            if let background = background(for: line.kind) {
+                text.addAttribute(.lineBackground, value: background, range: decorated)
+            }
+            if index < diff.lines.count - 1 { code += "\n" }
+            location += length + 1
         }
-        .padding(.trailing, 8)
-        .padding(.vertical, line.kind == .hunk ? 6 : 0)
-        .background(background)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityText)
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        switch line.kind {
-        case .hunk, .note:
-            Text(verbatim: line.text)
-                .foregroundStyle(.secondary)
-        case .added, .removed, .context:
-            Text(SyntaxColoring.shared.attributed(TabExpansion.expand(line.text), fileExtension: fileExtension,
-                                                  theme: style.theme))
-                .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
+        if style.theme != .none, let runs = SyntaxHighlighter.runs(in: code, fileExtension: fileExtension) {
+            for run in runs {
+                guard let category = run.category, let color = style.theme.color(for: category) else { continue }
+                text.addAttribute(.foregroundColor, value: color, range: run.range)
+            }
         }
-    }
-
-    private var number: String {
-        (line.newNumber ?? line.oldNumber).map(String.init) ?? ""
-    }
-
-    private var marker: String {
-        switch line.kind {
-        case .added: "+"
-        case .removed: "−"
-        default: ""
+        for header in headers {
+            text.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: header)
         }
+        return RenderedText(attributedString: text)
     }
 
-    private var markerColor: Color {
-        line.kind == .added ? .green : .red
-    }
-
-    private var background: Color {
-        switch line.kind {
-        case .added: Color.green.opacity(0.16)
-        case .removed: Color.red.opacity(0.16)
-        case .hunk: Color.blue.opacity(0.08)
-        case .context, .note: .clear
-        }
-    }
-
-    private var accessibilityText: String {
-        switch line.kind {
-        case .added: String(localized: "Added: \(line.text)")
-        case .removed: String(localized: "Removed: \(line.text)")
-        default: line.text
+    private static func background(for kind: UnifiedDiff.Line.Kind) -> UIColor? {
+        switch kind {
+        case .added: UIColor.systemGreen.withAlphaComponent(0.16)
+        case .removed: UIColor.systemRed.withAlphaComponent(0.16)
+        case .hunk: UIColor.systemBlue.withAlphaComponent(0.08)
+        case .context, .note: nil
         }
     }
 }

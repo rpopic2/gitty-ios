@@ -28,6 +28,8 @@ struct SymbolPager: View {
     let onSearchSymbols: @MainActor (String) -> Void
     /// Comment in a page's text menu, with the range in the symbol's text.
     let onComment: @MainActor (CodeSymbol, NSRange) -> Void
+    /// The line of its file a page's text starts at, for the line-number peek.
+    let firstLine: @MainActor (CodeSymbol) -> Int
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
@@ -52,7 +54,8 @@ struct SymbolPager: View {
          onRefresh: @escaping @MainActor (URL?) async -> Void,
          symbolSearchTerm: @escaping @MainActor (String) -> String?,
          onSearchSymbols: @escaping @MainActor (String) -> Void,
-         onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void) {
+         onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void,
+         firstLine: @escaping @MainActor (CodeSymbol) -> Int) {
         self.symbols = symbols
         self.initialID = initialID
         _currentID = currentID
@@ -64,6 +67,7 @@ struct SymbolPager: View {
         self.symbolSearchTerm = symbolSearchTerm
         self.onSearchSymbols = onSearchSymbols
         self.onComment = onComment
+        self.firstLine = firstLine
     }
 
     private var visibleID: Int { scrolledID ?? initialID }
@@ -106,7 +110,8 @@ struct SymbolPager: View {
                                     onHighlight: { highlights?.current = $0 },
                                     positionURL: isFilePage ? symbol.fileURL ?? openFile : nil,
                                     onRefresh: refreshAction(for: symbol),
-                                    onPullUp: infoAction(for: symbol)
+                                    onPullUp: infoAction(for: symbol),
+                                    lineNumbering: .counted(firstLine: { firstLine(symbol) })
                                 )
                                 // The text starts below the status bar and never scrolls under
                                 // it: just the page's background shows there.
@@ -131,7 +136,7 @@ struct SymbolPager: View {
                 }
 
                 if let current {
-                    SymbolCaption(symbol: current)
+                    SymbolCaption(symbol: current, onInfo: infoAction(for: current))
                         .padding(.bottom, 8)
                 }
             }
@@ -154,9 +159,8 @@ struct SymbolPager: View {
         }
     }
 
-    /// Pulling up past the end of a file's page: its info panel.
-    private func infoAction(for symbol: CodeSymbol) -> (@MainActor () -> Void)? {
-        guard symbol.kind == .file else { return nil }
+    /// Pulling up past the end of a page (or its caption): the info panel of its file.
+    private func infoAction(for symbol: CodeSymbol) -> @MainActor () -> Void {
         let url = symbol.fileURL ?? openFile
         return { infoFile = InfoFile(url: url) }
     }
@@ -209,18 +213,37 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
     }
 }
 
-/// "name · Line N" in a small capsule at the bottom, in place of the bar and selector.
+/// "name · Line N" in a small capsule at the bottom, in place of the bar and selector. Tap it
+/// or pull it up for the file's info.
 private struct SymbolCaption: View {
     let symbol: CodeSymbol
+    let onInfo: @MainActor () -> Void
 
     static let height: CGFloat = 36
     /// Space kept free under the text so its end isn't hidden behind the caption.
     static let reservedHeight: CGFloat = height + 16
+    /// How far up to pull it (or flick it) for the info.
+    private static let pullDistance: CGFloat = 40
+
+    init(symbol: CodeSymbol, onInfo: @escaping @MainActor () -> Void) {
+        self.symbol = symbol
+        self.onInfo = onInfo
+    }
 
     var body: some View {
         capsule
-            .allowsHitTesting(false)  // touches go to the page under it
+            .onTapGesture { onInfo() }
+            .gesture(
+                DragGesture(minimumDistance: 8).onEnded { value in
+                    if value.translation.height < -Self.pullDistance
+                        || value.predictedEndTranslation.height < -3 * Self.pullDistance {
+                        onInfo()
+                    }
+                }
+            )
             .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(Text("Shows the file’s info and history"))
     }
 
     @ViewBuilder
@@ -282,14 +305,23 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var positionURL: URL? = nil
     /// A file's page: pull to refresh.
     var onRefresh: (@MainActor () async -> Void)? = nil
-    /// A file's page: pulled up past the end of the text (its info).
+    /// Pulled up past the end of the text: the file's info.
     var onPullUp: (@MainActor () -> Void)? = nil
+    /// Swiping in from the left edge and holding shows the line numbers, numbered this way.
+    var lineNumbering: LineNumbering? = nil
     var positionStore: ReadingPositionStore = .standard
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView(usingTextLayoutManager: false)
+        // TextKit 1, with a layout manager that also draws whole-line backgrounds (a diff's).
+        let storage = NSTextStorage()
+        let layoutManager = LineBackgroundLayoutManager()
+        storage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layoutManager.addTextContainer(container)
+        let textView = UITextView(frame: .zero, textContainer: container)
         RawTextStyle.configure(textView)
         textView.contentInsetAdjustmentBehavior = .never  // insets come from `insets` instead
         if #available(iOS 26.0, *) {
@@ -302,6 +334,11 @@ struct ReadOnlyTextView: UIViewRepresentable {
                                      for: .valueChanged)
             textView.refreshControl = refreshControl
         }
+        let peek = UIScreenEdgePanGestureRecognizer(target: context.coordinator,
+                                                    action: #selector(Coordinator.handlePeek(_:)))
+        peek.edges = .left
+        peek.delegate = context.coordinator
+        textView.addGestureRecognizer(peek)
         return textView
     }
 
@@ -316,6 +353,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.onHighlight = onHighlight
         coordinator.onRefresh = onRefresh
         coordinator.onPullUp = onPullUp
+        coordinator.lineNumbering = lineNumbering
         textView.accessibilityCustomActions = onPullUp == nil ? nil : [
             UIAccessibilityCustomAction(name: String(localized: "File Info")) { _ in
                 coordinator.onPullUp?()
@@ -364,7 +402,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.save(textView)
     }
 
-    final class Coordinator: NSObject, UITextViewDelegate {
+    final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
         var textID: Int?
         var symbolSearchTerm: (@MainActor (String) -> String?)?
         var onSearchSymbols: (@MainActor (String) -> Void)?
@@ -375,6 +413,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
         var onHighlight: (@MainActor (IdentifierHighlight?) -> Void)?
         var onRefresh: (@MainActor () async -> Void)?
         var onPullUp: (@MainActor () -> Void)?
+        var lineNumbering: LineNumbering?
+        /// Showing while a peek is held.
+        private var gutter: LineNumberGutter?
         var positionURL: URL?
         var positionStore: ReadingPositionStore = .standard
 
@@ -474,6 +515,58 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 await onRefresh?()
                 control.endRefreshing()
             }
+        }
+
+        // MARK: Line numbers (swipe in from the left edge and hold)
+
+        @objc func handlePeek(_ gesture: UIScreenEdgePanGestureRecognizer) {
+            guard let textView = gesture.view as? UITextView, let lineNumbering else { return }
+            switch gesture.state {
+            case .began:
+                let gutter = self.gutter ?? LineNumberGutter()
+                self.gutter = gutter
+                gutter.textView = textView
+                gutter.numbering = lineNumbering
+                gutter.prepare()
+                let width = gutter.preferredWidth(font: LineNumberGutter.font(for: textView))
+                gutter.transform = .identity  // a frame is only meaningful without one
+                gutter.frame = CGRect(x: 0, y: textView.contentOffset.y, width: width, height: textView.bounds.height)
+                gutter.transform = CGAffineTransform(translationX: -width, y: 0)
+                textView.addSubview(gutter)
+                gutter.setNeedsDisplay()
+                UISelectionFeedbackGenerator().selectionChanged()
+                fallthrough
+            case .changed:
+                guard let gutter else { return }
+                // Follows the finger until it's all out, then stays while held.
+                let shown = min(max(gesture.translation(in: textView).x, 0), gutter.bounds.width)
+                gutter.transform = CGAffineTransform(translationX: shown - gutter.bounds.width, y: 0)
+            default:
+                guard let gutter else { return }
+                UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+                    gutter.transform = CGAffineTransform(translationX: -gutter.bounds.width, y: 0)
+                } completion: { _ in
+                    if gutter.transform.tx <= -gutter.bounds.width + 0.5 { gutter.removeFromSuperview() }
+                }
+            }
+        }
+
+        /// The peek goes first: the pages, the scrolling and going back wait for it to fail,
+        /// which it does at once away from the left edge.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            gestureRecognizer is UIScreenEdgePanGestureRecognizer && lineNumbering != nil
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            !(gestureRecognizer is UIScreenEdgePanGestureRecognizer) || lineNumbering != nil
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            // The peek stays over the screen while the text scrolls under it.
+            guard let gutter, gutter.superview != nil else { return }
+            gutter.center.y = scrollView.contentOffset.y + gutter.bounds.height / 2
+            gutter.setNeedsDisplay()
         }
 
         /// Let go while pulled this far past the end: the file's info opens.
