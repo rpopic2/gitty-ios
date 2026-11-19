@@ -229,6 +229,8 @@ struct SymbolPager: View {
 final class PageTextView: UIView {
     let textView: UITextView
     let gutter = LineNumberGutter()
+    /// The line-number peek: a drag in from the left edge.
+    weak var peek: UIGestureRecognizer?
 
     init(textView: UITextView) {
         self.textView = textView
@@ -241,6 +243,23 @@ final class PageTextView: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    /// On screen: the drags of the views around the page wait for the peek. A drag in from the
+    /// left edge is also how the card's zoom transition closes it (and how going back works),
+    /// and those gestures don't ask the peek's delegate: whichever began first won, so a peek
+    /// sometimes closed the card instead. The peek only takes touches near the left edge and
+    /// rightward drags, so everything else goes on as before.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, let peek else { return }
+        var view = superview
+        while let current = view {
+            for other in current.gestureRecognizers ?? [] where other is UIPanGestureRecognizer && other !== peek {
+                other.require(toFail: peek)
+            }
+            view = current.superview
+        }
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -400,6 +419,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         let peek = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePeek(_:)))
         peek.delegate = context.coordinator
         page.addGestureRecognizer(peek)
+        page.peek = peek
         context.coordinator.peek = peek
         // Double tap an identifier to highlight it (or remove its highlight).
         let doubleTap = UITapGestureRecognizer(target: context.coordinator,
