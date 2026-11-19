@@ -210,9 +210,11 @@ final class CodeLineNumbersView: UIView {
     }
 }
 
-/// A long-press menu from UIKit, for the Code level's titles and code: its preview can be
-/// tapped to open the page, which SwiftUI's context menus can't do. Put it behind the view
-/// (`.background`), so taps still go to the view in front: only the long press is this one's.
+/// Taps and the long-press menu of the Code level's titles and code, from UIKit: the menu's
+/// preview can be tapped to open the page, which SwiftUI's context menus can't do. Put it in
+/// front (`.overlay`): it takes the touches (SwiftUI sends them only to the view in front), so
+/// it handles the taps too; scrolling, the peek and the pinch still work, from the views
+/// around it.
 struct CodeContextMenu: UIViewRepresentable {
     /// The preview, made when the menu opens.
     let preview: @MainActor () -> UIViewController?
@@ -220,6 +222,8 @@ struct CodeContextMenu: UIViewRepresentable {
     let menu: @MainActor () -> UIMenu
     /// The preview was tapped.
     let onOpen: @MainActor () -> Void
+    /// A tap: where in this view, and where on screen. `nil` for none.
+    var onTap: (@MainActor (_ local: CGPoint, _ screen: CGPoint) -> Void)? = nil
 
     func makeUIView(context: Context) -> CodeContextMenuView {
         CodeContextMenuView()
@@ -229,21 +233,54 @@ struct CodeContextMenu: UIViewRepresentable {
         view.makePreview = preview
         view.makeMenu = menu
         view.onOpen = onOpen
+        view.onTap = onTap
+    }
+
+    /// The menu with another tap.
+    func onTap(_ action: @escaping @MainActor (_ local: CGPoint, _ screen: CGPoint) -> Void) -> CodeContextMenu {
+        var copy = self
+        copy.onTap = action
+        return copy
     }
 }
 
-final class CodeContextMenuView: UIView, UIContextMenuInteractionDelegate {
+final class CodeContextMenuView: UIView, UIContextMenuInteractionDelegate, UIGestureRecognizerDelegate {
     var makePreview: (@MainActor () -> UIViewController?)?
     var makeMenu: (@MainActor () -> UIMenu)?
     var onOpen: (@MainActor () -> Void)?
+    var onTap: (@MainActor (CGPoint, CGPoint) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
+        accessibilityElementsHidden = true  // VoiceOver reads (and acts on) the SwiftUI view under it
         addInteraction(UIContextMenuInteraction(delegate: self))
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+        tap.delegate = self
+        addGestureRecognizer(tap)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    @objc private func tapped(_ recognizer: UITapGestureRecognizer) {
+        onTap?(recognizer.location(in: self), recognizer.location(in: nil))
+    }
+
+    /// A touch that stops a fling only stops it, as anywhere else in the list.
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        var view = superview
+        while let current = view {
+            if let scrollView = current as? UIScrollView { return !scrollView.isDecelerating && !scrollView.isDragging }
+            view = current.superview
+        }
+        return true
+    }
+
+    /// The scroll view's pan, the peek and the pinch go on alongside the tap.
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
+    }
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                 configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {

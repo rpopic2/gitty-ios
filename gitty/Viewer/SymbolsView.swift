@@ -404,9 +404,7 @@ private struct CodeHeader: View {
                 let isCollapsed = symbol.kind == .file
                     ? collapsed.isFileCollapsed(symbol.fileURL ?? openFile, scope: scope)
                     : collapsed.isCollapsed(symbol, openFile: openFile, scope: scope)
-                Button {
-                    withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile, scope: scope) }
-                } label: {
+                Group {
                     if symbol.kind == .file {
                         FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed)
                     } else {
@@ -414,10 +412,15 @@ private struct CodeHeader: View {
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension)
                     }
                 }
-                .buttonStyle(.plain)
-                .background { contextMenu }
+                // UIKit takes the touches here: a tap collapses, a long press shows the menu.
+                .overlay { contextMenu.onTap { _, _ in toggle() } }
+                .accessibilityAction { toggle() }
             }
         }
+    }
+
+    private func toggle() {
+        withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile, scope: scope) }
     }
 
     /// The first line of the definition (the preview starts at it, after any comment), without
@@ -824,13 +827,11 @@ private struct SymbolCode: View {
             if symbol.kind != .file, !collapsed.isHidden(symbol, openFile: openFile, scope: scope),
                !collapsed.isCollapsed(symbol, openFile: openFile, scope: scope) {
                 let block = store.block(for: symbol)
-                SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, onTap: onTap, onTapAt: onTapAt)
+                SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, contextMenu: contextMenu,
+                               onTap: onTap, onTapAt: onTapAt)
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
-                    // Touch and hold the code: a small preview (not a snapshot of what may be
-                    // hundreds of lines), which opens the page when tapped, and the menu.
-                    .background { contextMenu }
             }
         }
     }
@@ -874,17 +875,24 @@ private struct SymbolCodeText: View {
     let block: CodeBlock
     let peek: CodePeek
     let layoutKey: CodeLayoutKey?
+    /// Touch and hold: a small preview (not a snapshot of what may be hundreds of lines), which
+    /// opens the page when tapped, and the menu. It takes the taps too.
+    let contextMenu: CodeContextMenu
     /// Around the code, or before it's laid out: opens the page at the top.
     let onTap: @MainActor () -> Void
     /// On the code: opens the page at the line tapped.
     let onTapAt: @MainActor (PageAnchor) -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(block: CodeBlock, peek: CodePeek, layoutKey: CodeLayoutKey?, onTap: @escaping @MainActor () -> Void,
-         onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
+    /// The space above and below the code.
+    private static let verticalPadding: CGFloat = 8
+
+    init(block: CodeBlock, peek: CodePeek, layoutKey: CodeLayoutKey?, contextMenu: CodeContextMenu,
+         onTap: @escaping @MainActor () -> Void, onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.block = block
         self.peek = peek
         self.layoutKey = layoutKey
+        self.contextMenu = contextMenu
         self.onTap = onTap
         self.onTapAt = onTapAt
     }
@@ -900,10 +908,9 @@ private struct SymbolCodeText: View {
             .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, RawTextStyle.insets.left)
-            .padding(.vertical, isEmpty ? 0 : 8)
+            .padding(.vertical, isEmpty ? 0 : Self.verticalPadding)
             .background(Color(uiColor: RawTextStyle.backgroundColor))
-            .contentShape(Rectangle())
-            .onTapGesture { onTap() }
+            .overlay { contextMenu.onTap { local, screen in tapped(at: local, screen: screen) } }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(block.symbol.spokenDescription)
             .accessibilityHint(Text("Opens its page"))
@@ -935,18 +942,22 @@ private struct SymbolCodeText: View {
     /// While peeking, slid right with its line numbers.
     private func piece(_ layout: CodePieceLayout) -> some View {
         CodePieceView(layout: layout, firstFileLine: block.firstLine, isPeeking: peek.isActive)
-            .contentShape(Rectangle())
-            // Where in the piece (for the line) and where on screen (for where it goes on the page).
-            .gesture(
-                SpatialTapGesture(coordinateSpace: .local)
-                    .simultaneously(with: SpatialTapGesture(coordinateSpace: .global))
-                    .onEnded { value in
-                        guard let local = value.first?.location, let screen = value.second?.location,
-                              let found = layout.line(atY: local.y)
-                        else { return onTap() }
-                        onTapAt(PageAnchor(line: found.line, screenY: screen.y - (local.y - found.top)))
-                    }
-            )
+    }
+
+    /// A tap at `local` (in this view; `screen`, on screen): the page opens at the line tapped,
+    /// found in the pieces (stacked under the top padding); around the code, at the top.
+    private func tapped(at local: CGPoint, screen: CGPoint) {
+        guard let layouts = block.layouts, !layouts.isEmpty else { return onTap() }
+        var y = local.y - Self.verticalPadding
+        guard y >= 0 else { return onTap() }
+        for layout in layouts {
+            if y < layout.height {
+                guard let found = layout.line(atY: y) else { return onTap() }
+                return onTapAt(PageAnchor(line: found.line, screenY: screen.y - (y - found.top)))
+            }
+            y -= layout.height
+        }
+        onTap()
     }
 }
 
