@@ -217,7 +217,7 @@ struct SymbolsView: View, Equatable {
                                })
                 } header: {
                     // Tap to collapse: a symbol's code, or a whole file's symbols.
-                    CodeHeader(symbol: symbol, collapsed: collapsed, openFile: openFile, scope: scope,
+                    CodeHeader(symbol: symbol, collapsed: collapsed, blocks: codeBlocks, openFile: openFile, scope: scope,
                                symbolCount: symbol.kind == .file ? fileCounts.count(of: symbol, in: symbols) : 0,
                                contextMenu: contextMenu(for: symbol))
                 }
@@ -391,6 +391,8 @@ nonisolated struct CollapseRequest: Equatable, Sendable {
 private struct CodeHeader: View {
     let symbol: CodeSymbol
     let collapsed: CollapsedCodeStore
+    /// For whether there's any code under the title.
+    let blocks: CodeBlockStore
     let openFile: URL
     let scope: String
     /// A file's: how many symbols it has.
@@ -408,19 +410,32 @@ private struct CodeHeader: View {
                     if symbol.kind == .file {
                         FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed)
                     } else {
-                        SymbolTitle(symbol: symbol, isCollapsed: isCollapsed,
+                        SymbolTitle(symbol: symbol, isCollapsed: isCollapsed, canCollapse: canCollapse(isCollapsed),
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension)
                     }
                 }
                 // UIKit takes the touches here: a tap collapses, a long press shows the menu.
-                .overlay { contextMenu.onTap { _, _ in toggle() } }
-                .accessibilityAction { toggle() }
+                .overlay { contextMenu.onTap { _, _ in toggle(isCollapsed) } }
+                .accessibilityAction { toggle(isCollapsed) }
             }
         }
     }
 
-    private func toggle() {
+    /// Nothing to do for a one-line symbol: there's nothing under its title.
+    private func toggle(_ isCollapsed: Bool) {
+        guard symbol.kind == .file || canCollapse(isCollapsed) else { return }
         withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile, scope: scope) }
+    }
+
+    /// Whether there's code under the title (not just its declaration, a one-line symbol), so
+    /// it has a chevron. Known once its code is laid out (the same block its code shows; read
+    /// here, so the title follows it); until then, or while it's collapsed, guessed from its
+    /// first lines.
+    private func canCollapse(_ isCollapsed: Bool) -> Bool {
+        if symbol.kind == .lines { return true }
+        if !isCollapsed, let layouts = blocks.block(for: symbol).layouts { return !layouts.isEmpty }
+        let lines = symbol.preview.split(separator: "\n", omittingEmptySubsequences: false).dropFirst()
+        return lines.contains { !$0.allSatisfy(\.isWhitespace) }
     }
 
     /// The first line of the definition (the preview starts at it, after any comment), without
@@ -500,6 +515,8 @@ private final class FileSymbolCounts {
 private struct SymbolTitle: View {
     let symbol: CodeSymbol
     let isCollapsed: Bool
+    /// There's code under it: a one-line symbol has no chevron (there's nothing to collapse).
+    let canCollapse: Bool
     /// The symbol's file's, for its colors.
     let fileExtension: String
     @Environment(\.codeTextStyle) private var codeTextStyle
@@ -510,6 +527,7 @@ private struct SymbolTitle: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                .opacity(canCollapse ? 1 : 0)  // still there, so the declarations line up
                 .accessibilityHidden(true)
             Image(systemName: symbol.kind.systemImage)
                 .font(.caption)
@@ -528,11 +546,9 @@ private struct SymbolTitle: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(symbol.spokenDescription)
-        .accessibilityValue(isCollapsed ? Text("Collapsed") : Text("Expanded"))
-        .accessibilityHint(symbol.kind == .file
-            ? (isCollapsed ? Text("Shows the file’s symbols") : Text("Hides the file’s symbols"))
-            : (isCollapsed ? Text("Shows its code") : Text("Hides its code")))
-        .accessibilityAddTraits([.isHeader, .isButton])
+        .accessibilityValue(canCollapse ? (isCollapsed ? Text("Collapsed") : Text("Expanded")) : Text(verbatim: ""))
+        .accessibilityHint(canCollapse ? (isCollapsed ? Text("Shows its code") : Text("Hides its code")) : Text(verbatim: ""))
+        .accessibilityAddTraits(canCollapse ? [.isHeader, .isButton] : .isHeader)
     }
 
     @ViewBuilder
