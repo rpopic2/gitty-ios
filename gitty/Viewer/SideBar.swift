@@ -10,7 +10,15 @@ final class SideBarState {
     var reveal: CGFloat = 0 {
         didSet {
             let isOpen = reveal > 0
-            if isOpen != self.isOpen { self.isOpen = isOpen }
+            guard isOpen != self.isOpen else { return }
+            self.isOpen = isOpen
+            // Coming out: the keyboard goes (whatever it was typing into stays as it is).
+            if isOpen {
+                MainActor.assumeIsolated {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                    to: nil, from: nil, for: nil)
+                }
+            }
         }
     }
     var width: CGFloat = 320
