@@ -99,6 +99,22 @@ nonisolated final class CloneIndex: @unchecked Sendable {
         return StoredDocument(url: url, data: data, metadata: metadata(url, record))
     }
 
+    /// How many projects are cloned and the space their clones take (files and Git's data), for
+    /// Settings. Goes through every file: call it off the main thread.
+    func storageUsage() -> (count: Int, bytes: Int64) {
+        let records = allRecords()
+        var bytes: Int64 = 0
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .totalFileAllocatedSizeKey]
+        for record in records {
+            let enumerator = FileManager.default.enumerator(at: folder(of: record), includingPropertiesForKeys: Array(keys))
+            while let file = enumerator?.nextObject() as? URL {
+                guard let values = try? file.resourceValues(forKeys: keys), values.isRegularFile == true else { continue }
+                bytes += Int64(values.totalFileAllocatedSize ?? 0)
+            }
+        }
+        return (records.count, bytes)
+    }
+
     /// Every file in the clones, as saved documents (for the project's symbols, and the saved
     /// marks in the Project tab).
     func allFiles() -> [DocumentMetadata] {

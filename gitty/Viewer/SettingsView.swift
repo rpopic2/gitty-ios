@@ -1,14 +1,16 @@
 import SwiftUI
 import UIKit
 
-/// Settings, from the bottom of the sidebar: the GitHub account, the space saved files take,
-/// and About.
+/// Settings, from the bottom of the sidebar: the GitHub account, the space saved files and
+/// clones take, and About.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
     @State private var account: Account = .loading
     @State private var usage: (count: Int, bytes: Int64)?
+    /// Cloned projects and the space their clones take.
+    @State private var cloneUsage: (count: Int, bytes: Int64)?
     @State private var isSigningIn = false
     @State private var isConfirmingSignOut = false
     @State private var isConfirmingDeleteAll = false
@@ -111,18 +113,29 @@ struct SettingsView: View {
                     ProgressView()
                 }
             }
+            LabeledContent("Clones") {
+                if let cloneUsage {
+                    if cloneUsage.count == 0 {
+                        Text("None")
+                    } else {
+                        Text("^[\(cloneUsage.count) project](inflect: true), \(Text(cloneUsage.bytes, format: .byteCount(style: .file)))")
+                    }
+                } else {
+                    ProgressView()
+                }
+            }
             Button("Delete All Saved Files", role: .destructive) { isConfirmingDeleteAll = true }
                 .disabled((usage?.count ?? 0) == 0)
                 .confirmationDialog("Delete all saved files?", isPresented: $isConfirmingDeleteAll,
                                     titleVisibility: .visible) {
                     Button("Delete All Saved Files", role: .destructive) { deleteAll() }
                 } message: {
-                    Text("Files download again when you open them. Your projects and recent files stay.")
+                    Text("Files download again when you open them. Your projects, recent files and clones stay.")
                 }
         } header: {
             Text("Storage")
         } footer: {
-            Text("Saved files open offline and never expire. They download again only when you pull to refresh.")
+            Text("Saved files open offline and never expire. They download again only when you pull to refresh. A clone has a whole project; delete it from its Clone button in the Project tab.")
         }
     }
 
@@ -160,6 +173,7 @@ struct SettingsView: View {
             account = .signedOut
         }
         usage = await DocumentStore.shared.storageUsage()
+        cloneUsage = await Task.detached(priority: .userInitiated) { CloneIndex.shared.storageUsage() }.value
     }
 }
 
