@@ -54,6 +54,9 @@ final class StackSearch {
     /// `CodeDocumentModel.resultsVersion`).
     private(set) var version = 0
     private(set) var isSearching = false
+    /// What's collapsed on its page: its own, starting with nothing, so every result shows
+    /// (the Code level's folded files hid theirs, under a count that included them).
+    @ObservationIgnored let collapsed = CollapsedCodeStore.temporary()
 
     @ObservationIgnored private let model: CodeDocumentModel
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -120,6 +123,9 @@ struct StackResultsView<Results: View>: View {
     @Bindable var search: StackSearch
     /// Its place in the stack, shown before the search from 2 up.
     let stackDepth: Int
+    /// The results shown: the ones not folded away on the page (pinch in to fold files), so
+    /// the count is what's there.
+    let shownCount: @MainActor ([CodeSymbol]) -> Int
     /// The list, for the results so far and their query.
     @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String, _ onScrollDown: @escaping @MainActor (Bool) -> Void) -> Results
 
@@ -176,7 +182,7 @@ struct StackResultsView<Results: View>: View {
             if search.isPending {
                 ProgressView().controlSize(.small)
             } else {
-                Text(verbatim: "· \(search.results.count)")
+                Text(verbatim: "· \(shownCount(search.results))")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }

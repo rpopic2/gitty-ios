@@ -72,8 +72,8 @@ struct SymbolsView: View, Equatable {
     @State private var peek = CodePeek()
     /// This pinch has already collapsed or expanded everything (once per pinch).
     @State private var pinchHandled = false
-    /// What's collapsed (shared, saved).
-    private let collapsed = CollapsedCodeStore.shared
+    /// What's collapsed: the Code level's (shared, saved), or a results page's own.
+    let collapsed: CollapsedCodeStore
     /// The list's width, which the code wraps in.
     @State private var codeWidth: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
@@ -99,7 +99,9 @@ struct SymbolsView: View, Equatable {
          onShowHistory: (@MainActor (URL) -> Void)? = nil,
          onDownloadFile: (@MainActor (URL) -> Void)? = nil,
          downloadingFiles: Set<URL> = [],
-         onOpenURL: (@MainActor (URL) -> Void)? = nil) {
+         onOpenURL: (@MainActor (URL) -> Void)? = nil,
+         collapsed: CollapsedCodeStore = .shared) {
+        self.collapsed = collapsed
         self.symbols = symbols
         self.query = query
         self.isActive = isActive
@@ -135,7 +137,7 @@ struct SymbolsView: View, Equatable {
             && lhs.rootFolderName == rhs.rootFolderName
             && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
             && lhs.albumContext == rhs.albumContext && (lhs.onShowHistory == nil) == (rhs.onShowHistory == nil)
-            && lhs.downloadingFiles == rhs.downloadingFiles
+            && lhs.downloadingFiles == rhs.downloadingFiles && lhs.collapsed === rhs.collapsed
     }
 
     var body: some View {

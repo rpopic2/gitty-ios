@@ -120,4 +120,14 @@ struct CollapsedCodeStoreTests {
         #expect(store.isCollapsed(symbol("main"), openFile: open, scope: scope))
         #expect(store.isFileCollapsed(other, scope: scope))
     }
+
+    @Test func aTemporaryStoreIgnoresTheSavedFoldsAndKeepsItsOwnToItself() throws {
+        let (saved, _) = try store()
+        saved.setAllFilesFolded(true, scope: scope)
+        let temporary = CollapsedCodeStore.temporary()
+        #expect(!temporary.isHidden(symbol("main", in: other), openFile: open, scope: scope))
+        temporary.setAllFilesFolded(true, scope: scope)
+        #expect(temporary.isHidden(symbol("main", in: other), openFile: open, scope: scope))
+        #expect(!CollapsedCodeStore.temporary().areAllFilesFolded(scope: scope))
+    }
 }

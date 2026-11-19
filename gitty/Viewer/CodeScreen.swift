@@ -354,7 +354,12 @@ struct CodeScreen: View {
 
     /// The latest search's results.
     private func resultsView(_ search: StackSearch) -> some View {
-        StackResultsView(search: search, stackDepth: stackedResults[search.id]?.depth ?? 1) { symbols, query, onScrollDown in
+        let openFile = model.url
+        let scope = model.collapseScope
+        return StackResultsView(search: search, stackDepth: stackedResults[search.id]?.depth ?? 1,
+                                shownCount: { results in
+                                    results.filter { !search.collapsed.isHidden($0, openFile: openFile, scope: scope) }.count
+                                }) { symbols, query, onScrollDown in
             SymbolsView(
                 symbols: symbols,
                 query: query,
@@ -378,7 +383,8 @@ struct CodeScreen: View {
                 },
                 onDownloadFile: { model.download(file: $0) },
                 downloadingFiles: model.downloadingFiles,
-                onOpenURL: { onOpen($0) }
+                onOpenURL: { onOpen($0) },
+                collapsed: search.collapsed
             )
             .equatable()
         }

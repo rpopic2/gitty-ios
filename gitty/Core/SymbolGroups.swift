@@ -97,6 +97,10 @@ nonisolated struct FolderGroup: Identifiable, Sendable {
 final class CollapsedCodeStore {
     static let shared = CollapsedCodeStore(defaults: .standard)
 
+    /// One that starts with nothing collapsed and isn't saved: a results page's, so the Code
+    /// level's folds don't hide its results, and its own go with it.
+    static func temporary() -> CollapsedCodeStore { CollapsedCodeStore(defaults: nil) }
+
     /// Symbols that differ from their scope's default.
     private(set) var flipped: Set<String>
     /// Files that differ from their scope's default (folded, unless the scope's are).
@@ -111,7 +115,8 @@ final class CollapsedCodeStore {
     private(set) var folders: Set<String>
     /// Scopes whose folders are folded by default (pinching in once more on the folders).
     private(set) var foldedFolderScopes: Set<String>
-    @ObservationIgnored private let defaults: UserDefaults
+    /// `nil`: not saved (`temporary()`).
+    @ObservationIgnored private let defaults: UserDefaults?
 
     private enum Key {
         static let flipped = "collapsedCode.symbols"
@@ -124,8 +129,17 @@ final class CollapsedCodeStore {
         static let old = "collapsedCode"
     }
 
-    init(defaults: UserDefaults) {
+    init(defaults: UserDefaults?) {
         self.defaults = defaults
+        guard let defaults else {
+            flipped = []
+            files = []
+            collapsedScopes = []
+            foldedScopes = []
+            folders = []
+            foldedFolderScopes = []
+            return
+        }
         var flipped = Set(defaults.stringArray(forKey: Key.flipped) ?? [])
         var files = Set(defaults.stringArray(forKey: Key.files) ?? [])
         if let old = defaults.stringArray(forKey: Key.old) {
@@ -255,6 +269,7 @@ final class CollapsedCodeStore {
     }
 
     private func save() {
+        guard let defaults else { return }
         defaults.set(flipped.sorted(), forKey: Key.flipped)
         defaults.set(files.sorted(), forKey: Key.files)
         defaults.set(collapsedScopes.sorted(), forKey: Key.scopes)
