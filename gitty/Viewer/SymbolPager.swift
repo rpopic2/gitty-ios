@@ -264,6 +264,16 @@ final class PageTextView: UIView {
         }
     }
 
+    /// The view controller showing the page, for the transition going back.
+    var owningViewController: UIViewController? {
+        var responder: UIResponder? = next
+        while let current = responder {
+            if let controller = current as? UIViewController { return controller }
+            responder = current.next
+        }
+        return nil
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         // Not while sliding: a frame is only meaningful without a transform.
@@ -639,14 +649,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
             let gutter = page.gutter
             switch gesture.state {
             case .began:
-                gutter.textView = textView
-                gutter.numbering = lineNumbering
-                gutter.prepare()
-                let width = gutter.preferredWidth(font: LineNumberGutter.font(for: textView))
-                gutter.transform = .identity  // a frame is only meaningful without one
-                gutter.frame = CGRect(x: -width, y: 0, width: width, height: page.bounds.height)
-                gutter.isHidden = false
-                gutter.setNeedsDisplay()
+                prepareNumbers(in: page, numbering: lineNumbering)
                 fallthrough
             case .changed:
                 // The page and the numbers slide right together, following the finger until the
@@ -655,13 +658,62 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 let slide = CGAffineTransform(translationX: shown, y: 0)
                 textView.transform = slide
                 gutter.transform = slide
+            case .cancelled where showNumbersWhileGoingBack(in: page):
+                break
             default:
-                UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
-                    textView.transform = .identity
-                    gutter.transform = .identity
-                } completion: { _ in
-                    if textView.transform == .identity { gutter.isHidden = true }
-                }
+                Self.hideNumbers(in: page, animated: true)
+            }
+        }
+
+        private func prepareNumbers(in page: PageTextView, numbering: LineNumbering) {
+            let textView = page.textView
+            let gutter = page.gutter
+            gutter.textView = textView
+            gutter.numbering = numbering
+            gutter.prepare()
+            let width = gutter.preferredWidth(font: LineNumberGutter.font(for: textView))
+            gutter.transform = .identity  // a frame is only meaningful without one
+            gutter.frame = CGRect(x: -width, y: 0, width: width, height: page.bounds.height)
+            gutter.isHidden = false
+            gutter.setNeedsDisplay()
+        }
+
+        /// Going back has taken over the drag from the left edge (it cancels the peek, or wins
+        /// before it starts): the numbers come all the way out and stay while the card follows
+        /// the finger, as on a results page. They go once the card has gone, or has come back.
+        /// `false` when nothing is going back.
+        @discardableResult
+        private func showNumbersWhileGoingBack(in page: PageTextView) -> Bool {
+            guard let lineNumbering, let coordinator = page.owningViewController?.transitionCoordinator,
+                  coordinator.isInteractive
+            else { return false }
+            if page.gutter.isHidden { prepareNumbers(in: page, numbering: lineNumbering) }
+            let slide = CGAffineTransform(translationX: page.gutter.bounds.width, y: 0)
+            UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState]) {
+                page.textView.transform = slide
+                page.gutter.transform = slide
+            }
+            coordinator.animate(alongsideTransition: nil) { context in
+                // Stayed: slide back. Gone: put it back as it was, unseen.
+                Self.hideNumbers(in: page, animated: context.isCancelled)
+            }
+            return true
+        }
+
+        private static func hideNumbers(in page: PageTextView, animated: Bool) {
+            let textView = page.textView
+            let gutter = page.gutter
+            guard animated else {
+                textView.transform = .identity
+                gutter.transform = .identity
+                gutter.isHidden = true
+                return
+            }
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+                textView.transform = .identity
+                gutter.transform = .identity
+            } completion: { _ in
+                if textView.transform == .identity { gutter.isHidden = true }
             }
         }
 
@@ -824,7 +876,18 @@ struct ReadOnlyTextView: UIViewRepresentable {
         /// The peek only takes touches that start at the screen's left edge.
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
             guard gestureRecognizer === peek else { return true }
-            return lineNumbering != nil && touch.location(in: nil).x <= Self.peekEdgeWidth
+            guard lineNumbering != nil, touch.location(in: nil).x <= Self.peekEdgeWidth else { return false }
+            // If going back wins the drag before the peek starts, the numbers still come out.
+            if let page = gestureRecognizer.view as? PageTextView {
+                Task { @MainActor [weak self, weak page] in
+                    for _ in 0..<4 {
+                        try? await Task.sleep(for: .milliseconds(80))
+                        guard let self, let page, page.gutter.isHidden else { return }
+                        if self.showNumbersWhileGoingBack(in: page) { return }
+                    }
+                }
+            }
+            return true
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
