@@ -200,10 +200,9 @@ struct SymbolsView: View, Equatable {
             ForEach(groupCache.groups(of: symbols, openFile: openFile, query: query)) { group in
                 let isFolded = folded.contains(group.file)
                 Section {
-                    if !isFolded, !group.symbols.isEmpty {
-                        FileDeclarations(symbols: group.symbols) { showCard($0) }
-                            .id(group.anchorID ?? -1)  // the file as a scroll target (never -1 here)
-                    }
+                    // Always there (empty when folded): see `fullCode`.
+                    FileDeclarations(symbols: isFolded ? [] : group.symbols) { showCard($0) }
+                        .id(group.anchorID ?? -1)  // the file as a scroll target (never -1 here)
                 } header: {
                     SymbolFileHeader(
                         name: group.file.displayFileName,
@@ -224,20 +223,19 @@ struct SymbolsView: View, Equatable {
     /// whole file on its page. The text isn't selectable (it's plain `Text`, cheap to scroll
     /// through a big project); tap a symbol to open its page.
     ///
-    /// Each symbol is one view (so the lazy list can count them without making them). The open
-    /// file's code is ready at once; other files' is prepared in the background, the symbols on
-    /// screen first and the next few ahead of time (`CodeBlockStore`).
+    /// Each symbol is exactly one view, whatever it is (a file's entry is an empty one), so the
+    /// lazy list can count them from their types alone. With an `if` here, it had to run this
+    /// closure for every symbol of the project before showing anything, which took seconds on a
+    /// big one. Nothing per symbol is made until it scrolls in: its block is made in its view's
+    /// body. The open file's code is ready at once; other files' is prepared in the background,
+    /// the symbols on screen first and the next few ahead of time (`CodeBlockStore`).
     private var fullCode: some View {
         codeBlocks.symbols = symbols
         codeBlocks.ownText = ownText
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(symbols) { symbol in
                 Section {
-                    if symbol.kind != .file {
-                        SymbolCode(block: codeBlocks.block(for: symbol),
-                                   onAppear: { codeBlocks.appeared(symbol) },
-                                   onTap: { onOpen(symbol) })
-                    }
+                    SymbolCode(symbol: symbol, store: codeBlocks, onTap: { onOpen(symbol) })
                 } header: {
                     // A file's title opens its page with the whole file (as its card does);
                     // a symbol's opens its page, like its code.
@@ -444,7 +442,14 @@ private struct FileDeclarations: View {
         self.onTap = onTap
     }
 
+    /// Nothing when there are no symbols (folded, or a file without any), but always one view.
     var body: some View {
+        VStack(spacing: 0) {
+            if !symbols.isEmpty { lines }
+        }
+    }
+
+    private var lines: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(symbols) { symbol in
                 (Text(Image(systemName: symbol.kind.systemImage)).foregroundStyle(.tint)
@@ -576,17 +581,38 @@ private final class CodeBlockStore {
     }
 }
 
-/// Zoomed in: one symbol's whole code in the raw-text style. One view per symbol, so the lazy
-/// list can count its items without making them.
+/// Zoomed in: one symbol's whole code in the raw-text style, or nothing for a file's entry (its
+/// title is all it has). Always a single view, so the lazy list can count its items without
+/// making them; its block is made here, once the symbol scrolls in.
 private struct SymbolCode: View {
+    let symbol: CodeSymbol
+    let store: CodeBlockStore
+    let onTap: @MainActor () -> Void
+
+    init(symbol: CodeSymbol, store: CodeBlockStore, onTap: @escaping @MainActor () -> Void) {
+        self.symbol = symbol
+        self.store = store
+        self.onTap = onTap
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if symbol.kind != .file {
+                SymbolCodeText(block: store.block(for: symbol), onTap: onTap)
+                    .onAppear { store.appeared(symbol) }
+            }
+        }
+    }
+}
+
+/// A symbol's code, redrawn when its block's code is ready.
+private struct SymbolCodeText: View {
     let block: CodeBlock
-    let onAppear: @MainActor () -> Void
     let onTap: @MainActor () -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(block: CodeBlock, onAppear: @escaping @MainActor () -> Void, onTap: @escaping @MainActor () -> Void) {
+    init(block: CodeBlock, onTap: @escaping @MainActor () -> Void) {
         self.block = block
-        self.onAppear = onAppear
         self.onTap = onTap
     }
 
@@ -604,7 +630,6 @@ private struct SymbolCode: View {
         .buttonStyle(.plain)
         .accessibilityLabel(block.symbol.spokenDescription)
         .accessibilityHint(Text("Opens its page"))
-        .onAppear { onAppear() }
     }
 }
 
