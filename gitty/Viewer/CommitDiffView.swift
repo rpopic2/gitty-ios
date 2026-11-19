@@ -46,23 +46,25 @@ struct CommitDiffView: View {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                // The caption, then a set-aside review under it (its composer opens over this
+                // screen): both hide while you scroll down.
                 VStack(spacing: 0) {
-                    // Stays while the caption hides, moving down into its place. Its composer
-                    // opens over this screen.
-                    if let review, review.isDocked {
-                        ReviewDock(draft: review, overSheet: true)
-                            .padding(.bottom, 8)
-                            .offset(y: isCaptionHidden ? DiffCaption.height + 8 : 0)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
                     if let changes, let index = currentIndex(in: changes) {
                         DiffCaption(change: changes[index], commit: commit, index: index, count: changes.count)
                             .padding(.bottom, 8)
-                            .offset(y: isCaptionHidden ? DiffCaption.reservedHeight + 40 : 0)
-                            .opacity(isCaptionHidden ? 0 : 1)
-                            .accessibilityHidden(isCaptionHidden)
+                    }
+                    if let review, review.isDocked {
+                        ReviewDock(draft: review, overSheet: true)
+                            .padding(.bottom, 8)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
+                .offset(y: isCaptionHidden
+                    ? DiffCaption.reservedHeight + (review?.isDocked == true ? ReviewDock.reservedHeight : 0) + 40
+                    : 0)
+                .opacity(isCaptionHidden ? 0 : 1)
+                .allowsHitTesting(!isCaptionHidden)
+                .accessibilityHidden(isCaptionHidden)
                 .animation(.smooth(duration: 0.25), value: isCaptionHidden)
                 .animation(.smooth(duration: 0.25), value: review?.isDocked)
             }

@@ -153,23 +153,24 @@ struct SymbolPager: View {
                     }
                 }
 
+                // The caption, then a set-aside review under it: both hide while you scroll down.
                 VStack(spacing: 0) {
-                    // Stays while the caption hides, moving down into its place.
-                    if let review, review.isDocked {
-                        ReviewDock(draft: review)
-                            .padding(.bottom, 8)
-                            .offset(y: isCaptionHidden ? SymbolCaption.height + 8 : 0)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
                     if let current {
                         SymbolCaption(symbol: current, onInfo: infoAction(for: current))
                             .padding(.bottom, 8)
-                            .offset(y: isCaptionHidden ? SymbolCaption.reservedHeight + 40 : 0)
-                            .opacity(isCaptionHidden ? 0 : 1)
-                            .allowsHitTesting(!isCaptionHidden)
-                            .accessibilityHidden(isCaptionHidden)
+                    }
+                    if let review, review.isDocked {
+                        ReviewDock(draft: review)
+                            .padding(.bottom, 8)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
+                .offset(y: isCaptionHidden
+                    ? SymbolCaption.reservedHeight + (review?.isDocked == true ? ReviewDock.reservedHeight : 0) + 40
+                    : 0)
+                .opacity(isCaptionHidden ? 0 : 1)
+                .allowsHitTesting(!isCaptionHidden)
+                .accessibilityHidden(isCaptionHidden)
                 .animation(.smooth(duration: 0.25), value: isCaptionHidden)
                 .animation(.smooth(duration: 0.25), value: review?.isDocked)
             }
