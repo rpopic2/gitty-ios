@@ -5,6 +5,8 @@ import SwiftUI
 /// first if there's none), and a link to it on github.com. Tap a commit to see what it changed.
 struct FileInfoView: View {
     @State private var model: FileInfoModel
+    /// Comments on a diff open the review over this sheet.
+    @Environment(ReviewDraft.self) private var review: ReviewDraft?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -43,6 +45,18 @@ struct FileInfoView: View {
             }
         }
         .task { await model.load() }
+        .sheet(isPresented: composerIsPresented) {
+            if let review { ReviewComposer(draft: review) }
+        }
+        .onDisappear {
+            // Closed while the review was up over it: it's set aside, as a swipe down would.
+            if review?.isComposingOverSheet == true { review?.isComposingOverSheet = false }
+        }
+    }
+
+    private var composerIsPresented: Binding<Bool> {
+        Binding(get: { review?.isComposingOverSheet ?? false },
+                set: { review?.isComposingOverSheet = $0 })
     }
 
     // MARK: Sections

@@ -14,6 +14,26 @@ final class ReviewDraft {
     }
     /// The composer sheet is up. Swiping it down sets the draft aside (docked above the bar).
     var isComposing = false
+    /// It's up over a sheet (a file's info, commenting on a diff), which presents it itself:
+    /// the screen under that sheet can't.
+    private(set) var composesOverSheet = false
+
+    /// For the screen's own `sheet(isPresented:)`.
+    var isComposingOnScreen: Bool {
+        get { isComposing && !composesOverSheet }
+        set { if !newValue { isComposing = false } }
+    }
+
+    /// For a sheet's `sheet(isPresented:)` (see `composesOverSheet`).
+    var isComposingOverSheet: Bool {
+        get { isComposing && composesOverSheet }
+        set {
+            if !newValue {
+                isComposing = false
+                composesOverSheet = false
+            }
+        }
+    }
     /// Changes whenever the cursor should go to the end of the text (a comment was added).
     private(set) var cursorRequest = UUID()
 
@@ -32,17 +52,31 @@ final class ReviewDraft {
     }
 
     /// Adds a comment on `selection` at the end and opens the composer, cursor ready.
-    func add(_ selection: ReviewSelection, format: ReviewFormat) {
+    /// - Parameter repository: its first comment on the repository adds its heading.
+    func add(_ selection: ReviewSelection, format: ReviewFormat, repository: ReviewRepository? = nil) {
+        add(block: ReviewText.block(for: selection, format: format), format: format, repository: repository,
+            overSheet: false)
+    }
+
+    /// A comment on lines of a diff, from the file info sheet.
+    func add(_ selection: ReviewDiffSelection, format: ReviewFormat, repository: ReviewRepository?) {
+        add(block: ReviewText.block(for: selection, format: format), format: format, repository: repository,
+            overSheet: true)
+    }
+
+    private func add(block: String, format: ReviewFormat, repository: ReviewRepository?, overSheet: Bool) {
         if !hasDraft { commentCount = 0 }
-        text = ReviewText.appending(ReviewText.block(for: selection, format: format), to: text, format: format)
+        text = ReviewText.appending(block, to: text, format: format, repository: repository)
         commentCount += 1
         cursorRequest = UUID()
+        composesOverSheet = overSheet
         isComposing = true
     }
 
     /// Brings a set-aside draft back.
     func resume() {
         cursorRequest = UUID()
+        composesOverSheet = false
         isComposing = true
     }
 
@@ -51,6 +85,7 @@ final class ReviewDraft {
         text = ""
         commentCount = 0
         isComposing = false
+        composesOverSheet = false
     }
 }
 

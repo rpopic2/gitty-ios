@@ -71,6 +71,25 @@ nonisolated struct UnifiedDiff: Equatable, Sendable {
         self.lines = lines
     }
 
+    /// Some of the lines (0-based, as in `lines`), for a comment: their numbers before and after
+    /// the change, and the lines as a unified diff again (`+`, `-` or a space first; hunk
+    /// headers and notes as they are).
+    func selection(_ indices: ClosedRange<Int>) -> (old: ClosedRange<Int>?, new: ClosedRange<Int>?, text: String) {
+        guard !lines.isEmpty else { return (nil, nil, "") }
+        let picked = lines[max(0, indices.lowerBound)...min(lines.count - 1, indices.upperBound)]
+        let old = picked.compactMap(\.oldNumber)
+        let new = picked.compactMap(\.newNumber)
+        let text = picked.map { line -> String in
+            switch line.kind {
+            case .added: "+" + line.text
+            case .removed: "-" + line.text
+            case .context: " " + line.text
+            case .hunk, .note: line.text
+            }
+        }.joined(separator: "\n")
+        return (old.min().map { $0...(old.max() ?? $0) }, new.min().map { $0...(new.max() ?? $0) }, text)
+    }
+
     /// The first old and new line numbers in `@@ -12,5 +12,7 @@`.
     private static func starts(of header: Substring) -> (Int, Int) {
         func number(after marker: Character) -> Int {

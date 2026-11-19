@@ -73,3 +73,50 @@ struct ReviewDraftTests {
         #expect(ReviewDraft(defaults: defaults).commentCount == 0)
     }
 }
+
+struct ReviewContextTests {
+    private let diffSelection = ReviewDiffSelection(
+        path: "src/parse.c", oldPath: nil, commit: "3f2a9c1e0b7d4a5f6e8c9d0a1b2c3d4e5f6a7b8c",
+        summary: "Fix overflow in parser", oldLines: 40...42, newLines: 40...44,
+        diff: " int n;\n-int a;\n+long a;\n+long b;")
+
+    @Test func diffCommentsCarryTheCommitAndBothSides() {
+        #expect(diffSelection.label == "src/parse.c@3f2a9c1 (before 40-42, after 40-44)")
+        #expect(ReviewText.block(for: diffSelection, format: .compact)
+                == "src/parse.c@3f2a9c1 (before 40-42, after 40-44): ")
+        #expect(ReviewText.block(for: diffSelection, format: .markdown)
+                == "### src/parse.c@3f2a9c1 (before 40-42, after 40-44)\n\n"
+                + "Commit 3f2a9c1e0b7d4a5f6e8c9d0a1b2c3d4e5f6a7b8c: Fix overflow in parser\n\n"
+                + "```diff\n int n;\n-int a;\n+long a;\n+long b;\n```\n\n")
+        var added = diffSelection
+        added.oldLines = nil
+        added.newLines = 7...7
+        #expect(added.label == "src/parse.c@3f2a9c1 (after 7)")
+    }
+
+    @Test func fileCommentsNameTheirCommit() {
+        let selection = ReviewSelection(location: "a.c", startLine: 3, endLine: 3, code: "x", language: "c",
+                                        commit: "abcdef0123456789")
+        #expect(ReviewText.block(for: selection, format: .compact) == "a.c@abcdef0:3: ")
+    }
+
+    @Test func theRepositoryIsNamedOnceAtTheTop() {
+        let repository = ReviewRepository(name: "o/r", ref: "main", commit: "3f2a9c1e0b")
+        #expect(repository.heading == "Review of o/r (branch main, at 3f2a9c1)")
+        let first = ReviewText.appending("a.c:1: ", to: "", format: .compact, repository: repository)
+        #expect(first == "Review of o/r (branch main, at 3f2a9c1)\na.c:1: ")
+        let second = ReviewText.appending("a.c:2: ", to: first + "Typo.", format: .compact, repository: repository)
+        #expect(second == first + "Typo.\na.c:2: ")
+        let markdown = ReviewText.appending("### a.c:1\n\n", to: "", format: .markdown, repository: repository)
+        #expect(markdown == "## Review of o/r (branch main, at 3f2a9c1)\n\n### a.c:1\n\n")
+    }
+
+    @Test func aDiffSelectionGetsItsLinesBack() {
+        let diff = UnifiedDiff("@@ -40,3 +40,4 @@\n int n;\n-int a;\n+long a;\n+long b;\n")
+        let picked = diff.selection(1...4)
+        #expect(picked.old == 40...41)
+        #expect(picked.new == 40...42)
+        #expect(picked.text == " int n;\n-int a;\n+long a;\n+long b;")
+        #expect(diff.selection(3...3).old == nil)
+    }
+}

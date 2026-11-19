@@ -49,7 +49,7 @@ struct BrowserView: View {
                 }
             }
             // Like Mail's compose window: swiping it down sets the review aside, docked above the bar.
-            .sheet(isPresented: $review.isComposing) { ReviewComposer(draft: review) }
+            .sheet(isPresented: $review.isComposingOnScreen) { ReviewComposer(draft: review) }
         } sideBar: {
             SideBarView(
                 selectedID: openProjectID,

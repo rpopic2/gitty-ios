@@ -446,12 +446,17 @@ struct CodeScreen: View {
         let review = review
         Task {
             let projects = await ProjectStore.shared.projects()
+            // A cloned project's file is at a known commit: the comment says which.
+            let commit = CloneIndex.shared.location(of: url)?.record.commit
             let selection = ReviewSelection(
                 location: ReviewText.location(for: url, projects: projects),
                 startLine: lines.start, endLine: lines.end, code: code,
-                language: ReviewText.language(for: url)
+                language: ReviewText.language(for: url), commit: commit
             )
-            review.add(selection, format: format)
+            let repository = ProjectSymbolIndex.project(containing: url, in: projects).map { project in
+                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref, commit: commit)
+            }
+            review.add(selection, format: format, repository: repository)
         }
     }
 

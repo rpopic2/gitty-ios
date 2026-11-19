@@ -44,7 +44,7 @@ struct CommitDiffView: View {
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 0) {
                         ForEach(changes) { change in
-                            DiffPage(projectID: projectID, commit: commit.id, change: change,
+                            DiffPage(projectID: projectID, commit: commit, change: change,
                                      isCurrent: change.path == currentPath)
                                 .containerRelativeFrame([.horizontal, .vertical])
                         }
@@ -102,11 +102,15 @@ struct CommitDiffView: View {
 /// `+` or `-` in it); swipe in from the left edge and hold for the lines' numbers in the file.
 private struct DiffPage: View {
     let projectID: String
-    let commit: String
+    let commit: GitCommit
     let change: GitChange
     let isCurrent: Bool
 
     @State private var text: NSAttributedString?
+    /// The diff `text` shows, line for line, for comments.
+    @State private var diff: UnifiedDiff?
+    @Environment(ReviewDraft.self) private var review: ReviewDraft?
+    @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
     @State private var isEmpty = false
     @State private var errorMessage: String?
     @Environment(\.codeTextStyle) private var codeTextStyle
@@ -123,6 +127,7 @@ private struct DiffPage: View {
                     textID: ObjectIdentifier(text).hashValue,
                     insets: EdgeInsets(),
                     isCurrent: isCurrent,
+                    onComment: commentAction,
                     fileExtension: (change.path as NSString).pathExtension,
                     highlight: highlights?.current,
                     onHighlight: { highlights?.current = $0 },
@@ -140,17 +145,48 @@ private struct DiffPage: View {
         // Again for another font or colors.
         .task(id: codeTextStyle) {
             do {
-                let patch = try await CloneStore.shared.patch(projectID: projectID, commit: commit, path: change.path)
+                let patch = try await CloneStore.shared.patch(projectID: projectID, commit: commit.id, path: change.path)
                 let style = codeTextStyle
                 let fileExtension = (change.path as NSString).pathExtension
-                let rendered = await Task.detached(priority: .userInitiated) {
-                    DiffText.render(UnifiedDiff(patch), fileExtension: fileExtension, style: style)
+                let (parsed, rendered) = await Task.detached(priority: .userInitiated) {
+                    let diff = UnifiedDiff(patch)
+                    return (diff, DiffText.render(diff, fileExtension: fileExtension, style: style))
                 }.value
                 isEmpty = rendered == nil
+                diff = parsed
                 text = rendered?.attributedString
             } catch {
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+}
+
+extension DiffPage {
+    /// Comment in the text menu (when there's a review to add to).
+    private var commentAction: (@MainActor (NSRange) -> Void)? {
+        guard review != nil else { return nil }
+        return { comment(on: $0) }
+    }
+
+    /// Comment on the selected lines: the commit, the file, their numbers before and after,
+    /// and the selected change as a diff (see `ReviewDiffSelection`). The page's text has one
+    /// line per diff line, so the selection's lines are the diff's.
+    private func comment(on range: NSRange) {
+        guard let diff, let text, let review, range.length > 0, NSMaxRange(range) <= text.length else { return }
+        let lines = ReviewText.lines(of: range, in: text.string as NSString)
+        let picked = diff.selection((lines.start - 1)...(lines.end - 1))
+        let selection = ReviewDiffSelection(path: change.path, oldPath: change.oldPath, commit: commit.id,
+                                            summary: commit.summary, oldLines: picked.old, newLines: picked.new,
+                                            diff: picked.text)
+        let format = reviewFormat
+        let projectID = projectID
+        Task {
+            let repository = await ProjectStore.shared.project(id: projectID).map { project in
+                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref,
+                                 commit: CloneIndex.shared.record(forProject: projectID)?.commit)
+            }
+            review.add(selection, format: format, repository: repository)
         }
     }
 }
