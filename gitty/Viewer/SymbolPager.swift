@@ -48,6 +48,8 @@ struct SymbolPager: View {
     @Environment(SideBarState.self) private var sideBar: SideBarState?
     /// The identifier highlighted on every page (Highlight in the text menu).
     @Environment(HighlightState.self) private var highlights: HighlightState?
+    /// A review set aside stays docked at the bottom, above the caption.
+    @Environment(ReviewDraft.self) private var review: ReviewDraft?
     /// A page takes its text again when the code font changes.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
@@ -95,7 +97,8 @@ struct SymbolPager: View {
             let pageInsets = EdgeInsets(
                 top: 0,
                 leading: safeArea.leading,
-                bottom: safeArea.bottom + SymbolCaption.reservedHeight,
+                bottom: safeArea.bottom + SymbolCaption.reservedHeight
+                    + (review?.isDocked == true ? ReviewDock.reservedHeight : 0),
                 trailing: safeArea.trailing
             )
             ZStack(alignment: .bottom) {
@@ -150,15 +153,25 @@ struct SymbolPager: View {
                     }
                 }
 
-                if let current {
-                    SymbolCaption(symbol: current, onInfo: infoAction(for: current))
-                        .padding(.bottom, 8)
-                        .offset(y: isCaptionHidden ? SymbolCaption.reservedHeight + 40 : 0)
-                        .opacity(isCaptionHidden ? 0 : 1)
-                        .allowsHitTesting(!isCaptionHidden)
-                        .accessibilityHidden(isCaptionHidden)
-                        .animation(.smooth(duration: 0.25), value: isCaptionHidden)
+                VStack(spacing: 0) {
+                    // Stays while the caption hides, moving down into its place.
+                    if let review, review.isDocked {
+                        ReviewDock(draft: review)
+                            .padding(.bottom, 8)
+                            .offset(y: isCaptionHidden ? SymbolCaption.height + 8 : 0)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+                    if let current {
+                        SymbolCaption(symbol: current, onInfo: infoAction(for: current))
+                            .padding(.bottom, 8)
+                            .offset(y: isCaptionHidden ? SymbolCaption.reservedHeight + 40 : 0)
+                            .opacity(isCaptionHidden ? 0 : 1)
+                            .allowsHitTesting(!isCaptionHidden)
+                            .accessibilityHidden(isCaptionHidden)
+                    }
                 }
+                .animation(.smooth(duration: 0.25), value: isCaptionHidden)
+                .animation(.smooth(duration: 0.25), value: review?.isDocked)
             }
         }
         .toolbar(.hidden, for: .navigationBar)

@@ -317,7 +317,7 @@ struct BottomBarStack: View {
 
     var body: some View {
         let stack = VStack(spacing: 0) {
-            if !isCollapsed, let review, review.hasDraft, !review.isComposing {
+            if !isCollapsed, let review, review.isDocked {
                 ReviewDock(draft: review)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }

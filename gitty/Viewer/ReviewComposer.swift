@@ -74,11 +74,16 @@ final class ReviewDraft {
     }
 
     /// Brings a set-aside draft back.
-    func resume() {
+    /// - Parameter overSheet: from a screen presented over the app (a full-screen diff), which
+    ///   shows the composer itself (see `composesOverSheet`).
+    func resume(overSheet: Bool = false) {
         cursorRequest = UUID()
-        composesOverSheet = false
+        composesOverSheet = overSheet
         isComposing = true
     }
+
+    /// The draft is set aside: its dock shows.
+    var isDocked: Bool { hasDraft && !isComposing }
 
     /// After sharing, or Delete Review.
     func clear() {
@@ -130,12 +135,19 @@ struct ReviewComposer: View {
     }
 }
 
-/// The docked review above the bottom bar, like a minimized Mail draft. Tap to bring it back.
+/// The docked review above the bottom bar (or a full-screen card's caption), like a minimized
+/// Mail draft. Tap to bring it back.
 struct ReviewDock: View {
     let draft: ReviewDraft
+    /// On a screen over the app, which shows the composer itself.
+    var overSheet = false
+
+    /// Its height on screen, with the space above it.
+    static let height: CGFloat = 44
+    static let reservedHeight: CGFloat = height + 8
 
     var body: some View {
-        Button { draft.resume() } label: {
+        Button { draft.resume(overSheet: overSheet) } label: {
             HStack(spacing: 10) {
                 Image(systemName: "text.bubble")
                     .foregroundStyle(.tint)
@@ -152,13 +164,15 @@ struct ReviewDock: View {
                     .accessibilityHidden(true)
             }
             .padding(.horizontal, 16)
-            .frame(height: 44)
+            .frame(height: Self.height)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .modifier(DockBackground())
         .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
-        .padding(.bottom, 6)
+        // Space above it (inside the bar's material on iOS 18); below, the bar's own space
+        // above its field keeps the same gap.
+        .padding(.top, 8)
         .accessibilityHint("Opens the review")
     }
 }
