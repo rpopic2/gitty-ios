@@ -246,18 +246,19 @@ final class PageTextView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    /// On screen: the drags of the views around the page wait for the peek. A drag in from the
-    /// left edge is also how the card's zoom transition closes it (and how going back works),
-    /// and those gestures don't ask the peek's delegate: whichever began first won, so a peek
-    /// sometimes closed the card instead. The peek only takes touches near the left edge and
-    /// rightward drags, so everything else goes on as before.
+    /// On screen: the scroll views around the page (the pager's paging) wait for the peek, so a
+    /// drag in from the left edge doesn't page. Going back (the card's zoom transition, or the
+    /// stack's back swipe) runs alongside it, as on a results page: the card slides away with
+    /// its line numbers out (see the coordinator's delegate methods).
     override func didMoveToWindow() {
         super.didMoveToWindow()
         guard window != nil, let peek else { return }
         var view = superview
         while let current = view {
-            for other in current.gestureRecognizers ?? [] where other is UIPanGestureRecognizer && other !== peek {
-                other.require(toFail: peek)
+            if current is UIScrollView {
+                for other in current.gestureRecognizers ?? [] where other is UIPanGestureRecognizer && other !== peek {
+                    other.require(toFail: peek)
+                }
             }
             view = current.superview
         }
@@ -813,7 +814,11 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            gestureRecognizer === tokenTap || gestureRecognizer === highlightPress
+            if gestureRecognizer === peek {
+                // Going back, alongside: not the page's or the pager's scrolling.
+                return !(otherGestureRecognizer.view is UIScrollView)
+            }
+            return gestureRecognizer === tokenTap || gestureRecognizer === highlightPress
         }
 
         /// The peek only takes touches that start at the screen's left edge.
@@ -834,12 +839,13 @@ struct ReadOnlyTextView: UIViewRepresentable {
             return true
         }
 
-        /// The peek goes before the pages, the scrolling and going back (it only takes touches at
-        /// the left edge). Nothing waits for holding to highlight: it starts while the finger is
+        /// The peek goes before the pages and the scrolling (it only takes touches at the left
+        /// edge), and alongside going back. Nothing waits for holding to highlight: it starts while the finger is
         /// still down, and stops the text view's own hold itself (`handleHighlightPress`).
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            if gestureRecognizer === peek { return true }
+            // Scrolling (the page's, the pager's paging) waits for the peek; going back doesn't.
+            if gestureRecognizer === peek { return otherGestureRecognizer.view is UIScrollView }
             return false
         }
 
