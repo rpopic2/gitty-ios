@@ -279,9 +279,9 @@ actor ProjectStore {
         guard let project = project(id: id) else { throw ProjectError.unknownProject }
         if !refresh, let known = refsCache[id] { return known }
         let link = project.link
-        async let branches = names(at: "/repos/\(link.owner)/\(link.repo)/branches")
-        async let tags = names(at: "/repos/\(link.owner)/\(link.repo)/tags")
-        let refs = ProjectRefs(branches: try await branches, tags: try await tags)
+        let branches = try await names(at: "/repos/\(link.owner)/\(link.repo)/branches")
+        let tags = try await names(at: "/repos/\(link.owner)/\(link.repo)/tags")
+        let refs = ProjectRefs(branches: branches, tags: tags)
         refsCache[id] = refs
         return refs
     }

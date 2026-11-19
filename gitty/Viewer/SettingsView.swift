@@ -183,6 +183,8 @@ private struct LicensesView: View {
                 url: URL(string: "https://github.com/tree-sitter/tree-sitter-c-sharp")!),
         Package(name: "tree-sitter-swift", license: "MIT License",
                 url: URL(string: "https://github.com/alex-pinkus/tree-sitter-swift")!),
+        Package(name: "libgit2", license: "GPL v2 with Linking Exception",
+                url: URL(string: "https://github.com/libgit2/libgit2")!),
         Package(name: "JetBrains Mono", license: "SIL Open Font License 1.1",
                 url: URL(string: "https://github.com/JetBrains/JetBrainsMono")!),
     ]

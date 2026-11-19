@@ -216,12 +216,13 @@ actor CloneStore {
         let token = await GitHubAuth.shared.token()
         let folderName = CloneIndex.folderName(for: project.id)
         let folder = index.directory.appending(path: folderName, directoryHint: .isDirectory)
+        let depth = Self.initialDepth
 
         let commit = try await serially(project.id) {
             try? FileManager.default.removeItem(at: folder)  // a clone that didn't finish
             do {
                 let repository = try GitRepository.create(at: folder, remote: remote)
-                try repository.fetch(ref, depth: Self.initialDepth, token: token, progress: progress,
+                try repository.fetch(ref, depth: depth, token: token, progress: progress,
                                      isCancelled: { Task.isCancelled })
                 return try repository.checkout(ref)
             } catch {
@@ -250,9 +251,10 @@ actor CloneStore {
         guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
+        let depth = Self.initialDepth
         let commit = try await serially(projectID) {
             let repository = try GitRepository(at: folder)
-            try repository.fetch(ref, depth: Self.initialDepth, token: token, isCancelled: { Task.isCancelled })
+            try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
             return try repository.checkout(ref)
         }
         record.ref = ref

@@ -231,7 +231,7 @@ nonisolated final class GitRepository {
     /// or a shallow clone's oldest), with renames found.
     func changes(in commitID: String) throws -> [GitChange] {
         try withDiff(of: commitID, path: nil) { diff in
-            (0..<git_diff_num_deltas(diff)).compactMap { index in
+            (0..<git_diff_num_deltas(diff)).compactMap { index -> GitChange? in
                 guard let delta = git_diff_get_delta(diff, index)?.pointee else { return nil }
                 let newPath = String(cString: delta.new_file.path)
                 let oldPath = String(cString: delta.old_file.path)
