@@ -75,6 +75,20 @@ nonisolated struct GitChange: Identifiable, Hashable, Sendable {
     var id: String { path }
 }
 
+/// Who last changed a run of a file's lines, and when (`git blame`).
+nonisolated struct GitBlameHunk: Equatable, Sendable {
+    /// The run's first line in the file (1-based), and how many lines it has.
+    let startLine: Int
+    let lineCount: Int
+    let commitID: String
+    let author: String
+    let date: Date
+    /// Traced back to the oldest commit downloaded (a shallow clone's start): it may be older.
+    let isBoundary: Bool
+
+    var lines: ClosedRange<Int> { startLine...(startLine + max(lineCount, 1) - 1) }
+}
+
 /// A file's commits, newest first.
 nonisolated struct GitFileHistory: Sendable {
     let commits: [GitCommit]
@@ -289,6 +303,38 @@ nonisolated final class GitRepository {
             if !Git.same(entry, parentEntry) { commits.append(Self.commit(commit)) }
         }
         return GitFileHistory(commits: commits, canLoadMore: looked >= limit || reachedBoundary)
+    }
+
+    /// Who last changed each run of lines of `path` (relative to the repository), at HEAD.
+    func blame(of path: String) throws -> [GitBlameHunk] {
+        var options = git_blame_options()
+        try Git.check(git_blame_options_init(&options, UInt32(GIT_BLAME_OPTIONS_VERSION)))
+        var blame: OpaquePointer?
+        try Git.check(git_blame_file(&blame, pointer, path, &options))
+        defer { git_blame_free(blame) }
+        return (0..<git_blame_get_hunk_count(blame)).compactMap { index -> GitBlameHunk? in
+            guard let hunk = git_blame_get_hunk_byindex(blame, index)?.pointee else { return nil }
+            var id = hunk.final_commit_id
+            let signature = hunk.final_signature?.pointee
+            return GitBlameHunk(
+                startLine: Int(hunk.final_start_line_number),
+                lineCount: Int(hunk.lines_in_hunk),
+                commitID: Git.string(&id),
+                author: signature?.name.map { String(cString: $0) } ?? "",
+                date: Date(timeIntervalSince1970: TimeInterval(signature?.when.time ?? 0)),
+                isBoundary: hunk.boundary != 0
+            )
+        }
+    }
+
+    /// One commit, by its hash.
+    func commit(_ id: String) throws -> GitCommit {
+        var oid = git_oid()
+        try Git.check(git_oid_fromstr(&oid, id))
+        var commit: OpaquePointer?
+        try Git.check(git_commit_lookup(&commit, pointer, &oid))
+        defer { git_commit_free(commit) }
+        return Self.commit(commit)
     }
 
     /// The checked-out branch or tag's commits, newest first, up to `limit` (`git log`). The

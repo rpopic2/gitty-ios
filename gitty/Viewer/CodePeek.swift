@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The Code level's line-number peek: swipe in from the left edge and hold, and the whole list
 /// slides right with the line numbers beside the code, as on a page (`CodePieceLayout` draws
@@ -6,31 +7,119 @@ import SwiftUI
 /// show or hide their numbers when the peek starts and ends.
 @MainActor @Observable
 final class CodePeek {
-    /// How far the code has slid right (0 to `width`).
+    /// How far the code has slid right (0 to `fullWidth`).
     var offset: CGFloat = 0
     /// Peeking: the blocks draw with their numbers (each line numbered from its file).
     private(set) var isActive = false
+    /// Pulled past the numbers (`blameThreshold`): who last changed each line shows left of
+    /// them (`CodeBlameView`).
+    private(set) var isBlameShown = false
+    /// Let go with the blame showing: it stays until a tap on the code, or a swipe left.
+    private(set) var isLocked = false
     /// Room for the numbers.
     static let width: CGFloat = 56
+    /// Room for the blame, left of the numbers.
+    static let blameWidth: CGFloat = 132
+    static var fullWidth: CGFloat { width + blameWidth }
+    /// Pulled this far, the blame shows (with a tap of feedback).
+    static let blameThreshold: CGFloat = width + 40
 
     /// Touches starting this close to the screen's left edge can peek.
     static let edgeWidth: CGFloat = 28
 
-    func follow(_ translation: CGFloat) {
+    /// A drag's first move decides whether it slides the code (sideways) or scrolls.
+    private var isSliding: Bool?
+
+    /// Follows a drag: from the left edge, or anywhere while the blame stays open.
+    func follow(_ translation: CGSize) {
+        if isSliding == nil { isSliding = abs(translation.width) > abs(translation.height) }
+        guard isSliding == true else { return }
         isActive = true
-        offset = min(max(translation, 0), Self.width)
+        let start = isLocked ? Self.fullWidth : 0
+        offset = min(max(start + translation.width, 0), Self.fullWidth)
+        let shows = offset >= Self.blameThreshold
+        guard shows != isBlameShown else { return }
+        isBlameShown = shows
+        if shows { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
     }
 
-    /// Let go: the code slides back, and the numbers go once it's there (unless a new peek
-    /// has started meanwhile).
+    /// Let go: with the blame showing, it opens all the way and stays; otherwise the code slides
+    /// back, and the numbers go once it's there (unless a new peek has started meanwhile).
     func end() {
+        defer { isSliding = nil }
+        guard isSliding == true else { return }
+        if isBlameShown {
+            isLocked = true
+            withAnimation(.smooth(duration: 0.2)) { offset = Self.fullWidth }
+        } else {
+            close()
+        }
+    }
+
+    /// Back to the code alone.
+    func close() {
+        isLocked = false
         withAnimation(.smooth(duration: 0.2)) {
             offset = 0
         } completion: { [weak self] in
             guard let self, self.offset == 0 else { return }
             self.isActive = false
+            self.isBlameShown = false
         }
     }
+}
+
+/// Who last changed the lines of the files at the Code level, from the project's clone, loaded
+/// when the blame first shows for a file and kept.
+@MainActor @Observable
+final class BlameStore {
+    /// A file's blame, and the project (for the commits).
+    struct FileBlame: Equatable {
+        let projectID: String
+        let hunks: [GitBlameHunk]
+    }
+
+    enum State: Equatable {
+        case loading
+        case loaded(FileBlame)
+        /// In a project that isn't cloned (blame needs the clone).
+        case notCloned
+        /// Not in a project, or it failed.
+        case unavailable
+    }
+
+    private(set) var states: [URL: State] = [:]
+    /// Some file on screen is in a project that isn't cloned: the blame offers Clone.
+    private(set) var needsClone = false
+
+    func blame(for file: URL) -> FileBlame? {
+        if case .loaded(let blame) = states[file] { blame } else { nil }
+    }
+
+    func load(_ file: URL) async {
+        // Not cloned last time: it may be now.
+        if let state = states[file], state != .notCloned { return }
+        states[file] = .loading
+        let projects = await ProjectStore.shared.projects()
+        guard let location = ProjectFileLocation.locate(file, in: projects) else {
+            states[file] = .unavailable
+            return
+        }
+        let projectID = location.project.id
+        guard await CloneStore.shared.record(forProject: projectID) != nil else {
+            states[file] = .notCloned
+            needsClone = true
+            return
+        }
+        needsClone = false
+        do {
+            let hunks = try await CloneStore.shared.blame(projectID: projectID, path: location.path)
+            states[file] = .loaded(FileBlame(projectID: projectID, hunks: hunks))
+        } catch {
+            states[file] = .unavailable
+        }
+    }
+
 }
 
 /// Slides the Code level's list while peeking. Only this redraws as the finger moves.

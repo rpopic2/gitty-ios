@@ -55,6 +55,15 @@ struct CodeScreen: View {
     @State private var isShowingStack = false
     /// The card to go back to once that sheet has gone (a symbol tapped in it).
     @State private var stackJump: CardRoute?
+    /// A commit tapped in the blame (the peek's second stop): its files and diffs, in a sheet.
+    @State private var blameCommit: BlameCommit?
+
+    private struct BlameCommit: Identifiable {
+        let projectID: String
+        let commit: GitCommit
+        var id: String { commit.id }
+    }
+
     /// What's folded in that sheet: its own, not the Code level's.
     @State private var stackSheetFolds = CollapsedCodeStore.temporary()
     /// Brings a symbol into view in the Code list (the open file's entry, chosen in Project).
@@ -170,6 +179,18 @@ struct CodeScreen: View {
             }
         }) {
             stackSheet
+        }
+        .sheet(item: $blameCommit) { item in
+            NavigationStack {
+                CommitFilesView(projectID: item.projectID, commit: item.commit)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { blameCommit = nil }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .sheet(item: $historyFile) { file in
             // All the way up, for the history: it can be pulled down to half.
@@ -290,7 +311,8 @@ struct CodeScreen: View {
                 },
                 onDownloadFile: { model.download(file: $0) },
                 downloadingFiles: model.downloadingFiles,
-                onOpenURL: { onOpen($0) }
+                onOpenURL: { onOpen($0) },
+                onShowCommit: { showBlameCommit(projectID: $0, id: $1) }
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()
@@ -433,7 +455,8 @@ struct CodeScreen: View {
             onDownloadFile: { model.download(file: $0) },
             downloadingFiles: model.downloadingFiles,
             onOpenURL: { onOpen($0) },
-            collapsed: search.collapsed
+            collapsed: search.collapsed,
+            onShowCommit: { showBlameCommit(projectID: $0, id: $1) }
         )
         .equatable()
     }
@@ -500,6 +523,14 @@ struct CodeScreen: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    /// A commit tapped in the blame: looked up in the clone, then shown.
+    private func showBlameCommit(projectID: String, id: String) {
+        Task {
+            guard let commit = try? await CloneStore.shared.commit(projectID: projectID, id: id) else { return }
+            blameCommit = BlameCommit(projectID: projectID, commit: commit)
+        }
     }
 
     /// Back to a card of the stack: everything above it closes.

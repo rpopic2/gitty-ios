@@ -89,6 +89,22 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
         return (firstLine + start.line, top(of: start.row))
     }
 
+    /// Each line's rows: its line (counted from the block's first, as `firstLine` is), and where
+    /// its first row starts and its last ends. For the blame beside it.
+    func lineRows() -> [(line: Int, top: CGFloat, bottom: CGFloat)] {
+        func top(of row: Int) -> CGFloat {
+            var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+            CTLineGetTypographicBounds(lines[row], &ascent, &descent, &leading)
+            return height - origins[row].y - ascent
+        }
+        var rows: [(line: Int, top: CGFloat, bottom: CGFloat)] = []
+        for (index, start) in lineStarts.enumerated() where start.row < origins.count {
+            let next = index + 1 < lineStarts.count ? lineStarts[index + 1].row : lines.count
+            rows.append((firstLine + start.line, top(of: start.row), next < lines.count ? top(of: next) : height))
+        }
+        return rows
+    }
+
     /// Draws the code.
     func draw(in context: CGContext) {
         context.saveGState()
@@ -123,6 +139,8 @@ struct CodePieceView: UIViewRepresentable {
     /// The block's first line in its file, for the line peek.
     let firstFileLine: Int
     let isPeeking: Bool
+    /// Who last changed the file's lines, while the blame shows.
+    var blame: BlameStore.FileBlame? = nil
 
     func makeUIView(context: Context) -> CodePieceUIView {
         CodePieceUIView()
@@ -130,6 +148,7 @@ struct CodePieceView: UIViewRepresentable {
 
     func updateUIView(_ view: CodePieceUIView, context: Context) {
         view.update(layout: layout, firstFileLine: firstFileLine, isPeeking: isPeeking)
+        view.update(blame: blame)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: CodePieceUIView, context: Context) -> CGSize? {
@@ -141,6 +160,9 @@ final class CodePieceUIView: UIView {
     private var layout: CodePieceLayout?
     private var firstFileLine = 1
     private let numbers = CodeLineNumbersView()
+    private let blameView = CodeBlameView()
+    /// Who last changed the file's lines, while the blame shows (`nil` otherwise).
+    private(set) var blame: BlameStore.FileBlame?
 
     /// Room left of the code for the numbers: the peek's slide and the block's margin.
     static let gutterWidth = CodePeek.width + RawTextStyle.insets.left
@@ -154,9 +176,22 @@ final class CodePieceUIView: UIView {
         clipsToBounds = false  // the numbers sit left of the code
         numbers.isHidden = true
         addSubview(numbers)
+        blameView.isHidden = true
+        addSubview(blameView)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    /// Shows (or hides) the blame left of the numbers. After `update(layout:…)`.
+    func update(blame: BlameStore.FileBlame?) {
+        guard blame != self.blame || (blame != nil && blameView.layout !== layout) else { return }
+        self.blame = blame
+        blameView.layout = layout
+        blameView.firstFileLine = firstFileLine
+        blameView.hunks = blame?.hunks ?? []
+        blameView.isHidden = blame == nil
+        blameView.setNeedsDisplay()
+    }
 
     func update(layout: CodePieceLayout, firstFileLine: Int, isPeeking: Bool) {
         if layout !== self.layout || firstFileLine != self.firstFileLine {
@@ -174,11 +209,35 @@ final class CodePieceUIView: UIView {
         super.layoutSubviews()
         let width = Self.gutterWidth
         numbers.frame = CGRect(x: -width, y: 0, width: width, height: bounds.height)
+        blameView.frame = CGRect(x: -width - CodePeek.blameWidth, y: 0, width: CodePeek.blameWidth,
+                                 height: bounds.height)
     }
 
     override func draw(_ rect: CGRect) {
         guard let layout, let context = UIGraphicsGetCurrentContext() else { return }
         layout.draw(in: context)
+    }
+
+    /// The piece with blame across a height of the window (a tap in the blame, left of the
+    /// code): found when asked, so nothing keeps track of the pieces while scrolling.
+    static func piece(atWindowY y: CGFloat, in window: UIWindow) -> CodePieceUIView? {
+        var views: [UIView] = [window]
+        while let view = views.popLast() {
+            if let piece = view as? CodePieceUIView, piece.blame != nil {
+                let frame = piece.convert(piece.bounds, to: nil)
+                if frame.minY <= y, y < frame.maxY { return piece }
+            }
+            views.append(contentsOf: view.subviews.filter { !$0.isHidden && $0.alpha > 0 })
+        }
+        return nil
+    }
+
+    /// Who last changed the line at a height of the window, and the project.
+    func blameHunk(atWindowY y: CGFloat) -> (hunk: GitBlameHunk, projectID: String)? {
+        guard let blame, let found = layout?.line(atY: convert(CGPoint(x: 0, y: y), from: nil).y) else { return nil }
+        let line = firstFileLine + found.line
+        guard let hunk = blame.hunks.first(where: { $0.lines.contains(line) }) else { return nil }
+        return (hunk, blame.projectID)
     }
 }
 
@@ -187,6 +246,81 @@ final class CodePieceUIView: UIView {
 nonisolated struct PageAnchor: Equatable, Sendable {
     let line: Int
     let screenY: CGFloat
+}
+
+/// Who last changed a piece's lines, left of its numbers: for each run of lines from the same
+/// commit, the author and how long ago ("Kim · 3y") at its first line, and a bar beside the
+/// run, stronger the more recent the change.
+final class CodeBlameView: UIView {
+    var layout: CodePieceLayout?
+    var firstFileLine = 1
+    /// In line order.
+    var hunks: [GitBlameHunk] = []
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        contentMode = .redraw
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func draw(_ rect: CGRect) {
+        guard let layout, !hunks.isEmpty else { return }
+        let size = max(9, layout.key.style.size - 3)
+        let font = UIFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: UIColor.secondaryLabel, .paragraphStyle: style,
+        ]
+        let now = Date()
+        // Runs of rows from the same hunk: one label, one bar.
+        var runs: [(hunk: GitBlameHunk, top: CGFloat, bottom: CGFloat)] = []
+        for row in layout.lineRows() {
+            let line = firstFileLine + row.line
+            guard let hunk = hunks.first(where: { $0.lines.contains(line) }) else { continue }
+            if let last = runs.last, last.hunk == hunk {
+                runs[runs.count - 1].bottom = row.bottom
+            } else {
+                runs.append((hunk, row.top, row.bottom))
+            }
+        }
+        for run in runs {
+            let days = max(0, now.timeIntervalSince(run.hunk.date) / 86_400)
+            let strength = run.hunk.isBoundary ? 0.1 : max(0.1, 0.7 * exp(-days / 180))
+            let bar = CGRect(x: bounds.width - 7, y: run.top + 1, width: 3, height: max(2, run.bottom - run.top - 2))
+            tintColor.withAlphaComponent(strength).setFill()
+            UIBezierPath(roundedRect: bar, cornerRadius: 1.5).fill()
+            let label = Self.label(for: run.hunk, now: now) as NSString
+            label.draw(with: CGRect(x: 4, y: run.top, width: bounds.width - 16, height: font.lineHeight),
+                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attributes, context: nil)
+        }
+    }
+
+    /// "Kim · 3y": the author's first name and how long ago, or "older" for a change from
+    /// before the downloaded history.
+    static func label(for hunk: GitBlameHunk, now: Date) -> String {
+        let name = hunk.author.split(separator: " ").first.map(String.init) ?? hunk.author
+        guard !hunk.isBoundary else { return name + " · " + String(localized: "older") }
+        return name + " · " + age(since: hunk.date, now: now)
+    }
+
+    /// "now", "5m", "3h", "2d", "4w", "8mo", "3y".
+    static func age(since date: Date, now: Date) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        switch seconds {
+        case ..<60: return String(localized: "now")
+        case ..<3_600: return "\(Int(seconds / 60))m"
+        case ..<86_400: return "\(Int(seconds / 3_600))h"
+        case ..<(86_400 * 7): return "\(Int(seconds / 86_400))d"
+        case ..<(86_400 * 30): return "\(Int(seconds / (86_400 * 7)))w"
+        case ..<(86_400 * 365): return "\(Int(seconds / (86_400 * 30)))mo"
+        default: return "\(Int(seconds / (86_400 * 365)))y"
+        }
+    }
 }
 
 /// A piece's line numbers, drawn once per layout and shown only while peeking.

@@ -51,3 +51,26 @@ struct OccurrencesTests {
         #expect(found[1].lineInPage == 1)  // the function's second line
     }
 }
+
+struct BlameLabelTests {
+    private let now = Date(timeIntervalSince1970: 1_000_000_000)
+
+    private func hunk(_ author: String, ago seconds: TimeInterval, boundary: Bool = false) -> GitBlameHunk {
+        GitBlameHunk(startLine: 1, lineCount: 3, commitID: "abc", author: author,
+                     date: now.addingTimeInterval(-seconds), isBoundary: boundary)
+    }
+
+    @Test func authorsFirstNameAndHowLongAgo() {
+        #expect(CodeBlameView.label(for: hunk("Kim Lee", ago: 3 * 365 * 86_400 + 5), now: now) == "Kim · 3y")
+        #expect(CodeBlameView.label(for: hunk("ann", ago: 2 * 86_400), now: now) == "ann · 2d")
+        #expect(CodeBlameView.label(for: hunk("Bo", ago: 30), now: now) == "Bo · now")
+    }
+
+    @Test func beforeTheDownloadedHistoryIsOlder() {
+        #expect(CodeBlameView.label(for: hunk("Kim", ago: 60, boundary: true), now: now) == "Kim · older")
+    }
+
+    @Test func aHunksLines() {
+        #expect(hunk("Kim", ago: 0).lines == 1...3)
+    }
+}

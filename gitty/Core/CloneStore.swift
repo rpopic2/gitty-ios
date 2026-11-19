@@ -400,6 +400,20 @@ actor CloneStore {
         index.save(record)
     }
 
+    /// Who last changed each run of a file's lines (its path in the repository), at the
+    /// checked-out commit.
+    func blame(projectID: String, path: String) async throws -> [GitBlameHunk] {
+        guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        return try await serially(projectID) { try GitRepository(at: folder).blame(of: path) }
+    }
+
+    func commit(projectID: String, id: String) async throws -> GitCommit {
+        guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        return try await serially(projectID) { try GitRepository(at: folder).commit(id) }
+    }
+
     func changes(projectID: String, commit: String) async throws -> [GitChange] {
         guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
         let folder = index.folder(of: record)

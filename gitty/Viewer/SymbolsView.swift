@@ -59,6 +59,8 @@ struct SymbolsView: View, Equatable {
     let downloadingFiles: Set<URL>
     /// Open on a not-downloaded file's title: open the file (which downloads it).
     let onOpenURL: (@MainActor (URL) -> Void)?
+    /// A blame's commit was tapped (its project and hash): show it.
+    let onShowCommit: (@MainActor (String, String) -> Void)?
 
     /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
@@ -70,6 +72,8 @@ struct SymbolsView: View, Equatable {
     @State private var scroll = ScrollTracking()
     /// The line-number peek.
     @State private var peek = CodePeek()
+    /// Who last changed the lines, for the peek's second stop.
+    @State private var blames = BlameStore()
     /// The list follows the fingers while pinching, like Photos' grid (`PinchScale`).
     @State private var pinchZoom = PinchZoom()
     /// This pinch has already collapsed or expanded everything (once per pinch).
@@ -102,8 +106,10 @@ struct SymbolsView: View, Equatable {
          onDownloadFile: (@MainActor (URL) -> Void)? = nil,
          downloadingFiles: Set<URL> = [],
          onOpenURL: (@MainActor (URL) -> Void)? = nil,
-         collapsed: CollapsedCodeStore = .shared) {
+         collapsed: CollapsedCodeStore = .shared,
+         onShowCommit: (@MainActor (String, String) -> Void)? = nil) {
         self.collapsed = collapsed
+        self.onShowCommit = onShowCommit
         self.symbols = symbols
         self.query = query
         self.isActive = isActive
@@ -140,11 +146,16 @@ struct SymbolsView: View, Equatable {
             && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
             && lhs.albumContext == rhs.albumContext && (lhs.onShowHistory == nil) == (rhs.onShowHistory == nil)
             && lhs.downloadingFiles == rhs.downloadingFiles && lhs.collapsed === rhs.collapsed
+            && (lhs.onShowCommit == nil) == (rhs.onShowCommit == nil)
     }
 
     var body: some View {
         ScrollViewReader { reader in
             scrollContainer { fullCode }
+                .overlay(alignment: .leading) {
+                    BlameStrip(peek: peek, blames: blames, onTap: openBlameCommit(at:),
+                               onClone: cloneForBlame)
+                }
                 .modifier(PinchScale(zoom: pinchZoom))
                 .onAppear { moveToStart(reader) }
                 .simultaneousGesture(pinch(reader), including: isActive ? .all : .subviews)
@@ -319,7 +330,7 @@ struct SymbolsView: View, Equatable {
     }
 
     private func code(for symbol: CodeSymbol) -> some View {
-        SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, collapsed: collapsed, openFile: openFile,
+        SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, blames: blames, collapsed: collapsed, openFile: openFile,
                    scope: collapseScope, contextMenu: contextMenu(for: symbol), onTap: { onOpen(symbol) },
                    onTapAt: { anchor in
                        if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
@@ -366,12 +377,30 @@ struct SymbolsView: View, Equatable {
     private var peekGesture: some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .global)
             .onChanged { value in
-                guard value.startLocation.x <= CodePeek.edgeWidth else { return }
-                peek.follow(value.translation.width)
+                // From the left edge; or anywhere while the blame stays open (a swipe left closes it).
+                guard peek.isLocked || value.startLocation.x <= CodePeek.edgeWidth else { return }
+                peek.follow(value.translation)
             }
             .onEnded { value in
-                if value.startLocation.x <= CodePeek.edgeWidth { peek.end() }
+                if peek.isLocked || value.startLocation.x <= CodePeek.edgeWidth { peek.end() }
             }
+    }
+
+    /// Clone for Blame: the open file's info, where Clone is.
+    private var cloneForBlame: (@MainActor () -> Void)? {
+        guard let onShowHistory else { return nil }
+        let file = openFile
+        return { onShowHistory(file) }
+    }
+
+    /// A tap in the blame (left of the code, while it stays open): that line's commit.
+    private func openBlameCommit(at point: CGPoint) {
+        guard let onShowCommit,
+              let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first,
+              let found = CodePieceUIView.piece(atWindowY: point.y, in: window)?.blameHunk(atWindowY: point.y),
+              !found.hunk.commitID.allSatisfy({ $0 == "0" })  // not committed
+        else { return }
+        onShowCommit(found.projectID, found.hunk.commitID)
     }
 
     /// Pinching zooms out and in through four steps, one per pinch (when it passes the
@@ -1052,6 +1081,7 @@ private struct SymbolCode: View {
     let symbol: CodeSymbol
     let store: CodeBlockStore
     let peek: CodePeek
+    let blames: BlameStore
     let collapsed: CollapsedCodeStore
     let openFile: URL
     let scope: String
@@ -1062,12 +1092,13 @@ private struct SymbolCode: View {
     /// Read so a new theme makes it take its new block.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, collapsed: CollapsedCodeStore, openFile: URL,
-         scope: String, contextMenu: CodeMenu, onTap: @escaping @MainActor () -> Void,
+    init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, blames: BlameStore, collapsed: CollapsedCodeStore,
+         openFile: URL, scope: String, contextMenu: CodeMenu, onTap: @escaping @MainActor () -> Void,
          onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.symbol = symbol
         self.store = store
         self.peek = peek
+        self.blames = blames
         self.collapsed = collapsed
         self.openFile = openFile
         self.scope = scope
@@ -1081,7 +1112,8 @@ private struct SymbolCode: View {
             if symbol.kind != .file, !collapsed.isHidden(symbol, openFile: openFile, scope: scope),
                !collapsed.isCollapsed(symbol, openFile: openFile, scope: scope) {
                 let block = store.block(for: symbol)
-                SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, onTap: onTap, onTapAt: onTapAt)
+                SymbolCodeText(block: block, peek: peek, blames: blames, file: symbol.fileURL ?? openFile,
+                               layoutKey: store.layoutKey, onTap: onTap, onTapAt: onTapAt)
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
@@ -1154,6 +1186,9 @@ private struct CodeMenuPreview: View {
 private struct SymbolCodeText: View {
     let block: CodeBlock
     let peek: CodePeek
+    /// Its file's blame, while the peek shows it.
+    let blames: BlameStore
+    let file: URL
     let layoutKey: CodeLayoutKey?
     /// Around the code, or before it's laid out: opens the page at the top.
     let onTap: @MainActor () -> Void
@@ -1161,10 +1196,12 @@ private struct SymbolCodeText: View {
     let onTapAt: @MainActor (PageAnchor) -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(block: CodeBlock, peek: CodePeek, layoutKey: CodeLayoutKey?,
+    init(block: CodeBlock, peek: CodePeek, blames: BlameStore, file: URL, layoutKey: CodeLayoutKey?,
          onTap: @escaping @MainActor () -> Void, onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.block = block
         self.peek = peek
+        self.blames = blames
+        self.file = file
         self.layoutKey = layoutKey
         self.onTap = onTap
         self.onTapAt = onTapAt
@@ -1184,7 +1221,7 @@ private struct SymbolCodeText: View {
             .padding(.vertical, isEmpty ? 0 : 8)
             .background(Color(uiColor: RawTextStyle.backgroundColor))
             .contentShape(Rectangle())
-            .onTapGesture { onTap() }
+            .onTapGesture { tapped(onTap) }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(block.symbol.spokenDescription)
             .accessibilityHint(Text("Opens its page"))
@@ -1194,6 +1231,15 @@ private struct SymbolCodeText: View {
             .task(id: layoutKey) {
                 if let layoutKey { block.prepare(for: layoutKey, isVisible: true) }
             }
+            // The blame, the first time it shows for this file.
+            .task(id: peek.isBlameShown) {
+                if peek.isBlameShown { await blames.load(file) }
+            }
+    }
+
+    /// A tap while the blame stays open closes it (and opens nothing).
+    private func tapped(_ action: @MainActor () -> Void) {
+        if peek.isLocked { peek.close() } else { action() }
     }
 
     @ViewBuilder
@@ -1215,7 +1261,8 @@ private struct SymbolCodeText: View {
 
     /// While peeking, slid right with its line numbers.
     private func piece(_ layout: CodePieceLayout) -> some View {
-        CodePieceView(layout: layout, firstFileLine: block.firstLine, isPeeking: peek.isActive)
+        CodePieceView(layout: layout, firstFileLine: block.firstLine, isPeeking: peek.isActive,
+                      blame: peek.isBlameShown ? blames.blame(for: file) : nil)
             .contentShape(Rectangle())
             // Where in the piece (for the line) and where on screen (for where it goes on the page).
             .gesture(
@@ -1224,8 +1271,8 @@ private struct SymbolCodeText: View {
                     .onEnded { value in
                         guard let local = value.first?.location, let screen = value.second?.location,
                               let found = layout.line(atY: local.y)
-                        else { return onTap() }
-                        onTapAt(PageAnchor(line: found.line, screenY: screen.y - (local.y - found.top)))
+                        else { return tapped(onTap) }
+                        tapped { onTapAt(PageAnchor(line: found.line, screenY: screen.y - (local.y - found.top))) }
                     }
             )
     }
@@ -1276,5 +1323,39 @@ nonisolated struct SymbolScrollRequest: Equatable, Sendable {
 
     init(_ id: Int) {
         self.id = id
+    }
+}
+
+/// The blame's strip, left of the line numbers, while it shows: over the list (it doesn't slide
+/// with it). Open, a tap on a line's blame shows its commit; for a project that isn't cloned,
+/// it offers Clone. Observes the peek and the blame itself, so the list doesn't redraw.
+private struct BlameStrip: View {
+    let peek: CodePeek
+    let blames: BlameStore
+    let onTap: @MainActor (CGPoint) -> Void
+    /// Clone for Blame: the file's info, where Clone is.
+    let onClone: (@MainActor () -> Void)?
+
+    var body: some View {
+        if peek.isBlameShown {
+            ZStack {
+                if peek.isLocked {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture(coordinateSpace: .global) { onTap($0) }
+                }
+                if blames.needsClone, let onClone {
+                    Button(action: onClone) {
+                        Label("Clone for Blame", systemImage: "arrow.down.circle")
+                            .font(.footnote)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            .frame(width: CodePeek.blameWidth)
+            .frame(maxHeight: .infinity)
+            .transition(.opacity)
+        }
     }
 }
