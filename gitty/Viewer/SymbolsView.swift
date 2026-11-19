@@ -72,8 +72,6 @@ struct SymbolsView: View, Equatable {
     @State private var peek = CodePeek()
     /// The list follows the fingers while pinching, like Photos' grid (`PinchScale`).
     @State private var pinchZoom = PinchZoom()
-    /// Pinching out on code at the last level: its card follows the fingers.
-    @State private var cardPinch = CardPinch()
     /// This pinch has already collapsed or expanded everything (once per pinch).
     @State private var pinchHandled = false
     /// What's collapsed: the Code level's (shared, saved), or a results page's own.
@@ -383,21 +381,9 @@ struct SymbolsView: View, Equatable {
     private func pinch(_ reader: ScrollViewProxy) -> some Gesture {
         MagnifyGesture()
             .onChanged { value in
-                if cardPinch.isActive {
-                    cardPinch.update(value.magnification)
-                    return
-                }
                 guard !pinchHandled else { return }
-                let scope = collapseScope
-                // The last level (the code showing), pinching out on code: its card follows.
-                if value.magnification > 1.03, !collapsed.areAllCollapsed(scope: scope),
-                   !collapsed.areAllFilesFolded(scope: scope), beginCardPinch(at: value.startLocation) {
-                    pinchHandled = true
-                    pinchZoom.settle()
-                    cardPinch.update(value.magnification)
-                    return
-                }
                 pinchZoom.follow(value.magnification, anchor: value.startAnchor)
+                let scope = collapseScope
                 if value.magnification < 0.8 {
                     pinchHandled = true
                     pinchZoom.settle()
@@ -415,30 +401,28 @@ struct SymbolsView: View, Equatable {
                         withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(false, scope: scope) }
                     } else if collapsed.areAllFilesFolded(scope: scope) {
                         setAllFilesFolded(false, reader)
-                    } else {
+                    } else if collapsed.areAllCollapsed(scope: scope) || !openCard(at: value.startLocation) {
                         setAllCollapsed(false, reader)
                     }
                 }
             }
             .onEnded { _ in
                 pinchHandled = false
-                if cardPinch.isActive { cardPinch.end() }
                 pinchZoom.settle()  // let go before the next step: back as it was
             }
     }
 
-    /// Pinching out on code at the last level (the code showing): its card grows out of the code
-    /// under the fingers and follows them (`CardPinch`), and opens at those lines when you let
-    /// go far enough, as a photo from Photos' grid. `false` when the pinch isn't on code (a
-    /// title, say): then it expands everything, a step like the others.
-    private func beginCardPinch(at location: CGPoint) -> Bool {
+    /// Pinching out on code at the last level (the code showing): its full-screen card opens at
+    /// the lines under the fingers, as a photo opens from Photos' grid. The list has grown
+    /// toward the fingers (`PinchZoom`) and the card takes over from there. `false` when the
+    /// pinch isn't on code (a title, say).
+    private func openCard(at location: CGPoint) -> Bool {
         let point = CGPoint(x: scroll.globalOrigin.x + location.x, y: scroll.globalOrigin.y + location.y)
         guard let window = UIApplication.shared.connectedScenes
                 .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first,
-              let piece = CodePieceUIView.piece(at: point, in: window), piece.canOpen(at: point)
+              let piece = CodePieceUIView.piece(at: point, in: window)
         else { return false }
-        cardPinch.begin(from: piece, at: point, in: window) { _ = piece.open(at: point) }
-        return true
+        return piece.open(at: point)
     }
 
     // MARK: Scrolling
