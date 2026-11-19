@@ -49,10 +49,16 @@ nonisolated enum SymbolSearch {
     /// How many names are ranked between checks for a newer search and snapshots.
     static let chunkSize = 2_000
 
+    /// How long a search runs before it shows what it has found so far, and how often after
+    /// that. Each snapshot redraws the list on the main thread, so a search that finishes
+    /// within this shows its results once, complete.
+    static let snapshotInterval = Duration.milliseconds(100)
+
     /// The search, in the background: snapshots of the matches found so far, best first (equal
-    /// matches in list order), each one including all the earlier ones. The first comes after
-    /// the first few thousand names (even if empty, so the previous search's results go), then
-    /// one at most every 50 ms while new matches turn up, and the complete list last. Stop
+    /// matches in list order), each one including all the earlier ones. The complete list comes
+    /// last; before it, only on a search that takes a while: the first after
+    /// `snapshotInterval` (even if empty, so the previous search's results go), then one at most
+    /// every `snapshotInterval` while new matches turn up. Stop
     /// listening (cancel the task that's iterating) and the search stops too. An empty query
     /// gives every symbol, in one snapshot.
     static func stream(_ text: String, in index: Index) -> AsyncStream<[CodeSymbol]> {
@@ -69,7 +75,7 @@ nonisolated enum SymbolSearch {
                 var start = 0
                 var hasYielded = false
                 var hasNew = false
-                var lastYield = ContinuousClock.now
+                var lastYield = ContinuousClock.now  // the start, until the first snapshot
                 repeat {
                     guard !Task.isCancelled else {
                         continuation.finish()
@@ -81,7 +87,7 @@ nonisolated enum SymbolSearch {
                     hasNew = hasNew || found.count > before
                     start = end
                     let now = ContinuousClock.now
-                    if start < count, !hasYielded || (hasNew && now - lastYield >= .milliseconds(50)) {
+                    if start < count, now - lastYield >= snapshotInterval, !hasYielded || hasNew {
                         continuation.yield(snapshot(found))
                         hasYielded = true
                         hasNew = false
