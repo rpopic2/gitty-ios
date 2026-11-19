@@ -14,6 +14,9 @@ final class AlbumNaming {
     private(set) var items: [AlbumItem] = []
     /// Show the new album once it's made (made from the sidebar).
     private(set) var opensAlbum = false
+    /// The sheet that asks instead of the app (`AlbumNamingAlert.host`), while it's up: the
+    /// app's alert can't show over a sheet, and trying closed the sheet.
+    var host: String?
 
     var title: LocalizedStringKey { renamingID == nil ? "New Album" : "Rename Album" }
 
@@ -54,10 +57,18 @@ final class AlbumNaming {
 /// The alert `AlbumNaming` asks with.
 struct AlbumNamingAlert: ViewModifier {
     @Bindable var naming: AlbumNaming
+    /// Which alert this is: the app's (`nil`), or a sheet's (`AlbumNaming.host`). Only the one
+    /// that matches shows.
+    var host: String? = nil
     let onCreated: @MainActor (Album) -> Void
 
+    private var isPresented: Binding<Bool> {
+        Binding(get: { naming.isPresented && naming.host == host },
+                set: { naming.isPresented = $0 })
+    }
+
     func body(content: Content) -> some View {
-        content.alert(naming.title, isPresented: $naming.isPresented) {
+        content.alert(naming.title, isPresented: isPresented) {
             TextField("Title", text: $naming.name)
             Button("Cancel", role: .cancel) {}
             Button("Save") {

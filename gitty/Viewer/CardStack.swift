@@ -379,10 +379,14 @@ struct StackSheet<List: View>: View {
                     }
                 }
         }
-        // New Album… asks for the name over this sheet (the app's alert can't show while the
-        // sheet is up).
+        // New Album… asks for the name over this sheet, not the app: its alert can't show while
+        // the sheet is up, and trying closed the sheet.
         .modifier(OptionalAlbumNamingAlert(naming: naming))
+        .onAppear { naming?.host = Self.namingHost }
+        .onDisappear { if naming?.host == Self.namingHost { naming?.host = nil } }
     }
+
+    static var namingHost: String { "stackSheet" }
 }
 
 private struct OptionalAlbumNamingAlert: ViewModifier {
@@ -390,7 +394,7 @@ private struct OptionalAlbumNamingAlert: ViewModifier {
 
     func body(content: Content) -> some View {
         if let naming {
-            content.modifier(AlbumNamingAlert(naming: naming, onCreated: { _ in }))
+            content.modifier(AlbumNamingAlert(naming: naming, host: "stackSheet", onCreated: { _ in }))
         } else {
             content
         }
