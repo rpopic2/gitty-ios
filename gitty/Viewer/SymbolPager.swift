@@ -432,6 +432,16 @@ struct ReadOnlyTextView: UIViewRepresentable {
         doubleTap.delegate = context.coordinator
         textView.addGestureRecognizer(doubleTap)
         context.coordinator.doubleTap = doubleTap
+        // Long press selects a code token (`view` of `self.view`) rather than a word: this only
+        // notes where the finger is, alongside the text view's own long press.
+        let tokenPress = UILongPressGestureRecognizer(target: context.coordinator,
+                                                      action: #selector(Coordinator.handleTokenPress(_:)))
+        tokenPress.minimumPressDuration = 0.2  // before the text view's selects
+        tokenPress.cancelsTouchesInView = false
+        tokenPress.delaysTouchesEnded = false
+        tokenPress.delegate = context.coordinator
+        textView.addGestureRecognizer(tokenPress)
+        context.coordinator.tokenPress = tokenPress
         return page
     }
 
@@ -651,6 +661,15 @@ struct ReadOnlyTextView: UIViewRepresentable {
         /// The identifier under a point of the text view, and the character there: only right on
         /// a character, not in the space after a line's end.
         private func identifierAt(_ point: CGPoint, in textView: UITextView) -> (IdentifierHighlight, Int)? {
+            guard let index = characterIndex(at: point, in: textView) else { return nil }
+            let storage = textView.textStorage
+            let map = identifiers ?? IdentifierMap(text: storage.string, fileExtension: fileExtension)
+            identifiers = map
+            return map.identifier(containing: NSRange(location: index, length: 1)).map { ($0, index) }
+        }
+
+        /// The character right under a point of the text view (not the space after a line's end).
+        private func characterIndex(at point: CGPoint, in textView: UITextView) -> Int? {
             let storage = textView.textStorage
             guard storage.length > 0 else { return nil }
             let layoutManager = textView.layoutManager
@@ -661,10 +680,56 @@ struct ReadOnlyTextView: UIViewRepresentable {
             let bounds = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
             guard bounds.insetBy(dx: -3, dy: -2).contains(location) else { return nil }
             let index = layoutManager.characterIndexForGlyph(at: glyph)
-            guard index < storage.length else { return nil }
-            let map = identifiers ?? IdentifierMap(text: storage.string, fileExtension: fileExtension)
-            identifiers = map
-            return map.identifier(containing: NSRange(location: index, length: 1)).map { ($0, index) }
+            return index < storage.length ? index : nil
+        }
+
+        // MARK: Long press selects a token
+
+        weak var tokenPress: UILongPressGestureRecognizer?
+        /// The character under the long-pressing finger, kept a moment after it lifts (the text
+        /// view can settle its selection then).
+        private var pressIndex: Int?
+        private var pressCount = 0
+        private var isSnapping = false
+
+        @objc func handleTokenPress(_ gesture: UILongPressGestureRecognizer) {
+            guard let textView = gesture.view as? UITextView else { return }
+            switch gesture.state {
+            case .began, .changed:
+                pressCount += 1
+                pressIndex = characterIndex(at: gesture.location(in: textView), in: textView)
+                snapSelection(in: textView)  // in case the word was selected first
+            default:
+                let count = pressCount
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(400))
+                    guard let self, self.pressCount == count else { return }
+                    self.pressIndex = nil
+                }
+            }
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            snapSelection(in: textView)
+        }
+
+        /// The word the long press selected becomes the token under the finger. Selections made
+        /// otherwise (handles, Select All, a double tap) stay as they are.
+        private func snapSelection(in textView: UITextView) {
+            guard !isSnapping, let index = pressIndex else { return }
+            let selected = textView.selectedRange
+            guard selected.length > 0, NSLocationInRange(index, selected),
+                  let token = CodeToken.range(at: index, in: textView.textStorage.string as NSString),
+                  token != selected
+            else { return }
+            isSnapping = true
+            textView.selectedRange = token
+            isSnapping = false
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            gestureRecognizer === tokenPress
         }
 
         /// The peek only takes touches that start at the screen's left edge.
