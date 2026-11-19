@@ -65,8 +65,11 @@ struct SymbolsView: View, Equatable {
     @State private var codeBlocks = CodeBlockStore()
     /// Where the other layout should open: the symbol that was in the middle, or a tapped row.
     @State private var switchAnchor: Int?
-    /// Where the Code level grows from (a row tapped at the Files level); `nil`: it fades in.
-    @State private var expandAnchor: UnitPoint?
+    /// A row tapped at the Files level, moving up to the top while its code unfolds under it
+    /// (see `showCode`); `nil` otherwise.
+    @State private var expansion: Expansion?
+    /// The Code level unfolds from the top (after a row was tapped) instead of fading in.
+    @State private var unfoldsCode = false
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
     /// The Code level's line-number peek.
@@ -133,10 +136,12 @@ struct SymbolsView: View, Equatable {
                 case .code:
                     scrollContainer { fullCode }
                         .onAppear { moveToStart(reader) }
-                        // From a row tapped at the Files level: the code grows out of it.
+                        // After a row tapped at the Files level: it slides down from the top, like
+                        // a disclosure opening, under the row that moved up there.
                         .transition(.asymmetric(
-                            insertion: expandAnchor.map { .scale(scale: 0.1, anchor: $0).combined(with: .opacity) }
-                                ?? .opacity,
+                            insertion: unfoldsCode
+                                ? .modifier(active: Unfold(progress: 0), identity: Unfold(progress: 1))
+                                : .opacity,
                             removal: .opacity))
                 }
             }
@@ -145,10 +150,17 @@ struct SymbolsView: View, Equatable {
                 reader.scrollTo(scrollTarget(for: request.id), anchor: anchor)
             }
         }
+        .overlay(alignment: .top) {
+            if let expansion {
+                ExpandingRow(symbol: expansion.symbol, fileExtension: expansion.fileExtension)
+                    .offset(y: expansion.y)
+                    .allowsHitTesting(false)
+            }
+        }
         .onChange(of: mode) { _, mode in
             // Another level (the selector): it opens at the symbol in the middle.
             guard mode.showsSymbols, mode != zoom else { return }
-            expandAnchor = nil
+            unfoldsCode = false
             switchAnchor = scroll.centeredID
             scroll.isPositioned = false  // until the new level has moved to the anchor
             withAnimation(.smooth(duration: 0.3)) { zoom = mode }
@@ -283,18 +295,35 @@ struct SymbolsView: View, Equatable {
             }
     }
 
-    /// A row tapped at the Files level: its code, at that symbol, growing out of the row
-    /// (`point`, where it was tapped on screen).
+    /// A row tapped at the Files level (`point`: where, on screen): its code, at that symbol.
+    /// The tapped declaration moves up to the top of the screen, where the symbol's title will
+    /// be, and the code slides down from under it, as if a disclosure opened.
     private func showCode(_ symbol: CodeSymbol, from point: CGPoint) {
         switchAnchor = symbol.id
         scroll.isPositioned = false
         let frame = scroll.frame
-        expandAnchor = point != .zero && frame.width > 0 && frame.height > 0
-            ? UnitPoint(x: (point.x - frame.minX) / frame.width, y: (point.y - frame.minY) / frame.height)
-            : .center
-        withAnimation(.smooth(duration: 0.35)) {
-            zoom = .code
-            mode = .code
+        guard point != .zero, frame.height > 0 else {  // VoiceOver: no row on screen to move
+            unfoldsCode = false
+            withAnimation(.smooth(duration: 0.3)) {
+                zoom = .code
+                mode = .code
+            }
+            return
+        }
+        // The row, centered on the tap, where it is now.
+        let rowHeight = codeTextStyle.uiFont.lineHeight + 8
+        expansion = Expansion(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension,
+                              y: point.y - frame.minY - rowHeight / 2)
+        unfoldsCode = true
+        // Next update, so the row is on screen where it starts before it moves.
+        Task { @MainActor in
+            withAnimation(.smooth(duration: 0.4)) {
+                expansion?.y = 0
+                zoom = .code
+                mode = .code
+            } completion: {
+                withAnimation(.easeOut(duration: 0.15)) { expansion = nil }
+            }
         }
     }
 
@@ -361,6 +390,58 @@ struct SymbolsView: View, Equatable {
         .onChange(of: barTapCount) {
             scroll.tracker.holdOpen()
         }
+    }
+}
+
+/// A Files-level row moving up to the top as its code opens (see `SymbolsView.showCode`).
+private struct Expansion {
+    let symbol: CodeSymbol
+    let fileExtension: String
+    /// From the top of the list.
+    var y: CGFloat
+}
+
+/// The tapped row while it moves: its declaration, as at the Files level, on the bar like the
+/// Code level's titles.
+private struct ExpandingRow: View {
+    let symbol: CodeSymbol
+    let fileExtension: String
+    @Environment(\.codeTextStyle) private var codeTextStyle
+
+    var body: some View {
+        (Text(Image(systemName: symbol.kind.systemImage)).foregroundStyle(.tint)
+            + Text(verbatim: " ")
+            + Text(SyntaxColoring.shared.attributed(FileDeclarations.declaration(of: symbol),
+                                                    fileExtension: fileExtension, theme: codeTextStyle.theme)))
+            .font(codeTextStyle.swiftUIFont)
+            .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+            .background(.bar)
+            .transition(.opacity)
+    }
+}
+
+/// The Code level opening like a disclosure: it slides down from the top, uncovered from the
+/// top down.
+private struct Unfold: ViewModifier, Animatable {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: (progress - 1) * 80)
+            .mask(alignment: .top) {
+                GeometryReader { proxy in
+                    Rectangle().frame(height: max(0, proxy.size.height * progress))
+                }
+            }
     }
 }
 
