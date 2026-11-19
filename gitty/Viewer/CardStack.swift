@@ -129,6 +129,7 @@ struct StackResultsView<Results: View>: View {
     @Bindable var search: StackSearch
     /// Its place in the stack, shown before the search from 2 up.
     let stackDepth: Int
+    let stackActions: StackActions?
     /// The results shown: the ones not folded away on the page (pinch in to fold files), so
     /// the count is what's there.
     let shownCount: @MainActor ([CodeSymbol]) -> Int
@@ -140,11 +141,13 @@ struct StackResultsView<Results: View>: View {
     @State private var isBarHidden = false
     @Environment(\.dismiss) private var dismiss
 
-    init(search: StackSearch, stackDepth: Int, shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
+    init(search: StackSearch, stackDepth: Int, stackActions: StackActions?,
+         shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
          @ViewBuilder list: @escaping (_ symbols: [CodeSymbol], _ query: String,
                                        _ onScrollDown: @escaping @MainActor (Bool) -> Void) -> Results) {
         self.search = search
         self.stackDepth = stackDepth
+        self.stackActions = stackActions
         self.shownCount = shownCount
         self.list = list
         _isEditing = State(initialValue: search.startsEditing)
@@ -199,7 +202,7 @@ struct StackResultsView<Results: View>: View {
     private var capsule: some View {
         let label = HStack(spacing: 6) {
             if stackDepth > 1 {
-                StackDepthLabel(depth: stackDepth)
+                StackDepthLabel(depth: stackDepth, actions: stackActions)
             }
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.tint)
@@ -239,22 +242,82 @@ struct StackResultsView<Results: View>: View {
     }
 }
 
-/// A page's place in the stack, before what its caption names: "▣ 3 |". Swipe down to go
-/// back one.
+/// The symbol on screen in each card of the stack (paging changes it), for the stack's list and
+/// its album. Only the stack icons read it, so a page turn redraws just them.
+@MainActor @Observable
+final class CardPlaces {
+    var current: [UUID: Int] = [:]
+}
+
+/// What a page's stack icon does: tap it for the stack's symbols, touch and hold it to add them
+/// to an album.
+struct StackActions {
+    let show: @MainActor () -> Void
+    /// The stack's symbols, as album items (read when the menu shows).
+    let albumItems: @MainActor () -> [AlbumItem]
+    let albumContext: AlbumMenuContext?
+}
+
+/// A page's place in the stack, before what its caption names: "▣ 3 |". Tap it for the
+/// stack's symbols; touch and hold it to add them to an album. Swipe down to go back one.
 struct StackDepthLabel: View {
     let depth: Int
+    let actions: StackActions?
 
     var body: some View {
         HStack(spacing: 6) {
-            HStack(spacing: 2) {
-                Image(systemName: "square.stack")
-                Text(depth, format: .number)
-                    .monospacedDigit()
+            if let actions {
+                if let context = actions.albumContext {
+                    Menu {
+                        AlbumMenuItems(items: actions.albumItems(), context: context)
+                    } label: {
+                        count
+                    } primaryAction: {
+                        actions.show()
+                    }
+                    .menuIndicator(.hidden)
+                    .accessibilityHint(Text("Shows the stack’s symbols. Touch and hold to add them to an album."))
+                } else {
+                    Button(action: actions.show) { count }
+                        .buttonStyle(.plain)
+                        .accessibilityHint(Text("Shows the stack’s symbols"))
+                }
+            } else {
+                count
             }
-            .foregroundStyle(.secondary)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text("Page \(depth) in the stack"))
             Divider().frame(height: 14)
+        }
+    }
+
+    private var count: some View {
+        HStack(spacing: 2) {
+            Image(systemName: "square.stack")
+            Text(depth, format: .number)
+                .monospacedDigit()
+        }
+        .foregroundStyle(.secondary)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Page \(depth) in the stack"))
+    }
+}
+
+/// The stack's symbols (each card's, as it is now, the bottom card's first), in a sheet: the
+/// same code blocks as the Code level. Tap one to go back to its card.
+struct StackSheet<List: View>: View {
+    @ViewBuilder let list: () -> List
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            list()
+                .navigationTitle("Stack")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
         }
     }
 }

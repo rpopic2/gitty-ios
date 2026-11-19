@@ -41,8 +41,14 @@ struct CodeScreen: View {
     @State private var stackedResults: [UUID: StackedResults] = [:]
     /// The search of the latest results page shown: the only one that keeps its results.
     @State private var stackSearch: StackSearch?
-    /// The symbol on screen in the card opened from the list.
-    @State private var pagerSymbolID: Int?
+    /// The symbol on screen in each card.
+    @State private var cardPlaces = CardPlaces()
+    /// The stack's symbols, in a sheet (tap a page's stack icon).
+    @State private var isShowingStack = false
+    /// The card to go back to once that sheet has gone (a symbol tapped in it).
+    @State private var stackJump: CardRoute?
+    /// What's folded in that sheet: its own, not the Code level's.
+    @State private var stackSheetFolds = CollapsedCodeStore.temporary()
     /// Brings a symbol into view in the Code list (the pager closing on another symbol).
     @State private var listScrollRequest: SymbolScrollRequest?
     /// Collapse All or Expand All, from the bar's menu.
@@ -130,10 +136,18 @@ struct CodeScreen: View {
         .navigationDestination(for: CardRoute.self) { route in
             switch route {
             case .card(let id):
-                if let card = stackedCards[id] { cardView(card, route: route) }
+                if let card = stackedCards[id] { cardView(card, id: id, route: route) }
             case .results(let id):
                 if let entry = stackedResults[id] { resultsPage(id: id, entry: entry, route: route) }
             }
+        }
+        .sheet(isPresented: $isShowingStack, onDismiss: {
+            if let jump = stackJump {
+                stackJump = nil
+                goBack(to: jump)
+            }
+        }) {
+            stackSheet
         }
         .sheet(item: $historyFile) { file in
             // All the way up, for the history: it can be pulled down to half.
@@ -280,17 +294,18 @@ struct CodeScreen: View {
                                         isBase: true, depth: 1)]
         stackedResults = [:]
         stackSearch = nil
-        pagerSymbolID = symbol.id
+        cardPlaces.current = [:]
         cardPath = [.card(id)]
     }
 
     /// A card in the stack: the one opened from the list, or one opened from search results.
-    private func cardView(_ card: StackedCard, route: CardRoute) -> some View {
-        SymbolPager(
+    private func cardView(_ card: StackedCard, id: UUID, route: CardRoute) -> some View {
+        let places = cardPlaces
+        return SymbolPager(
             symbols: card.symbols,
             initialID: card.initialID,
             initialAnchor: card.anchor,
-            currentID: card.isBase ? $pagerSymbolID : .constant(nil),
+            currentID: Binding(get: { places.current[id] }, set: { places.current[id] = $0 }),
             text: model.text(of:),
             // Once you page, the list (hidden behind) follows, so going back lands on the
             // symbol you were reading.
@@ -309,7 +324,8 @@ struct CodeScreen: View {
             },
             firstLine: { model.firstLine(of: $0) },
             albumMenu: albumMenuAction,
-            stackDepth: card.depth
+            stackDepth: card.depth,
+            stackActions: stackActions
         )
         // A results page stacked on it zooms out of it.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
@@ -353,6 +369,7 @@ struct CodeScreen: View {
         let openFile = model.url
         let scope = model.collapseScope
         return StackResultsView(search: search, stackDepth: stackedResults[search.id]?.depth ?? 1,
+                                stackActions: stackActions,
                                 shownCount: { results in
                                     results.filter { !search.collapsed.isHidden($0, openFile: openFile, scope: scope) }.count
                                 }) { symbols, query, onScrollDown in
@@ -394,6 +411,76 @@ struct CodeScreen: View {
         stackedResults = [search.id: StackedResults(query: "", source: Self.screenSourceID, depth: 1)]
         stackSearch = search
         cardPath = [.results(search.id)]
+    }
+
+    // MARK: The stack's symbols
+
+    /// Each card's symbol as it is now, bottom card first, with the card to go back to (the
+    /// topmost one showing it, when two cards show the same symbol).
+    private func stackedSymbols() -> [(symbol: CodeSymbol, card: CardRoute)] {
+        var result: [(symbol: CodeSymbol, card: CardRoute)] = []
+        var places: [Int: Int] = [:]
+        for route in cardPath {
+            guard case .card(let id) = route, let card = stackedCards[id] else { continue }
+            let current = cardPlaces.current[id] ?? card.initialID
+            guard let symbol = card.symbols.first(where: { $0.id == current }) else { continue }
+            if let place = places[symbol.id] {
+                result[place].card = route
+            } else {
+                places[symbol.id] = result.count
+                result.append((symbol, route))
+            }
+        }
+        return result
+    }
+
+    /// A page's stack icon: tap for the stack's symbols, touch and hold to add them to an album.
+    private var stackActions: StackActions {
+        let openFile = model.url
+        return StackActions(
+            show: { isShowingStack = true },
+            albumItems: { stackedSymbols().map { AlbumItem($0.symbol, openFile: openFile) } },
+            albumContext: albumContext
+        )
+    }
+
+    /// The stack's symbols, as code blocks: tap one to go back to its card.
+    private var stackSheet: some View {
+        let entries = stackedSymbols()
+        let cards = Dictionary(entries.map { ($0.symbol.id, $0.card) }, uniquingKeysWith: { $1 })
+        let jump: @MainActor (CodeSymbol) -> Void = { symbol in
+            stackJump = cards[symbol.id]
+            isShowingStack = false
+        }
+        return StackSheet {
+            SymbolsView(
+                symbols: entries.map(\.symbol),
+                query: "",
+                isActive: true,
+                ownText: ownText,
+                scrollRequest: nil,
+                collapseRequest: nil,
+                onCenteredSymbolChange: { _ in },
+                isBarCollapsed: { false },
+                barTapCount: 0,
+                openFile: model.url,
+                collapseScope: model.collapseScope,
+                rootFolderName: model.symbolsProjectTitle ?? model.fileName,
+                onOpen: jump,
+                onOpenAt: { symbol, _ in jump(symbol) },
+                onBarCollapsedChange: { _ in },
+                downloadingFiles: model.downloadingFiles,
+                collapsed: stackSheetFolds
+            )
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    /// Back to a card of the stack: everything above it closes.
+    private func goBack(to card: CardRoute) {
+        guard let index = cardPath.firstIndex(of: card), index < cardPath.count - 1 else { return }
+        cardPath = Array(cardPath.prefix(through: index))
     }
 
     /// Search on a card: its results go on top of it. Older results pages stay where they are,

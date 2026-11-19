@@ -38,6 +38,8 @@ struct SymbolPager: View {
     /// Where this pager is in the stack (1 at the bottom, results pages counting too): the
     /// caption shows it once there's anything under this one.
     let stackDepth: Int
+    /// The stack icon's: the stack's symbols, and adding them to an album.
+    let stackActions: StackActions?
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
@@ -67,7 +69,7 @@ struct SymbolPager: View {
          onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void,
          firstLine: @escaping @MainActor (CodeSymbol) -> Int,
          albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)? = nil,
-         stackDepth: Int = 1) {
+         stackDepth: Int = 1, stackActions: StackActions? = nil) {
         self.symbols = symbols
         self.initialID = initialID
         self.initialAnchor = initialAnchor
@@ -83,6 +85,7 @@ struct SymbolPager: View {
         self.firstLine = firstLine
         self.albumMenu = albumMenu
         self.stackDepth = stackDepth
+        self.stackActions = stackActions
     }
 
     private var visibleID: Int { scrolledID ?? initialID }
@@ -160,7 +163,8 @@ struct SymbolPager: View {
                 VStack(spacing: 0) {
                     if let current {
                         SymbolCaption(symbol: current, fileName: (current.fileURL ?? openFile).displayFileName,
-                                      stackDepth: stackDepth, onInfo: infoAction(for: current))
+                                      stackDepth: stackDepth, stackActions: stackActions,
+                                      onInfo: infoAction(for: current))
                             .padding(.bottom, 8)
                     }
                     if let review, review.isDocked {
@@ -317,16 +321,19 @@ private struct SymbolCaption: View {
     let fileName: String
     /// The card's place in the stack (`StackDepthLabel`): shown before the symbol from 2 up.
     let stackDepth: Int
+    let stackActions: StackActions?
     let onInfo: @MainActor () -> Void
 
     static let height: CGFloat = 36
     /// Space kept free under the text so its end isn't hidden behind the caption.
     static let reservedHeight: CGFloat = height + 16
 
-    init(symbol: CodeSymbol, fileName: String, stackDepth: Int, onInfo: @escaping @MainActor () -> Void) {
+    init(symbol: CodeSymbol, fileName: String, stackDepth: Int, stackActions: StackActions?,
+         onInfo: @escaping @MainActor () -> Void) {
         self.symbol = symbol
         self.fileName = fileName
         self.stackDepth = stackDepth
+        self.stackActions = stackActions
         self.onInfo = onInfo
     }
 
@@ -342,7 +349,7 @@ private struct SymbolCaption: View {
     private var capsule: some View {
         let label = HStack(spacing: 6) {
             if stackDepth > 1 {
-                StackDepthLabel(depth: stackDepth)
+                StackDepthLabel(depth: stackDepth, actions: stackActions)
             }
             Image(systemName: symbol.kind.systemImage)
                 .foregroundStyle(.tint)
