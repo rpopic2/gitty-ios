@@ -822,8 +822,8 @@ private struct SymbolCode: View {
     }
 }
 
-/// The long-press menu of a symbol's title and code: a small preview, then Open (its page),
-/// Add to Album, Show History, and on a file's title, Collapse All and Expand All in it.
+/// The long-press menu of a symbol's title and code: a small preview, then Show History, Open
+/// (its page), Add to Album, and on a file's title, Collapse All and Expand All in it.
 private struct CodeMenu: ViewModifier {
     let symbol: CodeSymbol
     let openFile: URL
@@ -835,12 +835,12 @@ private struct CodeMenu: ViewModifier {
     func body(content: Content) -> some View {
         let file = symbol.fileURL ?? openFile
         content.contextMenu {
+            if albumContext != nil, let onShowHistory {
+                Button("Show History", systemImage: "clock.arrow.circlepath") { onShowHistory(file) }
+            }
             Button("Open", systemImage: "arrow.up.left.and.arrow.down.right") { onOpen(symbol) }
             if let albumContext {
                 AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
-                if let onShowHistory {
-                    Button("Show History", systemImage: "clock.arrow.circlepath") { onShowHistory(file) }
-                }
             }
             if symbol.kind == .file {
                 Section {
