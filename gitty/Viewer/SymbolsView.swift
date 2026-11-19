@@ -294,7 +294,8 @@ struct SymbolsView: View, Equatable {
     }
 
     private func header(for symbol: CodeSymbol) -> some View {
-        CodeHeader(symbol: symbol, collapsed: collapsed, blocks: codeBlocks, openFile: openFile, scope: collapseScope,
+        CodeHeader(symbol: symbol, collapsed: collapsed, blocks: codeBlocks, peek: peek, openFile: openFile,
+                   scope: collapseScope,
                    symbolCount: symbol.kind == .file ? fileCounts.count(of: symbol, in: symbols) : 0,
                    isDownloading: symbol.fileURL.map(downloadingFiles.contains) ?? false,
                    onDownload: onDownloadFile,
@@ -443,6 +444,8 @@ private struct CodeHeader: View {
     let collapsed: CollapsedCodeStore
     /// For whether there's any code under the title.
     let blocks: CodeBlockStore
+    /// While peeking, the title's line number shows beside it, like the code's.
+    let peek: CodePeek
     let openFile: URL
     let scope: String
     /// A file's: how many symbols it has.
@@ -469,6 +472,7 @@ private struct CodeHeader: View {
                     } else {
                         SymbolTitle(symbol: symbol, isCollapsed: isCollapsed, canCollapse: canCollapse(isCollapsed),
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension)
+                            .overlay(alignment: .leading) { PeekLineNumber(peek: peek, line: symbol.line) }
                     }
                 }
                 .buttonStyle(.plain)
@@ -664,6 +668,29 @@ private final class FileSymbolCounts {
             }
         }
         return counts[entry.id] ?? 0
+    }
+}
+
+/// A title's line number while peeking: in the strip the slide uncovers, left of the title, its
+/// right edge where the code's numbers end. Observes the peek itself, so only it redraws when a
+/// peek starts and ends.
+private struct PeekLineNumber: View {
+    let peek: CodePeek
+    let line: Int
+    @Environment(\.codeTextStyle) private var codeTextStyle
+
+    var body: some View {
+        if peek.isActive {
+            let width = CodePieceUIView.gutterWidth
+            Text(verbatim: String(line))
+                .font(Font(UIFont.monospacedDigitSystemFont(ofSize: max(9, codeTextStyle.size - 2), weight: .regular)))
+                .foregroundStyle(Color(uiColor: .secondaryLabel))
+                .lineLimit(1)
+                .frame(width: width, alignment: .trailing)
+                // The code's numbers end 8 points left of the code, which starts at the inset.
+                .offset(x: RawTextStyle.insets.left - 8 - width)
+                .accessibilityHidden(true)
+        }
     }
 }
 
