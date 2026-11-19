@@ -733,6 +733,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            // Dragging a handle afterwards: the text view shows its own menu, so not this one too.
+            if pressIndex == nil { menuInteraction?.dismissMenu() }
             snapSelection(in: textView)
         }
 
@@ -755,43 +757,58 @@ struct ReadOnlyTextView: UIViewRepresentable {
         /// The double tap that `showMenuOnce` last showed the menu for.
         private var menuShownForPress = 0
 
-        /// The menu, right away, once per double tap (the text view's own comes later, or not
-        /// at all once the selection has been changed). After this turn, so the selection is
-        /// drawn first.
+        /// The menu, once per double tap: a read-only text view shows none after a double tap
+        /// (only after a hold). Shown a moment later, once the text view is done with the taps
+        /// (it hid a menu shown straight away).
         private func showMenuOnce(for token: NSRange, in textView: UITextView) {
             guard menuShownForPress != pressCount else { return }
             menuShownForPress = pressCount
             Task { @MainActor [weak textView] in
-                guard let textView, textView.selectedRange == token,
-                      let start = textView.position(from: textView.beginningOfDocument, offset: token.location),
-                      let end = textView.position(from: start, offset: token.length),
-                      let range = textView.textRange(from: start, to: end)
+                try? await Task.sleep(for: .milliseconds(60))
+                guard let textView, textView.selectedRange == token, let rect = self.selectionRect(in: textView)
                 else { return }
-                let rect = textView.firstRect(for: range)
-                guard !rect.isNull, !rect.isInfinite else { return }
-                // The text view's own menu, so its items (Copy, Share…) and ours come as usual.
-                let interaction = textView.interactions.lazy.compactMap { $0 as? UIEditMenuInteraction }.first
-                    ?? self.ownMenu(on: textView)
-                interaction.presentEditMenu(with: UIEditMenuConfiguration(
+                if !textView.isFirstResponder { textView.becomeFirstResponder() }  // for Copy
+                self.doubleTapMenu(on: textView).presentEditMenu(with: UIEditMenuConfiguration(
                     identifier: nil, sourcePoint: CGPoint(x: rect.midX, y: rect.minY)))
             }
         }
 
-        /// Only if the text view has no menu interaction of its own (it does since iOS 16).
-        private var fallbackMenu: UIEditMenuInteraction?
+        /// The selection's first line, in the text view.
+        private func selectionRect(in textView: UITextView) -> CGRect? {
+            guard let range = textView.selectedTextRange, !range.isEmpty else { return nil }
+            let rect = textView.firstRect(for: range)
+            return rect.isNull || rect.isInfinite ? nil : rect
+        }
 
-        private func ownMenu(on textView: UITextView) -> UIEditMenuInteraction {
-            if let fallbackMenu { return fallbackMenu }
+        /// The double tap's own menu interaction, with the same items as the text view's menu
+        /// (the text view's own interaction showed nothing when asked).
+        private var menuInteraction: UIEditMenuInteraction?
+
+        private func doubleTapMenu(on textView: UITextView) -> UIEditMenuInteraction {
+            if let menuInteraction, menuInteraction.view === textView { return menuInteraction }
             let interaction = UIEditMenuInteraction(delegate: self)
             textView.addInteraction(interaction)
-            fallbackMenu = interaction
+            menuInteraction = interaction
             return interaction
         }
 
         func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
                                  suggestedActions: [UIMenuElement]) -> UIMenu? {
             guard let textView = interaction.view as? UITextView else { return nil }
-            return self.textView(textView, editMenuForTextIn: textView.selectedRange, suggestedActions: suggestedActions)
+            // Copy and Select All at least, if the system suggested nothing.
+            let suggested = suggestedActions.isEmpty
+                ? [UICommand(title: String(localized: "Copy"), action: #selector(UIResponderStandardEditActions.copy(_:))),
+                   UICommand(title: String(localized: "Select All"),
+                             action: #selector(UIResponderStandardEditActions.selectAll(_:)))]
+                : suggestedActions
+            return self.textView(textView, editMenuForTextIn: textView.selectedRange, suggestedActions: suggested)
+        }
+
+        /// The menu points at the selection.
+        func editMenuInteraction(_ interaction: UIEditMenuInteraction,
+                                 targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
+            guard let textView = interaction.view as? UITextView else { return .null }
+            return selectionRect(in: textView) ?? .null
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
