@@ -37,6 +37,10 @@ struct CodeScreen: View {
     /// The cards in `cardPath`. Ones no longer in it are dropped when the next card opens (not
     /// when they close: they're still on screen while they zoom away).
     @State private var stackedCards: [UUID: StackedCard] = [:]
+    /// The occurrences pages in `cardPath`.
+    @State private var stackedOccurrences: [UUID: OccurrenceSearch] = [:]
+    /// The identifier highlighted on pages: Occurrences highlights what it looks for.
+    @Environment(HighlightState.self) private var highlights: HighlightState?
     /// The results pages in `cardPath`.
     @State private var stackedResults: [UUID: StackedResults] = [:]
     /// The search of the latest results page shown: the only one that keeps its results.
@@ -155,6 +159,8 @@ struct CodeScreen: View {
                 if let card = stackedCards[id] { cardView(card, id: id, route: route) }
             case .results(let id):
                 if let entry = stackedResults[id] { resultsPage(id: id, entry: entry, route: route) }
+            case .occurrences(let id):
+                if let search = stackedOccurrences[id] { occurrencesView(search, route: route) }
             }
         }
         .sheet(isPresented: $isShowingStack, onDismiss: {
@@ -338,6 +344,8 @@ struct CodeScreen: View {
             onRefresh: { await model.refresh(file: $0) },
             symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
             onSearchSymbols: { searchInStack(for: $0, from: route) },
+            onFindOccurrences: { findOccurrences(of: $0, from: route) },
+            pageAnchors: card.pageAnchors,
             // The page shows the symbol's own text, which starts where the symbol does.
             onComment: { symbol, range in
                 comment(on: NSRange(location: symbol.range.location + range.location, length: range.length),
@@ -516,6 +524,101 @@ struct CodeScreen: View {
     private func pruneStack() {
         stackedCards = stackedCards.filter { cardPath.contains(.card($0.key)) }
         stackedResults = stackedResults.filter { cardPath.contains(.results($0.key)) }
+        for (id, search) in stackedOccurrences where !cardPath.contains(.occurrences(id)) {
+            search.cancel()
+            stackedOccurrences[id] = nil
+        }
+    }
+
+    // MARK: Occurrences
+
+    /// Occurrences on a card: where the selection is used, as a whole word, in the project's
+    /// downloaded files that pass its filter, on a page over the card. The pages highlight it.
+    private func findOccurrences(of term: String, from card: CardRoute) {
+        pruneStack()
+        var files: [OccurrenceFile] = []
+        var skipped = 0
+        let symbols = indexedSymbols
+        var start = 0
+        while start < symbols.count {
+            var end = start + 1
+            while end < symbols.count, symbols[end].kind != .file { end += 1 }
+            let entry = symbols[start]
+            if entry.kind == .file {
+                if entry.isDownloaded {
+                    files.append(OccurrenceFile(url: entry.fileURL ?? model.url, fileURL: entry.fileURL,
+                                                entry: entry, symbols: Array(symbols[start..<end])))
+                } else {
+                    skipped += 1
+                }
+            }
+            start = end
+        }
+        let search = OccurrenceSearch(term: term, source: AnyHashable(card), files: files, skippedFiles: skipped)
+        stackedOccurrences[search.id] = search
+        if term.unicodeScalars.allSatisfy({ $0.value > 127 || Occurrences.isWordCharacter(unichar($0.value)) }) {
+            highlights?.current = IdentifierHighlight(name: term, kind: nil, language: nil)
+        }
+        cardPath.append(.occurrences(search.id))
+    }
+
+    private func occurrencesView(_ search: OccurrenceSearch, route: CardRoute) -> some View {
+        OccurrencesPage(search: search, stackDepth: cardPath.firstIndex(of: route).map { $0 + 1 } ?? 1,
+                        stackActions: stackActions) { entries in
+            SymbolsView(
+                symbols: entries,
+                query: search.term,
+                isActive: true,
+                ownText: ownText,
+                scrollRequest: nil,
+                collapseRequest: nil,
+                onCenteredSymbolChange: { _ in },
+                isBarCollapsed: { false },
+                barTapCount: 0,
+                openFile: model.url,
+                collapseScope: model.collapseScope,
+                rootFolderName: model.symbolsProjectTitle ?? model.fileName,
+                onOpen: { openOccurrence($0, anchor: nil, in: search, route: route) },
+                onOpenAt: { openOccurrence($0, anchor: $1, in: search, route: route) },
+                onBarCollapsedChange: { _ in },
+                albumContext: albumContext,
+                onShowHistory: {
+                    historyDetent = .large
+                    historyFile = HistoryFile(url: $0)
+                },
+                downloadingFiles: model.downloadingFiles,
+                collapsed: search.collapsed
+            )
+            .equatable()
+        }
+        // Its cards zoom out of it; it zooms out of (and back into) its card.
+        .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
+        .navigationTransition(.zoom(sourceID: search.source, in: pagerNamespace))
+    }
+
+    /// An occurrence's card: the symbol it's in (or the lines around it), at its line, paging
+    /// through the other occurrences, each at its own line. A file's title opens the file.
+    private func openOccurrence(_ symbol: CodeSymbol, anchor: PageAnchor?, in search: OccurrenceSearch,
+                                route: CardRoute) {
+        pruneStack()
+        let id = UUID()
+        let depth = cardPath.count + 1
+        guard let place = search.places[symbol.id] else {
+            guard symbol.kind == .file else { return }
+            stackedCards[id] = StackedCard(symbols: [symbol], initialID: symbol.id, anchor: nil,
+                                           zoomSource: AnyHashable(route), depth: depth)
+            cardPath.append(.card(id))
+            return
+        }
+        // Tapped on its code: that line stays where it was on screen. Otherwise, a little way
+        // down, like each of the other pages.
+        let screenY: CGFloat = 220
+        let first = anchor.map { PageAnchor(line: place.line + $0.line, screenY: $0.screenY) }
+            ?? PageAnchor(line: place.line, screenY: screenY)
+        let others = search.pageLines.mapValues { PageAnchor(line: $0, screenY: screenY) }
+        stackedCards[id] = StackedCard(symbols: search.pages, initialID: place.page, anchor: first,
+                                       zoomSource: AnyHashable(route), depth: depth, pageAnchors: others)
+        cardPath.append(.card(id))
     }
 
     /// A result's card, on top of the results, paging through them.

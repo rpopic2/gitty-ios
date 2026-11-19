@@ -105,6 +105,19 @@ nonisolated enum RawTextStyle {
         return [action]
     }
 
+    /// "Occurrences" for a one-line selection: where it's used, as a whole word, in the
+    /// project's files (`Occurrences`).
+    @MainActor
+    static func occurrencesItems(for range: NSRange, in textView: UITextView,
+                                 onFind: (@MainActor (String) -> Void)?) -> [UIMenuElement] {
+        guard let onFind, range.length > 0, range.length <= 500, NSMaxRange(range) <= textView.textStorage.length,
+              let term = Occurrences.term(fromSelection: textView.textStorage.mutableString.substring(with: range))
+        else { return [] }
+        let action = UIAction(title: String(localized: "Occurrences"),
+                              image: UIImage(systemName: "text.magnifyingglass")) { _ in onFind(term) }
+        return [action]
+    }
+
     @MainActor
     private static func keptMenuElements(_ elements: [UIMenuElement]) -> [UIMenuElement] {
         let keptActions: Set<Selector> = [

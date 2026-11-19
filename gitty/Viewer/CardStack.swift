@@ -10,6 +10,8 @@ import UIKit
 enum CardRoute: Hashable {
     case card(UUID)
     case results(UUID)
+    /// Occurrences of a word (a card's text menu).
+    case occurrences(UUID)
 }
 
 /// A results page in the stack: what it searches for, and what it zooms out of (the card it
@@ -31,6 +33,8 @@ struct StackedCard {
     /// Its place in the stack: 1 for the card opened from the list, then up by one for each
     /// page on top (results pages too). Nothing under a page is ever taken out, so it stays.
     let depth: Int
+    /// Where its other pages open (see `SymbolPager.pageAnchors`): an occurrence's line.
+    var pageAnchors: [Int: PageAnchor] = [:]
 }
 
 /// A search, for a results page: the files whose name contains it (each with all its symbols),

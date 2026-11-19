@@ -29,6 +29,12 @@ struct SymbolPager: View {
     /// Search in a page's text menu: search symbols, on a results page stacked over this one.
     let symbolSearchTerm: @MainActor (String) -> String?
     let onSearchSymbols: @MainActor (String) -> Void
+    /// Occurrences in a page's text menu: where the selection is used, on a page stacked over
+    /// this one.
+    let onFindOccurrences: (@MainActor (String) -> Void)?
+    /// Where pages other than the first open (a symbol's id: the line, and where it goes on
+    /// screen), like `initialAnchor` for the first: an occurrence's line.
+    let pageAnchors: [Int: PageAnchor]
     /// Comment in a page's text menu, with the range in the symbol's text.
     let onComment: @MainActor (CodeSymbol, NSRange) -> Void
     /// The line of its file a page's text starts at, for the line-number peek.
@@ -66,6 +72,8 @@ struct SymbolPager: View {
          onRefresh: @escaping @MainActor (URL?) async -> Void,
          symbolSearchTerm: @escaping @MainActor (String) -> String?,
          onSearchSymbols: @escaping @MainActor (String) -> Void,
+         onFindOccurrences: (@MainActor (String) -> Void)? = nil,
+         pageAnchors: [Int: PageAnchor] = [:],
          onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void,
          firstLine: @escaping @MainActor (CodeSymbol) -> Int,
          albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)? = nil,
@@ -81,6 +89,8 @@ struct SymbolPager: View {
         self.onRefresh = onRefresh
         self.symbolSearchTerm = symbolSearchTerm
         self.onSearchSymbols = onSearchSymbols
+        self.onFindOccurrences = onFindOccurrences
+        self.pageAnchors = pageAnchors
         self.onComment = onComment
         self.firstLine = firstLine
         self.albumMenu = albumMenu
@@ -123,6 +133,7 @@ struct SymbolPager: View {
                                     isCurrent: symbol.id == visibleID,
                                     symbolSearchTerm: symbolSearchTerm,
                                     onSearchSymbols: onSearchSymbols,
+                                    onFindOccurrences: onFindOccurrences,
                                     onComment: { onComment(symbol, $0) },
                                     albumMenu: pageAlbumMenu(for: symbol),
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension,
@@ -133,9 +144,8 @@ struct SymbolPager: View {
                                     lineNumbering: .counted(firstLine: { firstLine(symbol) }),
                                     onScrollDown: { isCaptionHidden = $0 },
                                     // The page's text view starts below the status bar.
-                                    startAnchor: symbol.id == initialID
-                                        ? initialAnchor.map { PageAnchor(line: $0.line, screenY: $0.screenY - safeArea.top) }
-                                        : nil
+                                    startAnchor: (symbol.id == initialID ? initialAnchor : pageAnchors[symbol.id])
+                                        .map { PageAnchor(line: $0.line, screenY: $0.screenY - safeArea.top) }
                                 )
                                 // The text starts below the status bar and never scrolls under
                                 // it: just the page's background shows there.
@@ -394,6 +404,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var symbolSearchTerm: (@MainActor (String) -> String?)? = nil
     /// …and searching symbols for it.
     var onSearchSymbols: (@MainActor (String) -> Void)? = nil
+    /// Occurrences in the text menu: where the selection is used in the project.
+    var onFindOccurrences: (@MainActor (String) -> Void)? = nil
     /// Comment in the text menu: adds a comment on the selected range to the review.
     var onComment: (@MainActor (NSRange) -> Void)? = nil
     /// Add to Album in the text menu, for the selected lines (`nil` hides it).
@@ -478,6 +490,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         textView.scrollsToTop = isCurrent
         coordinator.symbolSearchTerm = symbolSearchTerm
         coordinator.onSearchSymbols = onSearchSymbols
+        coordinator.onFindOccurrences = onFindOccurrences
         coordinator.onComment = onComment
         coordinator.albumMenu = albumMenu
         coordinator.fileExtension = fileExtension
@@ -541,6 +554,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         var textID: Int?
         var symbolSearchTerm: (@MainActor (String) -> String?)?
         var onSearchSymbols: (@MainActor (String) -> Void)?
+        var onFindOccurrences: (@MainActor (String) -> Void)?
         var onComment: (@MainActor (NSRange) -> Void)?
         var albumMenu: (@MainActor (NSRange) -> UIMenu?)?
         var fileExtension = ""
@@ -568,6 +582,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 + RawTextStyle.searchItems(for: range, in: textView,
                                            searchTerm: symbolSearchTerm,
                                            onSearch: onSearchSymbols)
+                + RawTextStyle.occurrencesItems(for: range, in: textView, onFind: onFindOccurrences)
             // Highlight is holding an identifier, not a menu item. Add to Album comes
             // last, after Copy and Share: on the menu's second page.
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra, trailing: album)
