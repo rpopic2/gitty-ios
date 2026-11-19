@@ -5,8 +5,8 @@ import SwiftUI
 /// first if there's none), and a link to it on github.com. Tap a commit to see what it changed.
 struct FileInfoView: View {
     @State private var model: FileInfoModel
-    /// Comments on a diff open the review over this sheet.
-    @Environment(ReviewDraft.self) private var review: ReviewDraft?
+    /// The commit whose diff is open, full screen.
+    @State private var diffPage: CommitPage?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -52,23 +52,11 @@ struct FileInfoView: View {
                     }
                 }
             }
-            .navigationDestination(for: CommitPage.self) { page in
-                CommitDiffView(projectID: page.projectID, commit: page.commit, startPath: page.path)
-            }
         }
         .task { await model.load() }
-        .sheet(isPresented: composerIsPresented) {
-            if let review { ReviewComposer(draft: review) }
+        .fullScreenCover(item: $diffPage) { page in
+            CommitDiffView(projectID: page.projectID, commit: page.commit, startPath: page.path)
         }
-        .onDisappear {
-            // Closed while the review was up over it: it's set aside, as a swipe down would.
-            if review?.isComposingOverSheet == true { review?.isComposingOverSheet = false }
-        }
-    }
-
-    private var composerIsPresented: Binding<Bool> {
-        Binding(get: { review?.isComposingOverSheet ?? false },
-                set: { review?.isComposingOverSheet = $0 })
     }
 
     // MARK: Sections
@@ -168,18 +156,32 @@ struct FileInfoView: View {
         }
     }
 
+    /// A commit: tap for its diff, full screen, at this file.
     private func commitLink(_ commit: GitCommit, location: ProjectFileLocation) -> some View {
-        NavigationLink(value: CommitPage(projectID: location.project.id, commit: commit, path: location.path)) {
-            CommitRow(commit: commit)
+        Button {
+            diffPage = CommitPage(projectID: location.project.id, commit: commit, path: location.path)
+        } label: {
+            HStack {
+                CommitRow(commit: commit)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
         }
+        .foregroundStyle(.primary)
     }
 }
 
 /// A commit to show the diff of, from a file's history.
-private struct CommitPage: Hashable {
+private struct CommitPage: Hashable, Identifiable {
     let projectID: String
     let commit: GitCommit
     let path: String
+
+    var id: String { commit.id + "/" + path }
 }
 
 /// The commit's first line, then its author, when and its short hash.

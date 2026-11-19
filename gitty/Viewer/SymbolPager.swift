@@ -351,6 +351,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var lineNumbering: LineNumbering? = nil
     /// The reader scrolled down (`true`: hide what covers the text) or back up.
     var onScrollDown: (@MainActor (Bool) -> Void)? = nil
+    /// Pulled down past the top and let go (a page without pull to refresh): a diff closes.
+    var onPullDown: (@MainActor () -> Void)? = nil
     /// Opens with this line's top this far below the text view's top (`screenY`), once its
     /// text is there: so a page opened from the Code level shows the lines that were on screen.
     /// Never past either end, so a page that fits doesn't scroll.
@@ -411,6 +413,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.onRefresh = onRefresh
         coordinator.lineNumbering = lineNumbering
         coordinator.onScrollDown = onScrollDown
+        coordinator.onPullDown = onPullDown
         coordinator.positionURL = positionURL
         coordinator.positionStore = positionStore
 
@@ -743,6 +746,17 @@ struct ReadOnlyTextView: UIViewRepresentable {
             let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
             return ReadingPosition(characterIndex: layoutManager.characterIndexForGlyph(at: glyphIndex),
                                    lineOffset: Double(y - lineRect.minY))
+        }
+
+        var onPullDown: (@MainActor () -> Void)?
+
+        /// Let go while pulled this far past the top: `onPullDown`.
+        static let pullDownDistance: CGFloat = 70
+
+        func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
+                                       targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+            guard let onPullDown, scrollView.refreshControl == nil else { return }
+            if scrollView.contentOffset.y < -scrollView.adjustedContentInset.top - Self.pullDownDistance { onPullDown() }
         }
 
         /// `startAnchor` has been used (on the page's first text).

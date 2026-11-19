@@ -377,6 +377,15 @@ actor CloneStore {
         }
     }
 
+    /// The checked-out branch or tag's commits, newest first.
+    func log(projectID: String, limit: Int) async throws -> GitFileHistory {
+        guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        return try await serially(projectID) {
+            try GitRepository(at: folder).log(limit: limit)
+        }
+    }
+
     /// Fetches `deepenStep` more commits of the checked-out branch or tag.
     func loadMoreHistory(projectID: String) async throws {
         guard var record = index.record(forProject: projectID), let depth = record.depth else { return }

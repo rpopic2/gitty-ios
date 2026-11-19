@@ -1,51 +1,122 @@
 import SwiftUI
 
-/// What a commit changed, one file per page: it opens on the file whose history it came from;
-/// swipe sideways for the commit's other changed files, like paging between symbols.
+/// What a commit changed, one file per page, full screen like a symbol's card: it opens on
+/// one file; swipe sideways for the commit's other changed files. A caption at the bottom says
+/// which file, who and when. Pull down past the top of a page, or pinch, to close.
+/// Present it with `fullScreenCover`.
 struct CommitDiffView: View {
     let projectID: String
     let commit: GitCommit
     /// The file to open on (its path in the repository).
     let startPath: String
+    /// The commit's changes, when they're known already (from its list of files).
+    var knownChanges: [GitChange]? = nil
 
     @State private var changes: [GitChange]?
     @State private var errorMessage: String?
     @State private var currentPath: String?
+    /// Scrolling down a page hides the caption; scrolling up shows it.
+    @State private var isCaptionHidden = false
+    @State private var pinchHandled = false
+    @Environment(\.dismiss) private var dismiss
+    /// Comments on a diff open the review over this screen.
+    @Environment(ReviewDraft.self) private var review: ReviewDraft?
 
     var body: some View {
-        Group {
-            if let changes {
-                pager(changes)
-            } else if let errorMessage {
-                ContentUnavailableView("Couldn’t Show the Changes", systemImage: "exclamationmark.triangle",
-                                       description: Text(errorMessage))
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { proxy in
+            // Pages sit inside a scroll view, where UIKit gives them no safe-area insets: hand
+            // each the screen's (as the card does).
+            let safeArea = proxy.safeAreaInsets
+            let pageInsets = EdgeInsets(top: 0, leading: safeArea.leading,
+                                        bottom: safeArea.bottom + DiffCaption.reservedHeight,
+                                        trailing: safeArea.trailing)
+            ZStack(alignment: .bottom) {
+                if let changes {
+                    pager(changes, insets: pageInsets, top: safeArea.top)
+                } else if let errorMessage {
+                    ContentUnavailableView {
+                        Label("Couldn’t Show the Changes", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(errorMessage)
+                    } actions: {
+                        Button("Close") { dismiss() }
+                    }
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                if let changes, let index = currentIndex(in: changes) {
+                    DiffCaption(change: changes[index], commit: commit, index: index, count: changes.count)
+                        .padding(.bottom, 8)
+                        .offset(y: isCaptionHidden ? DiffCaption.reservedHeight + 40 : 0)
+                        .opacity(isCaptionHidden ? 0 : 1)
+                        .accessibilityHidden(isCaptionHidden)
+                        .animation(.smooth(duration: 0.25), value: isCaptionHidden)
+                }
             }
         }
-        .navigationTitle(commit.summary.isEmpty ? commit.shortID : commit.summary)
-        .navigationBarTitleDisplayMode(.inline)
+        .background(Color(uiColor: RawTextStyle.backgroundColor).ignoresSafeArea())
+        .simultaneousGesture(
+            MagnifyGesture()
+                .onChanged { value in
+                    guard !pinchHandled, value.magnification < 0.8 else { return }
+                    pinchHandled = true
+                    dismiss()
+                }
+                .onEnded { _ in pinchHandled = false }
+        )
+        .accessibilityAction(.escape) { dismiss() }
+        .accessibilityAction(named: "Close") { dismiss() }
         .task {
+            if let knownChanges {
+                changes = knownChanges
+                return
+            }
             do {
                 changes = try await CloneStore.shared.changes(projectID: projectID, commit: commit.id)
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
+        .sheet(isPresented: composerIsPresented) {
+            if let review { ReviewComposer(draft: review) }
+        }
+        .onDisappear {
+            // Closed while the review was up over it: it's set aside, as a swipe down would.
+            if review?.isComposingOverSheet == true { review?.isComposingOverSheet = false }
+        }
     }
 
-    private func pager(_ changes: [GitChange]) -> some View {
-        // The file this came from first if the commit changed it under another name.
-        let start = changes.first { $0.path == startPath || $0.oldPath == startPath }?.path ?? changes.first?.path
-        return VStack(spacing: 0) {
-            commitHeader(changes)
+    private var composerIsPresented: Binding<Bool> {
+        Binding(get: { review?.isComposingOverSheet ?? false },
+                set: { review?.isComposingOverSheet = $0 })
+    }
+
+    private func currentIndex(in changes: [GitChange]) -> Int? {
+        changes.isEmpty ? nil : changes.firstIndex { $0.path == currentPath } ?? 0
+    }
+
+    @ViewBuilder
+    private func pager(_ changes: [GitChange], insets: EdgeInsets, top: CGFloat) -> some View {
+        if changes.isEmpty {
+            ContentUnavailableView {
+                Label("No Changes to Show", systemImage: "doc")
+            } actions: {
+                Button("Close") { dismiss() }
+            }
+        } else {
+            // The file this came from first, also if the commit changed it under another name.
+            let start = changes.first { $0.path == startPath || $0.oldPath == startPath }?.path ?? changes.first?.path
             ScrollViewReader { reader in
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 0) {
                         ForEach(changes) { change in
                             DiffPage(projectID: projectID, commit: commit, change: change,
-                                     isCurrent: change.path == currentPath)
+                                     isCurrent: change.path == currentPath, insets: insets,
+                                     onScrollDown: { isCaptionHidden = $0 },
+                                     onClose: { dismiss() })
+                                // The text starts below the status bar, as on a card.
+                                .padding(.top, top)
                                 .containerRelativeFrame([.horizontal, .vertical])
                         }
                     }
@@ -54,23 +125,37 @@ struct CommitDiffView: View {
                 .scrollTargetBehavior(.paging)
                 .scrollPosition(id: $currentPath)
                 .scrollIndicators(.hidden)
+                .ignoresSafeArea()
                 .onAppear {
                     // `scrollPosition(id:)` ignores a starting value during the first layout.
                     if let start { reader.scrollTo(start, anchor: .leading) }
                     currentPath = start
                 }
+                .onChange(of: currentPath) { isCaptionHidden = false }  // each page starts with it
             }
         }
     }
+}
 
-    /// The commit's author and date, and which changed file this is.
-    private func commitHeader(_ changes: [GitChange]) -> some View {
-        let index = changes.firstIndex { $0.path == currentPath } ?? 0
-        let change = changes.indices.contains(index) ? changes[index] : nil
-        return VStack(alignment: .leading, spacing: 2) {
-            if let change {
+/// The diff's caption, at the bottom like a card's: the file (and its old name), then the
+/// commit's author and date, and which of the commit's files this is.
+private struct DiffCaption: View {
+    let change: GitChange
+    let commit: GitCommit
+    let index: Int
+    let count: Int
+
+    static let height: CGFloat = 52
+    /// Space kept free under the text so its end isn't hidden behind the caption.
+    static let reservedHeight: CGFloat = height + 16
+
+    var body: some View {
+        let label = VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Image(systemName: change.kind.systemImage)
+                    .foregroundStyle(change.kind.tint)
                 Text(change.oldPath.map { "\($0) → \(change.path)" } ?? change.path)
-                    .font(.footnote.monospaced())
+                    .font(.subheadline.monospaced())
                     .lineLimit(1)
                     .truncationMode(.head)
             }
@@ -79,8 +164,8 @@ struct CommitDiffView: View {
                 Text("·")
                 Text(commit.date, format: .dateTime.day().month().year().hour().minute())
                 Spacer(minLength: 8)
-                if changes.count > 1 {
-                    Text("\(index + 1) of \(changes.count)")
+                if count > 1 {
+                    Text("\(index + 1) of \(count)")
                         .monospacedDigit()
                 }
             }
@@ -88,11 +173,51 @@ struct CommitDiffView: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
+        .padding(.horizontal, 18)
+        .frame(height: Self.height)
         .accessibilityElement(children: .combine)
+
+        let shape = RoundedRectangle(cornerRadius: Self.height / 2, style: .continuous)
+        if #available(iOS 26.0, *) {
+            label.glassEffect(.regular, in: shape)
+                .padding(.horizontal, 16)
+        } else {
+            label.background(.bar, in: shape)
+                .padding(.horizontal, 16)
+        }
+    }
+}
+
+extension GitChange.Kind {
+    var title: LocalizedStringKey {
+        switch self {
+        case .added: "Added"
+        case .deleted: "Deleted"
+        case .modified: "Modified"
+        case .renamed: "Renamed"
+        case .copied: "Copied"
+        case .typeChanged: "Type Changed"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .added: "plus.circle.fill"
+        case .deleted: "minus.circle.fill"
+        case .modified: "pencil.circle.fill"
+        case .renamed: "arrow.right.circle.fill"
+        case .copied: "doc.on.doc.fill"
+        case .typeChanged: "arrow.triangle.2.circlepath.circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .added: .green
+        case .deleted: .red
+        case .modified: .orange
+        case .renamed, .copied, .typeChanged: .blue
+        }
     }
 }
 
@@ -105,6 +230,11 @@ private struct DiffPage: View {
     let commit: GitCommit
     let change: GitChange
     let isCurrent: Bool
+    /// The screen's safe area, plus room for the caption at the bottom.
+    let insets: EdgeInsets
+    let onScrollDown: @MainActor (Bool) -> Void
+    /// Pulled down past the top: the diff closes.
+    let onClose: @MainActor () -> Void
 
     @State private var text: NSAttributedString?
     /// The diff `text` shows, line for line, for comments.
@@ -119,23 +249,33 @@ private struct DiffPage: View {
     var body: some View {
         Group {
             if isEmpty {
-                ContentUnavailableView(change.kind == .renamed ? "Renamed, Not Changed" : "No Changes to Show",
-                                       systemImage: "doc")
+                ContentUnavailableView {
+                    Label(change.kind == .renamed ? "Renamed, Not Changed" : "No Changes to Show", systemImage: "doc")
+                } actions: {
+                    Button("Close") { onClose() }
+                }
             } else if let text {
                 ReadOnlyTextView(
                     text: text,
                     textID: ObjectIdentifier(text).hashValue,
-                    insets: EdgeInsets(),
+                    insets: insets,
                     isCurrent: isCurrent,
                     onComment: commentAction,
                     fileExtension: (change.path as NSString).pathExtension,
                     highlight: highlights?.current,
                     onHighlight: { highlights?.current = $0 },
-                    lineNumbering: .marked
+                    lineNumbering: .marked,
+                    onScrollDown: onScrollDown,
+                    onPullDown: onClose
                 )
             } else if let errorMessage {
-                ContentUnavailableView("Couldn’t Show This File", systemImage: "exclamationmark.triangle",
-                                       description: Text(errorMessage))
+                ContentUnavailableView {
+                    Label("Couldn’t Show This File", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(errorMessage)
+                } actions: {
+                    Button("Close") { onClose() }
+                }
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

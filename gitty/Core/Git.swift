@@ -291,6 +291,34 @@ nonisolated final class GitRepository {
         return GitFileHistory(commits: commits, canLoadMore: looked >= limit || reachedBoundary)
     }
 
+    /// The checked-out branch or tag's commits, newest first, up to `limit` (`git log`). The
+    /// oldest one of a shallow clone is marked as its boundary.
+    func log(limit: Int) throws -> GitFileHistory {
+        var walk: OpaquePointer?
+        try Git.check(git_revwalk_new(&walk, pointer))
+        defer { git_revwalk_free(walk) }
+        git_revwalk_sorting(walk, UInt32(truncatingIfNeeded: GIT_SORT_TIME.rawValue))
+        var head = git_oid()
+        try Git.check(git_reference_name_to_id(&head, pointer, "HEAD"))
+        try Git.check(git_revwalk_push(walk, &head))
+
+        var commits: [GitCommit] = []
+        var reachedBoundary = false
+        var id = git_oid()
+        while commits.count < limit, git_revwalk_next(&id, walk) == 0 {
+            var commit: OpaquePointer?
+            guard git_commit_lookup(&commit, pointer, &id) == 0 else { continue }
+            defer { git_commit_free(commit) }
+            var info = Self.commit(commit)
+            if git_commit_parentcount(commit) == 0, isShallow {
+                info.isBoundary = true
+                reachedBoundary = true
+            }
+            commits.append(info)
+        }
+        return GitFileHistory(commits: commits, canLoadMore: commits.count >= limit || reachedBoundary)
+    }
+
     /// The files a commit changed, against its first parent (everything, for the first commit
     /// or a shallow clone's oldest), with renames found.
     func changes(in commitID: String) throws -> [GitChange] {

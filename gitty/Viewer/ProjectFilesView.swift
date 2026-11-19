@@ -33,6 +33,8 @@ struct ProjectFilesView: View {
     @State private var isSwitchingRef = false
     /// The file whose details are showing.
     @State private var detailFile: DetailFile?
+    /// The branch's history (the branch row's History button).
+    @State private var isShowingHistory = false
 
     private struct DetailFile: Identifiable {
         let url: URL
@@ -92,6 +94,17 @@ struct ProjectFilesView: View {
                     isSigningIn = false
                     Task { await load(refresh: true) }
                 }
+            }
+            .sheet(isPresented: $isShowingHistory, onDismiss: {
+                // It may have cloned the project.
+                Task {
+                    clone = await CloneStore.shared.record(forProject: projectID)
+                    saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
+                }
+            }) {
+                BranchHistoryView(projectID: projectID)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
             .sheet(item: $detailFile) { file in
                 FileInfoView(url: file.url, knownSize: file.size) {
@@ -536,8 +549,24 @@ struct ProjectFilesView: View {
     // MARK: Branch
 
     /// The branch or tag the project shows. Choosing another lists its files (and switches the
-    /// clone, if there is one).
+    /// clone, if there is one). The button at its end shows the branch's history.
     private func branchRow(project: ProjectInfo) -> some View {
+        HStack(spacing: 12) {
+            branchMenu(project: project)
+            Button {
+                isShowingHistory = true
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.title3)
+            }
+            .buttonStyle(.borderless)  // only the button, not the whole row
+            .disabled(cloneProgress != nil)
+            .accessibilityLabel("History")
+            .accessibilityHint("Shows the branch’s commits")
+        }
+    }
+
+    private func branchMenu(project: ProjectInfo) -> some View {
         Menu {
             if let refs {
                 if !refs.branches.isEmpty {
