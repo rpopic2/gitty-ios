@@ -934,6 +934,7 @@ private struct CodeMenuPreview: View {
         .padding(16)
         .frame(width: 320, alignment: .leading)
         .background(Color(uiColor: RawTextStyle.backgroundColor))
+    }
 }
 
 /// A symbol's code, redrawn when its block is laid out: drawn from Core Text layouts made in
