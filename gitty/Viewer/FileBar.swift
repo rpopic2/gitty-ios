@@ -69,6 +69,8 @@ struct FileBar: View {
     /// At the Code level: Collapse All and Expand All in the menu.
     let onCollapseAll: (@MainActor () -> Void)?
     let onExpandAll: (@MainActor () -> Void)?
+    /// Before the title: an album's icon while one shows.
+    let titleIcon: String?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -77,8 +79,10 @@ struct FileBar: View {
          copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
-         onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil) {
+         onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
+         titleIcon: String? = nil) {
         self.title = title
+        self.titleIcon = titleIcon
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
         self.isProgressVisible = isProgressVisible
@@ -120,11 +124,11 @@ struct FileBar: View {
     var body: some View {
         Group {
             if #available(iOS 26.0, *) {
-                GlassFileBar(title: title, search: activeSearch, isCollapsed: isCollapsed,
+                GlassFileBar(title: title, titleIcon: titleIcon, search: activeSearch, isCollapsed: isCollapsed,
                              progress: ProgressLine(fraction: progressFraction, isVisible: isProgressVisible),
                              clearButton: clearButton)
             } else {
-                ClassicFileBar(title: title, search: activeSearch, isCollapsed: isCollapsed,
+                ClassicFileBar(title: title, titleIcon: titleIcon, search: activeSearch, isCollapsed: isCollapsed,
                                progress: ProgressLine(fraction: progressFraction, isVisible: isProgressVisible),
                                clearButton: clearButton)
             }
@@ -167,6 +171,8 @@ struct FileBar: View {
 /// The file name, the "Enter URL" placeholder, or the active symbol search.
 private struct BarTitle: View {
     let title: String
+    /// Before the title (an album's icon while one shows).
+    var icon: String? = nil
     let search: String?
     let isCollapsed: Bool
 
@@ -186,12 +192,19 @@ private struct BarTitle: View {
             }
             .font(font)
         } else {
-            Text(title.isEmpty ? "Enter URL" : title)
-                .font(font)
-                .contentTransition(.interpolate)  // smooth size change between states
-                .foregroundStyle(title.isEmpty ? .secondary : .primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            HStack(spacing: 5) {
+                if let icon {
+                    Image(systemName: icon)
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                }
+                Text(title.isEmpty ? "Enter URL" : title)
+                    .contentTransition(.interpolate)  // smooth size change between states
+                    .foregroundStyle(title.isEmpty ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .font(font)
         }
     }
 }
@@ -216,13 +229,14 @@ private struct ClearSearchButton: View {
 @available(iOS 26.0, *)
 private struct GlassFileBar: View {
     let title: String
+    let titleIcon: String?
     let search: String?
     let isCollapsed: Bool
     let progress: ProgressLine
     let clearButton: ClearSearchButton?
 
     var body: some View {
-        BarTitle(title: title, search: search, isCollapsed: isCollapsed)
+        BarTitle(title: title, icon: titleIcon, search: search, isCollapsed: isCollapsed)
             .padding(.horizontal, isCollapsed ? 14 : (clearButton == nil ? 20 : 44))
             .frame(maxWidth: isCollapsed ? nil : .infinity)
             .frame(height: isCollapsed ? FileBarMetrics.glassCollapsedHeight : FileBarMetrics.glassHeight)
@@ -238,6 +252,7 @@ private struct GlassFileBar: View {
 /// iOS 18: Safari 18's rounded field. The toolbar material behind it is drawn by `BottomBarStack`.
 private struct ClassicFileBar: View {
     let title: String
+    let titleIcon: String?
     let search: String?
     let isCollapsed: Bool
     let progress: ProgressLine
@@ -248,7 +263,7 @@ private struct ClassicFileBar: View {
     }
 
     var body: some View {
-        BarTitle(title: title, search: search, isCollapsed: isCollapsed)
+        BarTitle(title: title, icon: titleIcon, search: search, isCollapsed: isCollapsed)
             .padding(.horizontal, clearButton == nil ? 12 : 40)
             .frame(maxWidth: .infinity)
             .frame(height: isCollapsed ? FileBarMetrics.fieldCollapsedHeight : FileBarMetrics.fieldHeight)
@@ -302,6 +317,8 @@ struct BottomBarStack: View {
     let sorting: Binding<ListSorting>?
     let onCollapseAll: (@MainActor () -> Void)?
     let onExpandAll: (@MainActor () -> Void)?
+    /// Before the title: an album's icon while one shows.
+    let titleIcon: String?
     /// A review set aside shows above the bar, like a minimized Mail draft.
     @Environment(ReviewDraft.self) private var review: ReviewDraft?
 
@@ -314,8 +331,10 @@ struct BottomBarStack: View {
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          sorting: Binding<ListSorting>? = nil,
-         onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil) {
+         onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
+         titleIcon: String? = nil) {
         self.title = title
+        self.titleIcon = titleIcon
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
         self.isProgressVisible = isProgressVisible
@@ -342,7 +361,7 @@ struct BottomBarStack: View {
                     isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
                     copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                     searchQuery: searchQuery, onClearSearch: onClearSearch,
-                    onCollapseAll: onCollapseAll, onExpandAll: onExpandAll)
+                    onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, titleIcon: titleIcon)
             if !isCollapsed, let mode {
                 HStack(spacing: 8) {
                     if let sorting {

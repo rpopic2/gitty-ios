@@ -423,7 +423,9 @@ struct CodeScreen: View {
                 searchQuery: barSearchesSymbols ? symbolQuery : nil,
                 onClearSearch: { symbolQuery = "" },
                 onCollapseAll: collapseAllAction(true),
-                onExpandAll: collapseAllAction(false)
+                onExpandAll: collapseAllAction(false),
+                // In an album: its icon before its name (the selector's Project leaves it).
+                titleIcon: mode != .project && model.activeAlbum != nil ? "rectangle.stack" : nil
             )
         }
     }

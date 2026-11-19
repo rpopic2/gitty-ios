@@ -118,6 +118,8 @@ struct BrowserView: View {
     /// file first, if the open file is in another project (see `projectStartURL`).
     private var modeBinding: Binding<ViewMode> {
         Binding(get: { mode }, set: { level in
+            // The selector's Project leaves an album: the project's tab, with its albums.
+            if level == .project, !openAlbumIDString.isEmpty { openAlbumIDString = "" }
             if mode == .project, level.showsSymbols, let url = projectStartURL {
                 openFile(url, at: level)
             } else {
