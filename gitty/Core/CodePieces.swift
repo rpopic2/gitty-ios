@@ -34,3 +34,43 @@ nonisolated enum CodePieces {
         return String(text[..<end])
     }
 }
+
+/// One piece of a symbol's code at the Code level, ready to be laid out: its text, the
+/// stretches the grammar colors, and where it starts in the block.
+nonisolated struct CodeText: Equatable, Sendable {
+    let string: String
+    /// The colored stretches (plain text has none), relative to `string`.
+    let runs: [SyntaxHighlighter.Run]
+    /// Its first line, counted from the block's first (0).
+    let firstLine: Int
+}
+
+extension CodePieces {
+    /// `text` in pieces (see `ranges`), with the grammar's colored stretches when
+    /// `highlighted`. The text is parsed once, whole.
+    static func texts(_ text: String, fileExtension: String, highlighted: Bool) -> [CodeText] {
+        let utf16 = text as NSString
+        let colored = highlighted
+            ? (SyntaxHighlighter.runs(in: text, fileExtension: fileExtension) ?? []).filter { $0.category != nil }
+            : []
+        var next = 0
+        var firstLine = 0
+        return ranges(in: utf16).map { range in
+            while next < colored.count, NSMaxRange(colored[next].range) <= range.location { next += 1 }
+            var runs: [SyntaxHighlighter.Run] = []
+            var index = next
+            while index < colored.count, colored[index].range.location < NSMaxRange(range) {
+                let part = NSIntersectionRange(colored[index].range, range)
+                if part.length > 0 {
+                    runs.append(.init(range: NSRange(location: part.location - range.location, length: part.length),
+                                      category: colored[index].category))
+                }
+                index += 1
+            }
+            let string = utf16.substring(with: range)
+            let piece = CodeText(string: string, runs: runs, firstLine: firstLine)
+            firstLine += string.utf8.reduce(1) { $0 + ($1 == 0x0A ? 1 : 0) }
+            return piece
+        }
+    }
+}

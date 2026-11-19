@@ -67,6 +67,9 @@ struct SymbolsView: View, Equatable {
     @State private var scroll = ScrollTracking()
     /// The Code level's line-number peek.
     @State private var peek = CodePeek()
+    /// The list's width, which the Code level's code wraps in.
+    @State private var codeWidth: CGFloat = 0
+    @Environment(\.colorScheme) private var colorScheme
     /// The font and syntax colors: a new theme colors the Code level's blocks again.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
@@ -238,6 +241,10 @@ struct SymbolsView: View, Equatable {
         codeBlocks.symbols = symbols
         codeBlocks.ownText = ownText
         codeBlocks.use(theme: codeTextStyle.theme, openFile: openFile)
+        codeBlocks.layoutKey = codeWidth > 0
+            ? CodeLayoutKey(width: codeWidth - 2 * RawTextStyle.insets.left, style: codeTextStyle,
+                            isDark: colorScheme == .dark)
+            : nil
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(symbols) { symbol in
                 Section {
@@ -340,6 +347,9 @@ struct SymbolsView: View, Equatable {
         )
         .simultaneousGesture(pinch, including: isActive ? .all : .subviews)
         .simultaneousGesture(peekGesture, including: isActive && zoom == .code ? .all : .subviews)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            if zoom == .code, width != codeWidth { codeWidth = width }
+        }
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .background(Color(uiColor: .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in
@@ -536,28 +546,27 @@ private struct SymbolTitle: View {
     }
 }
 
-/// One symbol's code at the Code level: `code` once it's prepared (`nil` until then, when the
-/// preview stands in), then again once it's colored. Observed by that symbol's view alone, so
-/// preparing it redraws nothing else.
+/// One symbol's code at the Code level, laid out (`layouts`) once it's read, colored and laid
+/// out in the background; `nil` until then, while the preview stands in. Observed by that
+/// symbol's view alone, so preparing it redraws nothing else.
 @Observable
 private final class CodeBlock {
     let symbol: CodeSymbol
-    /// The code as pieces of `CodePieces.linesPerPiece` lines (see `SymbolCodeText`).
-    private(set) var pieces: [CodePiece]?
+    /// The code's pieces, laid out for `layoutKey`.
+    private(set) var layouts: [CodePieceLayout]?
     /// The line of its file the code starts at, for the line peek.
     private(set) var firstLine = 1
-    /// Each piece as one `Text` per line, numbered, made the first time it's peeked at.
-    @ObservationIgnored private var numbered: [Int: Text] = [:]
     /// The part of the file shown: the symbol, or for a type, up to its first member.
     private let range: NSRange
     /// The open file's symbol's code, plain, ready at once.
     private let ownCode: String?
     private let fileExtension: String
     private let theme: SyntaxTheme
-    @ObservationIgnored private var isLoading = false
+    /// Read and colored, once.
+    @ObservationIgnored private var texts: [CodeText]?
+    @ObservationIgnored private(set) var layoutKey: CodeLayoutKey?
+    @ObservationIgnored private var task: Task<Void, Never>?
 
-    /// The open file's symbols get their code right away, from its text (plain: it's colored
-    /// in the background).
     init(symbol: CodeSymbol, range: NSRange, ownText: NSString?, ownFirstLine: Int?, fileExtension: String,
          theme: SyntaxTheme) {
         self.symbol = symbol
@@ -565,60 +574,60 @@ private final class CodeBlock {
         self.fileExtension = fileExtension
         self.theme = theme
         if symbol.fileURL == nil, let ownText, NSMaxRange(range) <= ownText.length {
-            let plain = CodePieces.trimmingTrailingWhitespace(TabExpansion.expand(ownText.substring(with: range)))
-            ownCode = plain
-            pieces = SyntaxTheme.none.pieces(plain, fileExtension: fileExtension)
+            ownCode = CodePieces.trimmingTrailingWhitespace(TabExpansion.expand(ownText.substring(with: range)))
         } else {
             ownCode = nil
         }
         if let ownFirstLine { firstLine = ownFirstLine }
     }
 
-    /// Prepared in the background: another file's code is read, and either is colored. On
-    /// screen it goes first; the ones loaded ahead wait at a lower priority.
-    func load(isVisible: Bool) {
-        guard !isLoading else { return }
-        let file = symbol.fileURL
-        guard file != nil || (ownCode != nil && theme != .none) else { return }
-        isLoading = true
+    /// Lays the code out for `key` in the background (reading and coloring it first, the first
+    /// time). On screen it goes first; the ones prepared ahead wait at a lower priority.
+    func prepare(for key: CodeLayoutKey, isVisible: Bool) {
+        guard key != layoutKey else { return }
+        layoutKey = key
+        task?.cancel()
         let priority: TaskPriority = isVisible ? .userInitiated : .utility
+        let known = texts
+        let file = symbol.fileURL
         let range = range
         let preview = symbol.preview
         let ownCode = ownCode
         let fileExtension = fileExtension
-        let theme = theme
-        Task {
-            var plain = ownCode
-            if plain == nil, let file {
-                if let loaded = await FileTextCache.shared.code(of: range, in: file, priority: priority) {
-                    plain = CodePieces.trimmingTrailingWhitespace(loaded.code)
-                    firstLine = loaded.firstLine
-                } else {
-                    plain = TabExpansion.expand(preview)
+        let highlighted = theme != .none
+        task = Task {
+            var texts = known
+            if texts == nil {
+                var plain = ownCode
+                if plain == nil, let file {
+                    if let loaded = await FileTextCache.shared.code(of: range, in: file, priority: priority) {
+                        plain = CodePieces.trimmingTrailingWhitespace(loaded.code)
+                        firstLine = loaded.firstLine
+                    } else {
+                        plain = TabExpansion.expand(preview)
+                    }
                 }
+                guard let plain else { return }
+                let made = await Task.detached(priority: priority) {
+                    CodePieces.texts(plain, fileExtension: fileExtension, highlighted: highlighted)
+                }.value
+                self.texts = made
+                texts = made
             }
-            guard let plain else { return }
-            let made = await Task.detached(priority: priority) {
-                theme.pieces(plain, fileExtension: fileExtension)
+            guard let texts, !Task.isCancelled else { return }
+            let laidOut = await Task.detached(priority: priority) {
+                texts.map { CodePieceLayout($0, key: key) }
             }.value
-            numbered = [:]
-            pieces = made
+            guard !Task.isCancelled, layoutKey == key else { return }
+            layouts = laidOut
         }
     }
 
-    /// A piece for the line peek: the same text, one `Text` per line, each carrying its line
-    /// number for `LineNumberRenderer`. The layout is the same as the plain piece's.
-    func numberedText(_ index: Int) -> Text {
-        if let text = numbered[index] { return text }
-        guard let pieces, pieces.indices.contains(index) else { return Text(verbatim: "") }
-        let piece = pieces[index]
-        var text = Text(verbatim: "")
-        for (offset, line) in piece.lines.enumerated() {
-            if offset > 0 { text = text + Text(verbatim: "\n") }
-            text = text + Text(line).customAttribute(LineNumberAttribute(number: firstLine + piece.firstLine + offset))
-        }
-        numbered[index] = text
-        return text
+    /// Off screen for a while: lets its layout go (it's made again when it comes back).
+    func discardLayout() {
+        task?.cancel()
+        layoutKey = nil
+        layouts = nil
     }
 }
 
@@ -703,15 +712,33 @@ private final class CodeBlockStore {
         positions = Dictionary(symbols.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
+    /// What the blocks are laid out for: the width the code wraps at, the font and colors, and
+    /// light or dark mode. `nil` until the list's width is known.
+    var layoutKey: CodeLayoutKey?
+
+    /// The most blocks kept laid out; the ones used longest ago let theirs go.
+    static let laidOutLimit = 120
+    private var laidOut: [Int] = []
+
     /// A symbol came into view: prepare it first, then the next few, so they're usually ready
     /// (at their final height) before they're on screen.
     func appeared(_ symbol: CodeSymbol) {
-        block(for: symbol).load(isVisible: true)
+        guard let key = layoutKey else { return }
+        prepare(symbol, for: key, isVisible: true)
         updatePositions()
         guard let start = positions[symbol.id] else { return }
         let end = min(start + Self.lookahead + 1, symbols.count)
         for next in symbols[(start + 1)..<max(start + 1, end)] where next.kind != .file {
-            block(for: next).load(isVisible: false)
+            prepare(next, for: key, isVisible: false)
+        }
+    }
+
+    func prepare(_ symbol: CodeSymbol, for key: CodeLayoutKey, isVisible: Bool) {
+        block(for: symbol).prepare(for: key, isVisible: isVisible)
+        laidOut.removeAll { $0 == symbol.id }
+        laidOut.append(symbol.id)
+        while laidOut.count > Self.laidOutLimit {
+            blocks[laidOut.removeFirst()]?.discardLayout()
         }
     }
 }
@@ -738,7 +765,7 @@ private struct SymbolCode: View {
         VStack(spacing: 0) {
             if symbol.kind != .file {
                 let block = store.block(for: symbol)
-                SymbolCodeText(block: block, peek: peek, onTap: onTap)
+                SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, onTap: onTap)
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
@@ -747,18 +774,20 @@ private struct SymbolCode: View {
     }
 }
 
-/// A symbol's code, redrawn when its block's code is ready. Long code is several `Text`s of
-/// `CodePieces.linesPerPiece` lines each, in a lazy stack: only the pieces on screen are laid
-/// out, so a long function never stalls scrolling while one huge `Text` is measured.
+/// A symbol's code, redrawn when its block is laid out: drawn from Core Text layouts made in
+/// the background (`CodePieceLayout`), so scrolling a block in neither measures nor shapes text.
+/// Long code is several pieces of `CodePieces.linesPerPiece` lines in a lazy stack.
 private struct SymbolCodeText: View {
     let block: CodeBlock
     let peek: CodePeek
+    let layoutKey: CodeLayoutKey?
     let onTap: @MainActor () -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(block: CodeBlock, peek: CodePeek, onTap: @escaping @MainActor () -> Void) {
+    init(block: CodeBlock, peek: CodePeek, layoutKey: CodeLayoutKey?, onTap: @escaping @MainActor () -> Void) {
         self.block = block
         self.peek = peek
+        self.layoutKey = layoutKey
         self.onTap = onTap
     }
 
@@ -777,32 +806,30 @@ private struct SymbolCodeText: View {
             .accessibilityHint(Text("Opens its page"))
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { onTap() }
+            // Laid out again for another width, font, colors or appearance.
+            .task(id: layoutKey) {
+                if let layoutKey { block.prepare(for: layoutKey, isVisible: true) }
+            }
     }
 
     @ViewBuilder
     private var code: some View {
-        if let pieces = block.pieces, pieces.count > 1 {
+        if let layouts = block.layouts, layouts.count > 1 {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(pieces.indices, id: \.self) { index in
-                    piece(index, of: pieces)
+                ForEach(layouts.indices, id: \.self) { index in
+                    piece(layouts[index])
                 }
             }
-        } else if let pieces = block.pieces, !pieces.isEmpty {
-            piece(0, of: pieces)
+        } else if let layout = block.layouts?.first {
+            piece(layout)
         } else {
             Text(verbatim: TabExpansion.expand(block.symbol.preview))
         }
     }
 
-    /// While peeking, the numbered version, drawn slid right with its numbers.
-    @ViewBuilder
-    private func piece(_ index: Int, of pieces: [CodePiece]) -> some View {
-        if peek.isActive {
-            block.numberedText(index)
-                .textRenderer(LineNumberRenderer(offset: peek.offset, width: peek.width, fontSize: codeTextStyle.size))
-        } else {
-            Text(pieces[index].text)
-        }
+    /// While peeking, slid right with its line numbers.
+    private func piece(_ layout: CodePieceLayout) -> some View {
+        CodePieceView(layout: layout, firstFileLine: block.firstLine, peekOffset: peek.isActive ? peek.offset : 0)
     }
 }
 

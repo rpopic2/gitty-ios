@@ -24,3 +24,18 @@ struct CodePiecesTests {
         #expect(CodePieces.trimmingTrailingWhitespace("  ") == "")
     }
 }
+
+struct CodeTextTests {
+    @Test func piecesKeepTheirColorsAndLines() {
+        let code = "int a = 1; // x\nint b;\nint c;"
+        let texts = CodePieces.texts(code, fileExtension: "c", highlighted: true)
+        #expect(texts.count == 1)
+        #expect(texts[0].string == code)
+        #expect(texts[0].runs.contains { $0.category == .comment })
+        #expect(texts[0].runs.allSatisfy { $0.category != nil && NSMaxRange($0.range) <= (code as NSString).length })
+    }
+
+    @Test func plainHasNoRuns() {
+        #expect(CodePieces.texts("int a;", fileExtension: "c", highlighted: false)[0].runs.isEmpty)
+    }
+}
