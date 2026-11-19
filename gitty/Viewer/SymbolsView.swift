@@ -521,10 +521,13 @@ private struct CodeHeader: View {
                     SymbolTitle(symbol: symbol, isCollapsed: isCollapsed)
                 }
                 .buttonStyle(.plain)
+                // The same menu and preview as the code's.
                 .contextMenu {
                     if let albumContext {
                         AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
                     }
+                } preview: {
+                    CodeMenuPreview(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension)
                 }
             }
         }
