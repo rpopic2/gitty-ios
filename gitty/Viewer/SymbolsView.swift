@@ -1,14 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// Symbols mode: every top-level definition as a full-width card, like photos in Photos.
-/// Tapping a card zooms into that symbol (see `SymbolPager`).
+/// The symbol levels: every top-level definition of the open file and its project. Tapping
+/// one opens its card, full screen (see `SymbolPager`).
 ///
 /// The levels of `ViewMode`, chosen with the selector under the bar (pinching is for closing a
 /// symbol's card only):
 /// - Files: each file's declarations, one line per symbol like a C header, under a sticky header
-///   (its name and count; tap to fold it, or show it in Code). Tapping a line goes to its card.
-/// - Symbols: the cards.
+///   (its name and count; tap to fold it, or show it in Code). Tapping a line shows its code,
+///   growing out of the line.
 /// - Code: every symbol's whole code, edge to edge in the raw-text style, each under a slim
 ///   title that sticks to the top while you read it. Tap one to open its page.
 ///
@@ -46,13 +46,11 @@ struct SymbolsView: View, Equatable {
     /// A file header's open button: show that file's code (the Code level, at its entry).
     let onOpenFile: @MainActor (URL) -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
-    /// While searching: a swipe on the cards closes the search field (the filter stays). That
+    /// While searching: a swipe on the list closes the search field (the filter stays). That
     /// swipe only closes it: the list doesn't scroll and the bar doesn't shrink.
     let onCloseSearch: (@MainActor () -> Void)?
     /// For the long-press menus' Add to Album (`nil`: the file isn't in a project).
     let albumContext: AlbumMenuContext?
-    /// Select at the Symbols level: while it's on, tapping a card chooses it.
-    let selection: SymbolSelection
 
     /// The zoom level, shared with the selector under the bar (Project hides this view).
     @Binding var mode: ViewMode
@@ -67,6 +65,8 @@ struct SymbolsView: View, Equatable {
     @State private var codeBlocks = CodeBlockStore()
     /// Where the other layout should open: the symbol that was in the middle, or a tapped row.
     @State private var switchAnchor: Int?
+    /// Where the Code level grows from (a row tapped at the Files level); `nil`: it fades in.
+    @State private var expandAnchor: UnitPoint?
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
     /// The Code level's line-number peek.
@@ -90,8 +90,7 @@ struct SymbolsView: View, Equatable {
          onOpenFile: @escaping @MainActor (URL) -> Void,
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
          onCloseSearch: (@MainActor () -> Void)? = nil,
-         albumContext: AlbumMenuContext? = nil,
-         selection: SymbolSelection) {
+         albumContext: AlbumMenuContext? = nil) {
         self.symbols = symbols
         self.query = query
         _mode = mode
@@ -111,7 +110,6 @@ struct SymbolsView: View, Equatable {
         self.onBarCollapsedChange = onBarCollapsedChange
         self.onCloseSearch = onCloseSearch
         self.albumContext = albumContext
-        self.selection = selection
     }
 
     /// What the list shows. The closures aren't compared: they reach the screen's state and
@@ -132,14 +130,14 @@ struct SymbolsView: View, Equatable {
                     scrollContainer { groupedRows }
                         .onAppear { moveToStart(reader) }
                         .transition(.opacity)
-                case .symbols:
-                    scrollContainer { cards }
-                        .onAppear { moveToStart(reader) }
-                        .transition(.opacity)
                 case .code:
                     scrollContainer { fullCode }
                         .onAppear { moveToStart(reader) }
-                        .transition(.opacity)
+                        // From a row tapped at the Files level: the code grows out of it.
+                        .transition(.asymmetric(
+                            insertion: expandAnchor.map { .scale(scale: 0.1, anchor: $0).combined(with: .opacity) }
+                                ?? .opacity,
+                            removal: .opacity))
                 }
             }
             .onChange(of: scrollRequest) { _, request in
@@ -150,6 +148,7 @@ struct SymbolsView: View, Equatable {
         .onChange(of: mode) { _, mode in
             // Another level (the selector): it opens at the symbol in the middle.
             guard mode.showsSymbols, mode != zoom else { return }
+            expandAnchor = nil
             switchAnchor = scroll.centeredID
             scroll.isPositioned = false  // until the new level has moved to the anchor
             withAnimation(.smooth(duration: 0.3)) { zoom = mode }
@@ -192,30 +191,6 @@ struct SymbolsView: View, Equatable {
 
     // MARK: Layouts
 
-    private var cards: some View {
-        LazyVStack(spacing: 12) {
-            ForEach(symbols) { symbol in
-                // While selecting, a tap chooses the card instead of opening it.
-                Button {
-                    if selection.isActive { selection.toggle(symbol.id) } else { onOpen(symbol) }
-                } label: {
-                    SymbolCard(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension)
-                        .overlay(alignment: .bottomTrailing) { SelectionMark(selection: selection, id: symbol.id) }
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    CardMenu(item: albumItem(for: symbol), context: albumContext, selection: selection,
-                             id: symbol.id)
-                }
-                // The margin is part of each scroll target, so every target spans the full
-                // width and centering one never scrolls sideways.
-                .padding(.horizontal, 16)
-            }
-        }
-        .padding(.vertical, 12)
-        .scrollTargetLayout()
-    }
-
     /// One item per file, not per symbol: the file's declarations are a single block, so the
     /// lazy list has a file's worth of items to deal with, not a project's worth of symbols.
     private var groupedRows: some View {
@@ -226,7 +201,7 @@ struct SymbolsView: View, Equatable {
                     // Always there (empty when folded): see `fullCode`.
                     FileDeclarations(symbols: isFolded ? [] : group.symbols,
                                      fileExtension: group.file.pathExtension, file: group.file,
-                                     albumContext: albumContext) { showCard($0) }
+                                     albumContext: albumContext) { showCode($0, from: $1) }
                         .id(group.anchorID ?? -1)  // the file as a scroll target (never -1 here)
                 } header: {
                     SymbolFileHeader(
@@ -308,13 +283,18 @@ struct SymbolsView: View, Equatable {
             }
     }
 
-    /// A row tapped in the Files level: in to the cards, at that symbol.
-    private func showCard(_ symbol: CodeSymbol) {
+    /// A row tapped at the Files level: its code, at that symbol, growing out of the row
+    /// (`point`, where it was tapped on screen).
+    private func showCode(_ symbol: CodeSymbol, from point: CGPoint) {
         switchAnchor = symbol.id
         scroll.isPositioned = false
-        withAnimation(.smooth(duration: 0.3)) {
-            zoom = .symbols
-            mode = .symbols
+        let frame = scroll.frame
+        expandAnchor = point != .zero && frame.width > 0 && frame.height > 0
+            ? UnitPoint(x: (point.x - frame.minX) / frame.width, y: (point.y - frame.minY) / frame.height)
+            : .center
+        withAnimation(.smooth(duration: 0.35)) {
+            zoom = .code
+            mode = .code
         }
     }
 
@@ -355,6 +335,8 @@ struct SymbolsView: View, Equatable {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
             if zoom == .code, width != codeWidth { codeWidth = width }
         }
+        // On screen, for where a tapped row is (not observed: layout only).
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { scroll.frame = $0 }
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         // At the Code level, the strip a peek uncovers is the code's background.
         .background(Color(uiColor: zoom == .code ? RawTextStyle.backgroundColor : .systemGroupedBackground))
@@ -466,7 +448,7 @@ private struct SymbolFileHeader: View {
 
 /// A file's symbols at the Files level, like a C header: each one's declaration (the first line
 /// of its definition), with its kind's icon, long ones wrapped. One view for the whole file;
-/// tapping a line goes to that symbol's card.
+/// tapping a line shows that symbol's code.
 private struct FileDeclarations: View {
     let symbols: [CodeSymbol]
     /// The file's, for its syntax colors.
@@ -474,11 +456,12 @@ private struct FileDeclarations: View {
     /// The file they're in, for Add to Album.
     let file: URL
     let albumContext: AlbumMenuContext?
-    let onTap: @MainActor (CodeSymbol) -> Void
+    /// A line tapped, and where on screen.
+    let onTap: @MainActor (CodeSymbol, CGPoint) -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     init(symbols: [CodeSymbol], fileExtension: String, file: URL, albumContext: AlbumMenuContext?,
-         onTap: @escaping @MainActor (CodeSymbol) -> Void) {
+         onTap: @escaping @MainActor (CodeSymbol, CGPoint) -> Void) {
         self.symbols = symbols
         self.fileExtension = fileExtension
         self.file = file
@@ -505,7 +488,7 @@ private struct FileDeclarations: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
                     .contentShape(Rectangle())
-                    .onTapGesture { onTap(symbol) }
+                    .onTapGesture(coordinateSpace: .global) { onTap(symbol, $0) }
                     .contextMenu {
                         if let albumContext {
                             AlbumMenuItems(items: [AlbumItem(symbol, openFile: file)], context: albumContext)
@@ -513,7 +496,8 @@ private struct FileDeclarations: View {
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(symbol.spokenDescription)
-                    .accessibilityHint(Text("Shows its card"))
+                    .accessibilityHint(Text("Shows its code"))
+                    .accessibilityAction { onTap(symbol, .zero) }
                     .accessibilityAddTraits(.isButton)
             }
         }
@@ -893,6 +877,8 @@ private final class ScrollTracking {
     var isCoasting = false
     /// The card in the middle of the screen.
     var centeredID: Int?
+    /// The list's frame on screen.
+    var frame: CGRect = .zero
     /// The list has moved to where it starts, so `centeredID` changes are the reader's.
     var isPositioned = false
     /// Told about each new card in the middle (the latest closure from the view).
@@ -917,63 +903,5 @@ nonisolated struct SymbolScrollRequest: Equatable, Sendable {
 
     init(_ id: Int) {
         self.id = id
-    }
-}
-
-/// A card's long-press menu: Add to Album, and Select (not while selecting already).
-private struct CardMenu: View {
-    let item: AlbumItem
-    let context: AlbumMenuContext?
-    let selection: SymbolSelection
-    let id: Int
-
-    var body: some View {
-        // Selecting is for albums: only for a project's files.
-        if !selection.isActive, let context {
-            AlbumMenuItems(items: [item], context: context)
-            Button("Select", systemImage: "checkmark.circle") { selection.begin(with: id) }
-        }
-    }
-}
-
-/// One symbol in the list: its kind, name, line and the first lines of its code.
-struct SymbolCard: View {
-    let symbol: CodeSymbol
-    /// The symbol's file's, for its syntax colors.
-    var fileExtension = ""
-    @Environment(\.codeTextStyle) private var codeTextStyle
-
-    private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: symbol.kind.systemImage)
-                    .font(.subheadline)
-                    .foregroundStyle(.tint)
-                Text(symbol.name)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 8)
-                Text(symbol.lineLabel)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            Text(SyntaxColoring.shared.attributed(symbol.preview, fileExtension: fileExtension,
-                                                  theme: codeTextStyle.theme))
-                .font(codeTextStyle.previewFont)
-                .foregroundStyle(.secondary)
-                .lineLimit(SymbolIndexer.previewLineCount)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(12)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: shape)
-        .contentShape(shape)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(symbol.spokenDescription)
     }
 }

@@ -16,7 +16,7 @@ struct BrowserView: View {
     /// the Code level. The file shown at launch comes back where it was left instead.
     @State private var openedURL: URL?
     /// When the open file isn't in the project chosen in the sidebar: that project's file to open
-    /// on moving from Project to Files, Symbols or Code, which list the open file's project.
+    /// on moving from Project to Files or Code, which list the open file's project.
     @State private var projectStartURL: URL?
     @State private var isEditingAddress = false
     /// A shared or pasted address that isn't a URL we can open: shown in the editor with the reason.
@@ -163,7 +163,7 @@ struct BrowserView: View {
 }
 
 extension BrowserView {
-    /// Shows an album: its project becomes the open one, and the Symbols level shows what's
+    /// Shows an album: its project becomes the open one, and the Code level shows what's
     /// in it (from one of the project's files, if the open file is in another project).
     private func showAlbum(_ id: UUID) {
         guard let album = AlbumStore.shared.album(id: id) else { return }
@@ -174,9 +174,9 @@ extension BrowserView {
         let current = currentURL
         Task {
             if let start = await ProjectStartFile.find(projectID: album.projectID, current: current) {
-                openFile(start, at: .symbols)
+                openFile(start, at: .code)
             } else if current != nil {
-                mode = .symbols
+                mode = .code
             } else {
                 mode = .project  // nothing of the project to open yet
             }

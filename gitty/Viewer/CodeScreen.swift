@@ -55,8 +55,6 @@ struct CodeScreen: View {
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
     /// The code font: when it changes, the pages' text is styled again.
     @Environment(\.codeTextStyle) private var codeTextStyle
-    /// Select at the Symbols level (cards chosen for an album).
-    @State private var selection = SymbolSelection()
     @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
 
     init(url: URL, mode: Binding<ViewMode>, projectID: String, opensAtFile: Bool = false, albumID: UUID? = nil,
@@ -94,10 +92,9 @@ struct CodeScreen: View {
             project = projectID.isEmpty ? nil : await ProjectStore.shared.project(id: projectID)
             projectSorting = ListSortingStore.standard.sorting(for: .project, projectID: projectID)
         }
-        .onChange(of: mode) { old, new in
+        .onChange(of: mode) { old, _ in
             model.setBarCollapsed(false)
             if mode == .project { isSearchingSymbols = false }
-            if new != .symbols { selection.end() }
             // Back from Project, where the filter may have changed: index again if it did.
             if mode.showsSymbols, model.symbolIndex.isReady { model.loadProjectSymbols() }
             // …and where files may have been added to the album.
@@ -106,7 +103,6 @@ struct CodeScreen: View {
         .onChange(of: AlbumStore.shared.album(id: albumID), initial: true) { _, album in
             model.show(album: album)
         }
-        .onChange(of: model.activeAlbum?.id) { selection.end() }
         .onChange(of: AlbumStore.shared.downloadCount) { model.refreshAlbumFiles() }
         .onChange(of: mode, initial: true) {
             if mode == .project { hasShownProject = true }
@@ -247,8 +243,7 @@ struct CodeScreen: View {
                 onOpenFile: { openFile($0) },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 onCloseSearch: closeSearchAction,
-                albumContext: albumContext,
-                selection: selection
+                albumContext: albumContext
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()
@@ -309,11 +304,6 @@ struct CodeScreen: View {
         }
     }
 
-    /// The selected cards as album items.
-    private func selectedItems(_ ids: Set<Int>) -> [AlbumItem] {
-        guard !ids.isEmpty else { return [] }
-        return shownSymbols.filter { ids.contains($0.id) }.map { AlbumItem($0, openFile: model.url) }
-    }
 
     /// Where the list starts: the file's own entry when it was just opened, otherwise where it
     /// was left last time this file was open.
@@ -378,9 +368,7 @@ struct CodeScreen: View {
     /// address.
     @ViewBuilder
     private var bottom: some View {
-        if selection.isActive, let albumContext {
-            AlbumSelectionBar(selection: selection, items: { selectedItems($0) }, context: albumContext)
-        } else if isSearchingSymbols && barSearchesSymbols {
+        if isSearchingSymbols && barSearchesSymbols {
             SymbolSearchEditor(query: $symbolQuery, isSearching: isSearchPending,
                                placeholder: searchesFileNames ? String(localized: "Search Files")
                                    : String(localized: "Search Symbols"),
