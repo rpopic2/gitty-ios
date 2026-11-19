@@ -1190,6 +1190,9 @@ private struct SymbolCodeText: View {
     let blames: BlameStore
     let file: URL
     let layoutKey: CodeLayoutKey?
+    /// The word to mark: an occurrences page's, or else the identifier highlighted on pages.
+    @Environment(\.codeMark) private var codeMark
+    @Environment(HighlightState.self) private var highlights: HighlightState?
     /// Around the code, or before it's laid out: opens the page at the top.
     let onTap: @MainActor () -> Void
     /// On the code: opens the page at the line tapped.
@@ -1262,7 +1265,8 @@ private struct SymbolCodeText: View {
     /// While peeking, slid right with its line numbers.
     private func piece(_ layout: CodePieceLayout) -> some View {
         CodePieceView(layout: layout, firstFileLine: block.firstLine, isPeeking: peek.isActive,
-                      blame: peek.isBlameShown ? blames.blame(for: file) : nil)
+                      blame: peek.isBlameShown ? blames.blame(for: file) : nil,
+                      mark: codeMark ?? highlights?.current?.name)
             .contentShape(Rectangle())
             // Where in the piece (for the line) and where on screen (for where it goes on the page).
             .gesture(

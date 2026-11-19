@@ -24,6 +24,10 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
     private let lineStarts: [(row: Int, line: Int)]
     /// The piece's first line, counted from its block's first (0).
     let firstLine: Int
+    /// Its text, for marking a word in it.
+    private let string: NSString
+    /// The last word marked and where it is (drawing happens on the main thread only).
+    private var markCache: (word: String, rects: [CGRect])?
 
     init(_ text: CodeText, key: CodeLayoutKey) {
         self.key = key
@@ -55,6 +59,7 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
         self.origins = origins
 
         let utf16 = text.string as NSString
+        string = utf16
         var starts: [(row: Int, line: Int)] = []
         var line = 0
         var counted = 0  // where newlines have been counted up to
@@ -105,6 +110,33 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
         return rows
     }
 
+    /// Where a word is in the piece, as a whole word with its exact case: a rectangle per
+    /// row it's on. Worked out once per word.
+    func rects(of word: String) -> [CGRect] {
+        if let markCache, markCache.word == word { return markCache.rects }
+        var rects: [CGRect] = []
+        let ranges = Occurrences.ranges(of: word, in: string)
+        if !ranges.isEmpty {
+            for (row, line) in lines.enumerated() {
+                let lineRange = CTLineGetStringRange(line)
+                for range in ranges {
+                    let start = max(range.location, lineRange.location)
+                    let end = min(NSMaxRange(range), lineRange.location + lineRange.length)
+                    guard start < end else { continue }
+                    var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+                    CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+                    let x0 = CTLineGetOffsetForStringIndex(line, start, nil)
+                    let x1 = CTLineGetOffsetForStringIndex(line, end, nil)
+                    let top = height - origins[row].y - ascent
+                    rects.append(CGRect(x: origins[row].x + x0 - 1, y: top - 1,
+                                        width: x1 - x0 + 2, height: ascent + descent + 2))
+                }
+            }
+        }
+        markCache = (word, rects)
+        return rects
+    }
+
     /// Draws the code.
     func draw(in context: CGContext) {
         context.saveGState()
@@ -141,6 +173,8 @@ struct CodePieceView: UIViewRepresentable {
     let isPeeking: Bool
     /// Who last changed the file's lines, while the blame shows.
     var blame: BlameStore.FileBlame? = nil
+    /// A word to mark wherever it is (`CodePieceLayout.rects(of:)`).
+    var mark: String? = nil
 
     func makeUIView(context: Context) -> CodePieceUIView {
         CodePieceUIView()
@@ -149,6 +183,7 @@ struct CodePieceView: UIViewRepresentable {
     func updateUIView(_ view: CodePieceUIView, context: Context) {
         view.update(layout: layout, firstFileLine: firstFileLine, isPeeking: isPeeking)
         view.update(blame: blame)
+        view.mark = mark
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: CodePieceUIView, context: Context) -> CGSize? {
@@ -163,6 +198,10 @@ final class CodePieceUIView: UIView {
     private let blameView = CodeBlameView()
     /// Who last changed the file's lines, while the blame shows (`nil` otherwise).
     private(set) var blame: BlameStore.FileBlame?
+    /// A word marked wherever it is in the piece, behind the text.
+    var mark: String? {
+        didSet { if mark != oldValue { setNeedsDisplay() } }
+    }
 
     /// Room left of the code for the numbers: the peek's slide and the block's margin.
     static let gutterWidth = CodePeek.width + RawTextStyle.insets.left
@@ -215,6 +254,12 @@ final class CodePieceUIView: UIView {
 
     override func draw(_ rect: CGRect) {
         guard let layout, let context = UIGraphicsGetCurrentContext() else { return }
+        if let mark, !mark.isEmpty {
+            tintColor.withAlphaComponent(0.3).setFill()
+            for rect in layout.rects(of: mark) {
+                UIBezierPath(roundedRect: rect, cornerRadius: 3).fill()
+            }
+        }
         layout.draw(in: context)
     }
 

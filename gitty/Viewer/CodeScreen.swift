@@ -621,6 +621,7 @@ struct CodeScreen: View {
                 collapsed: search.collapsed
             )
             .equatable()
+            .environment(\.codeMark, search.term)  // what it found, marked
         }
         // Its cards zoom out of it; it zooms out of (and back into) its card.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
