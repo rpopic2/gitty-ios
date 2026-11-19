@@ -17,13 +17,6 @@ enum FileBarMetrics {
     static let fieldHorizontalMargin: CGFloat = 12
     static let barVerticalPadding: CGFloat = 8
 
-    // Mode selector (Project / File / Symbols) under the bar.
-    static let selectorHeight: CGFloat = 32
-    static let selectorMaxWidth: CGFloat = 320
-    static var selectorPadding: CGFloat {
-        if #available(iOS 26.0, *) { return 4 } else { return 0 }  // glass padding around it
-    }
-    static let selectorBottomPadding: CGFloat = 8
 
     static let titleFont = Font.system(size: 17)
     static let collapsedTitleFont = Font.system(size: 12)
@@ -38,10 +31,10 @@ enum FileBarMetrics {
         }
     }
 
-    /// Height of the expanded bar plus the mode selector, above the bottom safe area. Content keeps
-    /// this much free at its end, and never changes it, so nothing jumps when the bar collapses.
+    /// Height of the expanded bar, above the bottom safe area. Content keeps this much free at
+    /// its end, and never changes it, so nothing jumps when the bar collapses.
     static var expandedHeight: CGFloat {
-        barHeight + selectorHeight + 2 * selectorPadding + selectorBottomPadding
+        barHeight
     }
 }
 
@@ -297,15 +290,12 @@ private struct ProgressLine: View {
     }
 }
 
-/// The bottom of the screen: the file bar with the mode selector under it.
-/// When the bar collapses on scroll, the selector hides with it.
+/// The bottom of the screen: the file bar, with a set-aside review docked above it.
 struct BottomBarStack: View {
     let title: String
     let isCollapsed: Bool
     let progressFraction: Double
     let isProgressVisible: Bool
-    /// `nil` hides the mode selector (start page).
-    let mode: Binding<ViewMode>?
     let onExpand: @MainActor () -> Void
     let onEdit: @MainActor () -> Void
     let copyText: String?
@@ -313,8 +303,6 @@ struct BottomBarStack: View {
     let onOpenInBrowser: (@MainActor () -> Void)?
     let searchQuery: String?
     let onClearSearch: (@MainActor () -> Void)?
-    /// The sort button beside the mode selector (`nil`: none).
-    let sorting: Binding<ListSorting>?
     let onCollapseAll: (@MainActor () -> Void)?
     let onExpandAll: (@MainActor () -> Void)?
     /// Before the title: an album's icon while one shows.
@@ -325,12 +313,10 @@ struct BottomBarStack: View {
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(title: String, isCollapsed: Bool, progressFraction: Double, isProgressVisible: Bool,
-         mode: Binding<ViewMode>?,
          onExpand: @escaping @MainActor () -> Void, onEdit: @escaping @MainActor () -> Void,
          copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
-         sorting: Binding<ListSorting>? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
          titleIcon: String? = nil) {
         self.title = title
@@ -338,8 +324,6 @@ struct BottomBarStack: View {
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
         self.isProgressVisible = isProgressVisible
-        self.sorting = sorting
-        self.mode = mode
         self.onExpand = onExpand
         self.onEdit = onEdit
         self.copyText = copyText
@@ -362,22 +346,6 @@ struct BottomBarStack: View {
                     copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                     searchQuery: searchQuery, onClearSearch: onClearSearch,
                     onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, titleIcon: titleIcon)
-            if !isCollapsed, let mode {
-                HStack(spacing: 8) {
-                    if let sorting {
-                        ListSortMenu(sorting: sorting)
-                            .transition(.opacity)
-                    }
-                    ModeSelector(mode: mode)
-                    if sorting != nil {
-                        // As wide as the button, so the selector stays centered.
-                        Color.clear.frame(width: ListSortMenu.size, height: 1)
-                    }
-                }
-                .padding(.bottom, FileBarMetrics.selectorBottomPadding)
-                .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
         }
 
         if #available(iOS 26.0, *) {

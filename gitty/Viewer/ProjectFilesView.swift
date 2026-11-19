@@ -8,12 +8,8 @@ import UIKit
 /// Code level. Pull to refresh the project's file list.
 struct ProjectFilesView: View {
     let projectID: String
-    /// The file on screen, marked in the list.
-    let currentURL: URL?
-    /// False while File or Symbols covers it (see `ProjectView`).
+    /// False while the Code level covers it (see `ProjectView`).
     let isActive: Bool
-    /// Name (directory headers) or recently opened (one flat list), and reversed or not.
-    let sorting: ListSorting
     let onOpen: @MainActor (URL) -> Void
     /// The album shown, marked in the list.
     let currentAlbumID: UUID?
@@ -23,8 +19,6 @@ struct ProjectFilesView: View {
     @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
 
     @State private var state: LoadState = .loading
-    /// Files with a saved copy (they open offline).
-    @State private var saved: Set<URL> = []
     /// The project's clone, if it's cloned.
     @State private var clone: CloneRecord?
     /// While cloning: the fraction received.
@@ -46,39 +40,25 @@ struct ProjectFilesView: View {
     @State private var filter = FileFilter.none
     @FocusState private var isEditingFilter: Bool
     @State private var hasLoadedFilter = false
-    /// The project's files before filtering.
+    /// The project's files before filtering, and those the filter keeps.
     @State private var fileCount = 0
+    @State private var matchingCount = 0
     @Environment(\.openURL) private var openURL
 
     private enum LoadState {
         case loading
-        case loaded(ProjectInfo, ProjectTree, Layout)
+        case loaded(ProjectInfo, ProjectTree)
         case failed(any Error)
-    }
-
-    /// The files as listed: under directory headers (name order), or flat (recently opened).
-    private nonisolated enum Layout: Sendable {
-        case directories([ProjectTree.Directory])
-        case flat([ProjectTree.Entry])
-
-        var fileCount: Int {
-            switch self {
-            case .directories(let directories): directories.reduce(0) { $0 + $1.files.count }
-            case .flat(let files): files.count
-            }
-        }
     }
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(projectID: String, currentURL: URL?, isActive: Bool, sorting: ListSorting,
+    init(projectID: String, isActive: Bool,
          currentAlbumID: UUID? = nil, onOpenAlbum: @escaping @MainActor (UUID) -> Void = { _ in },
          onShowProject: @escaping @MainActor () -> Void = {},
          onOpen: @escaping @MainActor (URL) -> Void) {
         self.projectID = projectID
-        self.currentURL = currentURL
         self.isActive = isActive
-        self.sorting = sorting
         self.currentAlbumID = currentAlbumID
         self.onOpenAlbum = onOpenAlbum
         self.onShowProject = onShowProject
@@ -88,10 +68,6 @@ struct ProjectFilesView: View {
     var body: some View {
         content
             .task { await load(refresh: false) }  // once: switching modes keeps this view
-            .onChange(of: isActive) { _, isActive in
-                if isActive { Task { await catchUp() } }
-            }
-            .onChange(of: sorting) { Task { await rearrange() } }
             .sheet(isPresented: $isSigningIn) {
                 GitHubSignInView {
                     isSigningIn = false
@@ -100,10 +76,7 @@ struct ProjectFilesView: View {
             }
             .sheet(isPresented: $isShowingHistory, onDismiss: {
                 // It may have cloned the project.
-                Task {
-                    clone = await CloneStore.shared.record(forProject: projectID)
-                    saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
-                }
+                Task { clone = await CloneStore.shared.record(forProject: projectID) }
             }) {
                 BranchHistoryView(projectID: projectID)
                     .presentationDetents([.medium, .large])
@@ -142,12 +115,12 @@ struct ProjectFilesView: View {
                 failureActions(for: error)
             }
             .background(Color(uiColor: .systemGroupedBackground))
-        case .loaded(let project, let tree, let layout):
-            list(project: project, tree: tree, layout: layout)
+        case .loaded(let project, let tree):
+            list(project: project, tree: tree)
         }
     }
 
-    private func list(project: ProjectInfo, tree: ProjectTree, layout: Layout) -> some View {
+    private func list(project: ProjectInfo, tree: ProjectTree) -> some View {
         List {
             Section {
                 // Like "all of it" above the albums: a tap shows the whole project at the Code
@@ -163,9 +136,9 @@ struct ProjectFilesView: View {
                 filterRow
                 branchRow(project: project)
             } footer: {
-                headerFooter(tree: tree, layout: layout)
+                headerFooter(tree: tree)
             }
-            if layout.fileCount == 0 && !filter.isEmpty {
+            if matchingCount == 0 && !filter.isEmpty {
                 Section {
                     Text("No files match this filter.")
                         .foregroundStyle(.secondary)
@@ -233,10 +206,10 @@ struct ProjectFilesView: View {
     }
 
     @ViewBuilder
-    private func headerFooter(tree: ProjectTree, layout: Layout) -> some View {
+    private func headerFooter(tree: ProjectTree) -> some View {
         let lines = [
             filter.isEmpty ? nil
-                : "Showing \(layout.fileCount) of \(fileCount) files.",
+                : "Showing \(matchingCount) of \(fileCount) files.",
             tree.truncated ? "This repository is very large, so GitHub listed only some of its files." : nil,
         ].compactMap { $0 }
         if !lines.isEmpty {
@@ -253,67 +226,31 @@ struct ProjectFilesView: View {
             Task {
                 guard (try? await CloneStore.shared.applyFilter(saved, projectID: projectID)) == true else { return }
                 clone = await CloneStore.shared.record(forProject: projectID)
-                self.saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
             }
         }
         let new = FileFilter(filterText.trimmingCharacters(in: .whitespaces))
         guard new != filter else { return }
         filter = new
         guard case .loaded = state else { return }
-        Task { await rearrange() }
+        Task { await recount() }
     }
 
-    /// Lists the files again for the filter and the sorting, away from the main thread.
-    private func rearrange() async {
-        guard case .loaded(let project, let tree, _) = state else { return }
-        let layout = await arrange(project: project, tree: tree)
-        guard let layout else { return }  // changed meanwhile: a newer arrangement follows
-        state = .loaded(project, tree, layout)
+    /// Counts the files the filter keeps again, for the footer.
+    private func recount() async {
+        guard case .loaded(let project, let tree) = state else { return }
+        guard let count = await count(project: project, tree: tree) else { return }  // a newer count follows
+        matchingCount = count
     }
 
-    /// The files for the current filter and sorting, `nil` if either changed meanwhile.
-    private func arrange(project: ProjectInfo, tree: ProjectTree) async -> Layout? {
-        let filter = filter, sorting = sorting, folder = project.folder ?? ""
-        let history = sorting.order == .recentlyOpened ? await OpenHistory.shared.snapshot() : [:]
-        let layout = await Task.detached(priority: .userInitiated) {
-            Self.layout(of: tree, project: project, folder: folder, filter: filter,
-                        sorting: sorting, history: history)
+    /// How many files the current filter keeps, away from the main thread (a big repository has
+    /// many paths); `nil` if the filter changed meanwhile.
+    private func count(project: ProjectInfo, tree: ProjectTree) async -> Int? {
+        let filter = filter, folder = project.folder ?? ""
+        let count = await Task.detached(priority: .userInitiated) {
+            tree.files(under: folder, matching: filter).count
         }.value
-        guard filter == self.filter, sorting == self.sorting else { return nil }
-        return layout
-    }
-
-    /// Grouping and sorting a big repository's paths takes long enough to stutter, so this runs
-    /// in the background.
-    nonisolated private static func layout(of tree: ProjectTree, project: ProjectInfo, folder: String,
-                                           filter: FileFilter, sorting: ListSorting,
-                                           history: [String: Date]) -> Layout {
-        switch sorting.order {
-        case .name:
-            let directories = tree.directories(under: folder, matching: filter)
-            guard sorting.isReversed else { return .directories(directories) }
-            return .directories(directories.reversed().map {
-                ProjectTree.Directory(path: $0.path, files: $0.files.reversed())
-            })
-        case .recentlyOpened:
-            let files = tree.files(under: folder, matching: filter)
-            return .flat(sorting.arrange(files, key: { project.rawURL(for: $0.path)?.absoluteString },
-                                         name: { $0.path }, history: history))
-        }
-    }
-
-    /// Groups the files by directory away from the main thread: sorting a big repository's
-    /// paths takes long enough to stutter.
-
-    /// Shown again after File or Symbols: only the saved marks can have changed (opening a
-    /// file saves it). The list itself is kept; pull to refresh fetches it again.
-    private func catchUp() async {
-        guard case .loaded = state else { return }
-        // Opening files changes recently opened order.
-        if sorting.order == .recentlyOpened { await rearrange() }
-        let now = Set(await DocumentStore.shared.savedDocuments().map(\.url))
-        guard now != saved else { return }
-        saved = now
+        guard filter == self.filter else { return nil }
+        return count
     }
 
     // MARK: Albums
@@ -386,7 +323,6 @@ struct ProjectFilesView: View {
         do {
             let (project, tree) = try await ProjectStore.shared.tree(for: projectID, refresh: refresh)
             clone = await CloneStore.shared.record(forProject: projectID)
-            saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
             repositoryBytes = Self.bytes(of: tree)
             if refs == nil || refresh { Task { await loadRefs() } }
             if !hasLoadedFilter {  // the saved filter, once
@@ -394,11 +330,9 @@ struct ProjectFilesView: View {
                 filter = FileFilter(filterText)
                 hasLoadedFilter = true
             }
-            // Grouping a big repository takes a moment: once here, not on every redraw.
-            var layout = await arrange(project: project, tree: tree)
-            if layout == nil { layout = await arrange(project: project, tree: tree) }  // sorting changed meanwhile
             fileCount = tree.files(under: project.folder ?? "").count
-            state = .loaded(project, tree, layout ?? .directories([]))
+            matchingCount = await count(project: project, tree: tree) ?? fileCount
+            state = .loaded(project, tree)
         } catch {
             if case .loaded = state, refresh { return }  // keep the list; the pull just ends
             isSignedIn = await GitHubAuth.shared.isSignedIn
@@ -488,7 +422,6 @@ struct ProjectFilesView: View {
                 try await CloneStore.shared.clone(project, filtered: filtered) { continuation.yield($0) }
                 continuation.finish()
                 clone = await CloneStore.shared.record(forProject: projectID)
-                saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
             } catch {
                 continuation.finish()
                 isSignedIn = await GitHubAuth.shared.isSignedIn
@@ -502,7 +435,6 @@ struct ProjectFilesView: View {
         Task {
             await CloneStore.shared.delete(projectID: projectID)
             clone = nil
-            saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
         }
     }
 
@@ -601,7 +533,7 @@ struct ProjectFilesView: View {
     /// Lists the files at another branch or tag. A cloned project fetches its latest commit
     /// and checks it out first, so its files come from the clone there too.
     private func switchRef(to name: String, isTag: Bool) {
-        guard case .loaded(let project, _, _) = state, name != project.ref else { return }
+        guard case .loaded(let project, _) = state, name != project.ref else { return }
         isSwitchingRef = true
         Task {
             defer { isSwitchingRef = false }
@@ -616,10 +548,10 @@ struct ProjectFilesView: View {
                     }
                 }
                 let (moved, tree) = try await ProjectStore.shared.setRef(name, for: projectID)
-                saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
                 fileCount = tree.files(under: moved.folder ?? "").count
+                matchingCount = await count(project: moved, tree: tree) ?? fileCount
                 repositoryBytes = Self.bytes(of: tree)
-                state = .loaded(moved, tree, await arrange(project: moved, tree: tree) ?? .directories([]))
+                state = .loaded(moved, tree)
             } catch {
                 cloneError = error
             }
@@ -631,8 +563,6 @@ struct ProjectFilesView: View {
     }
 }
 
-/// A file in a project: a code icon for files with symbols, the name, its size, and the
-/// offline icon once it's saved.
 /// An album: its name and how many items it has.
 private struct AlbumRow: View {
     let album: Album

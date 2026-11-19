@@ -71,7 +71,6 @@ struct CodeScreen: View {
     @State private var hasShownProject = false
     /// The project chosen in the sidebar, for the bar in Project mode (`nil` for Files).
     @State private var project: ProjectInfo?
-    /// The Project tab's order for that project (the sort button beside the mode selector).
     /// The review that Comment adds to.
     @Environment(ReviewDraft.self) private var review
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
@@ -189,7 +188,7 @@ struct CodeScreen: View {
             if hasShownProject {
                 let isShowingProject = mode == .project && browseSearch == nil
                 ProjectView(projectID: projectID, currentURL: model.url, isActive: isShowingProject,
-                            sorting: ListSorting(), currentAlbumID: albumID, onOpenAlbum: onOpenAlbum,
+                            currentAlbumID: albumID, onOpenAlbum: onOpenAlbum,
                             onShowProject: onShowProject) { url in
                     open(url)
                 }
@@ -597,7 +596,7 @@ struct CodeScreen: View {
             .background(Color(uiColor: .systemGroupedBackground))
     }
 
-    /// The address editor while editing, otherwise the bar with the mode selector. At the
+    /// The address editor while editing, otherwise the bar. At the
     /// symbol levels, tapping the bar opens a search (a results page) instead of editing the
     /// address.
     @ViewBuilder
@@ -622,7 +621,6 @@ struct CodeScreen: View {
                 isCollapsed: model.isBarCollapsed,
                 progressFraction: model.progressFraction,
                 isProgressVisible: model.isProgressVisible,
-                mode: nil,  // Project is behind the bar now (tap it), not a tab
                 onExpand: { model.expandBarFromTap() },
                 onEdit: { mode = .project },
                 copyText: barAddress,

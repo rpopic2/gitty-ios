@@ -135,7 +135,7 @@ struct BrowserView: View {
         })
     }
 
-    /// Opening a file shows its code, from its own entry (or another level, from the selector).
+    /// Opening a file shows its code, from its own entry.
     private func open(_ url: URL) {
         openFile(url, at: .code)
     }
@@ -147,7 +147,7 @@ struct BrowserView: View {
             return
         }
         RecentFilesStore.standard.add(url)
-        Task { await OpenHistory.shared.recordOpen(url) }  // for recently opened order
+        Task { await OpenHistory.shared.recordOpen(url) }  // for the file a project opens at
         leaveAlbumIfOutside(url)
         openedURL = url
         projectStartURL = nil
@@ -256,7 +256,6 @@ private struct StartScreen: View {
                     isCollapsed: false,
                     progressFraction: 0,
                     isProgressVisible: false,
-                    mode: nil,
                     onExpand: {},
                     onEdit: { isEditingAddress = true },
                     copyText: project == nil ? nil : projectAddress,
