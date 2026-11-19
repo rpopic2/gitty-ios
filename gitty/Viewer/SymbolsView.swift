@@ -56,6 +56,8 @@ struct SymbolsView: View, Equatable {
     @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
     /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
+    /// Each file's symbol count, for its title.
+    @State private var fileCounts = FileSymbolCounts()
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
     /// The line-number peek.
@@ -156,6 +158,21 @@ struct SymbolsView: View, Equatable {
     private func setAllCollapsed(_ isCollapsed: Bool, _ reader: ScrollViewProxy) {
         let anchor = scroll.centeredID
         collapsed.setAllCollapsed(isCollapsed, scope: collapseScope)
+        keep(anchor, reader)
+    }
+
+    /// Folds (or unfolds) every file to its title, keeping the file at the top where it is.
+    private func setAllFilesFolded(_ isFolded: Bool, _ reader: ScrollViewProxy) {
+        // The top symbol's file: its symbols go away.
+        let anchor = scroll.centeredID.flatMap { id -> Int? in
+            guard let index = symbols.firstIndex(where: { $0.id == id }) else { return id }
+            return symbols[...index].last { $0.kind == .file }?.id ?? id
+        }
+        collapsed.setAllFilesFolded(isFolded, scope: collapseScope)
+        keep(anchor, reader)
+    }
+
+    private func keep(_ anchor: Int?, _ reader: ScrollViewProxy) {
         guard let anchor else { return }
         Task { @MainActor in
             await Task.yield()  // once the list has its new heights
@@ -183,7 +200,8 @@ struct SymbolsView: View, Equatable {
         let openFile = openFile
         let scope = collapseScope
         codeBlocks.isShown = {
-            !collapsed.isHidden($0, openFile: openFile) && !collapsed.isCollapsed($0, openFile: openFile, scope: scope)
+            !collapsed.isHidden($0, openFile: openFile, scope: scope)
+                && !collapsed.isCollapsed($0, openFile: openFile, scope: scope)
         }
         codeBlocks.layoutKey = codeWidth > 0
             ? CodeLayoutKey(width: codeWidth - 2 * RawTextStyle.insets.left, style: codeTextStyle,
@@ -200,6 +218,7 @@ struct SymbolsView: View, Equatable {
                 } header: {
                     // Tap to collapse: a symbol's code, or a whole file's symbols.
                     CodeHeader(symbol: symbol, collapsed: collapsed, openFile: openFile, scope: scope,
+                               symbolCount: symbol.kind == .file ? fileCounts.count(of: symbol, in: symbols) : 0,
                                contextMenu: contextMenu(for: symbol))
                 }
             }
@@ -271,18 +290,28 @@ struct SymbolsView: View, Equatable {
             }
     }
 
-    /// Pinching in (fingers together) collapses everything to its titles; pinching out expands
-    /// it all again. Once per pinch, when it passes the threshold.
+    /// Pinching zooms out and in through three steps, one per pinch (when it passes the
+    /// threshold): the code; every symbol collapsed to its title (an outline); every file folded
+    /// to its title. Pinching in (fingers together) goes out a step, pinching out back in.
     private func pinch(_ reader: ScrollViewProxy) -> some Gesture {
         MagnifyGesture()
             .onChanged { value in
                 guard !pinchHandled else { return }
+                let scope = collapseScope
                 if value.magnification < 0.8 {
                     pinchHandled = true
-                    setAllCollapsed(true, reader)
+                    if collapsed.areAllCollapsed(scope: scope) {
+                        setAllFilesFolded(true, reader)
+                    } else {
+                        setAllCollapsed(true, reader)
+                    }
                 } else if value.magnification > 1.25 {
                     pinchHandled = true
-                    setAllCollapsed(false, reader)
+                    if collapsed.areAllFilesFolded(scope: scope) {
+                        setAllFilesFolded(false, reader)
+                    } else {
+                        setAllCollapsed(false, reader)
+                    }
                 }
             }
             .onEnded { _ in pinchHandled = false }
@@ -364,20 +393,26 @@ private struct CodeHeader: View {
     let collapsed: CollapsedCodeStore
     let openFile: URL
     let scope: String
+    /// A file's: how many symbols it has.
+    let symbolCount: Int
     /// Touch and hold (the same menu as the code's).
     let contextMenu: CodeContextMenu
 
     var body: some View {
         VStack(spacing: 0) {
-            if !collapsed.isHidden(symbol, openFile: openFile) {
+            if !collapsed.isHidden(symbol, openFile: openFile, scope: scope) {
                 let isCollapsed = symbol.kind == .file
-                    ? collapsed.isFileCollapsed(symbol.fileURL ?? openFile)
+                    ? collapsed.isFileCollapsed(symbol.fileURL ?? openFile, scope: scope)
                     : collapsed.isCollapsed(symbol, openFile: openFile, scope: scope)
                 Button {
                     withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile, scope: scope) }
                 } label: {
-                    SymbolTitle(symbol: symbol, isCollapsed: isCollapsed,
-                                fileExtension: (symbol.fileURL ?? openFile).pathExtension)
+                    if symbol.kind == .file {
+                        FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed)
+                    } else {
+                        SymbolTitle(symbol: symbol, isCollapsed: isCollapsed,
+                                    fileExtension: (symbol.fileURL ?? openFile).pathExtension)
+                    }
                 }
                 .buttonStyle(.plain)
                 .background { contextMenu }
@@ -390,6 +425,69 @@ private struct CodeHeader: View {
     static func declaration(of symbol: CodeSymbol) -> String {
         let line = symbol.preview.prefix { $0 != "\n" }.trimmingCharacters(in: .whitespaces)
         return line.isEmpty ? symbol.name : line
+    }
+}
+
+/// A file's title, bigger than a symbol's so it stands out: its name and how many symbols it
+/// has, with a chevron (down while its symbols show, right while it's folded). Like the old
+/// Files level's headers.
+private struct FileTitle: View {
+    let name: String
+    let count: Int
+    let isFolded: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isFolded ? 0 : 90))
+            Text(name)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("· \(count)")
+                .font(.subheadline)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 44)
+        .background(.bar)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(name), \(count) symbols")
+        .accessibilityValue(isFolded ? Text("Folded") : Text("Unfolded"))
+        .accessibilityHint(isFolded ? Text("Shows the file’s symbols") : Text("Hides the file’s symbols"))
+        .accessibilityAddTraits([.isHeader, .isButton])
+    }
+}
+
+/// Each file's symbol count in the list, worked out again only when the list changes (not on
+/// every redraw: a big project has tens of thousands of symbols). Not observed.
+private final class FileSymbolCounts {
+    private var key: [Int?] = []
+    private var counts: [Int: Int] = [:]
+
+    /// A file entry's count: the symbols after it, up to the next file.
+    func count(of entry: CodeSymbol, in symbols: [CodeSymbol]) -> Int {
+        let key: [Int?] = [symbols.count, symbols.first?.id, symbols.last?.id]
+        if key != self.key {
+            self.key = key
+            counts = [:]
+            // One pass: a file's entry, then its symbols (the same `fileURL`).
+            var current: (id: Int, file: URL?)?
+            for symbol in symbols {
+                if symbol.kind == .file {
+                    current = (symbol.id, symbol.fileURL)
+                    counts[symbol.id] = 0
+                } else if let current, symbol.fileURL == current.file {
+                    counts[current.id, default: 0] += 1
+                }
+            }
+        }
+        return counts[entry.id] ?? 0
     }
 }
 
@@ -723,7 +821,7 @@ private struct SymbolCode: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if symbol.kind != .file, !collapsed.isHidden(symbol, openFile: openFile),
+            if symbol.kind != .file, !collapsed.isHidden(symbol, openFile: openFile, scope: scope),
                !collapsed.isCollapsed(symbol, openFile: openFile, scope: scope) {
                 let block = store.block(for: symbol)
                 SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, onTap: onTap, onTapAt: onTapAt)

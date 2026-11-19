@@ -35,31 +35,34 @@ nonisolated enum FileNameSearch {
 }
 
 /// What's collapsed at the Code level, saved in `UserDefaults`:
-/// - symbols, whose code is hidden under their titles (tap a title). **Collapse All** makes a
-///   list's symbols collapsed by default (its scope, below), so only the ones tapped since are
-///   kept: each symbol is kept only while it differs from its list's default, by file, kind and
-///   name (so it stays as it is when its file changes);
-/// - files, whose symbols are all hidden under the file's title.
+/// - symbols, whose code is hidden under their titles (tap a title);
+/// - files, whose symbols are all hidden under the file's title (tap a file's title).
 ///
-/// A scope is where a list's files are: a project's raw address prefix, or the open file's
-/// address for a file outside projects. Loaded once; each title and block only checks the
-/// sets, and a change writes them once.
+/// Collapse All makes a list's symbols collapsed by default, and pinching in once more folds
+/// its files by default too. Each list has a scope (where its files are: a project's raw
+/// address prefix, or the open file's address outside projects) and its defaults, so a symbol
+/// or a file is kept only while it differs from its scope's default: by file, kind and name
+/// for a symbol (so it stays as it is when its file changes). Loaded once; each title and
+/// block only checks the sets, and a change writes them once.
 @MainActor @Observable
 final class CollapsedCodeStore {
     static let shared = CollapsedCodeStore(defaults: .standard)
 
     /// Symbols that differ from their scope's default.
     private(set) var flipped: Set<String>
-    /// Files folded to their title.
+    /// Files that differ from their scope's default (folded, unless the scope's are).
     private(set) var files: Set<String>
     /// Scopes whose symbols are collapsed by default (Collapse All).
     private(set) var collapsedScopes: Set<String>
+    /// Scopes whose files are folded by default (pinching in on all titles).
+    private(set) var foldedScopes: Set<String>
     @ObservationIgnored private let defaults: UserDefaults
 
     private enum Key {
         static let flipped = "collapsedCode.symbols"
         static let files = "collapsedCode.files"
         static let scopes = "collapsedCode.scopes"
+        static let foldedScopes = "collapsedCode.foldedScopes"
         /// Before Collapse All: symbols and `file#` keys together.
         static let old = "collapsedCode"
     }
@@ -77,6 +80,7 @@ final class CollapsedCodeStore {
         self.flipped = flipped
         self.files = files
         collapsedScopes = Set(defaults.stringArray(forKey: Key.scopes) ?? [])
+        foldedScopes = Set(defaults.stringArray(forKey: Key.foldedScopes) ?? [])
     }
 
     /// - Parameter openFile: the file that symbols without a `fileURL` are in.
@@ -92,22 +96,32 @@ final class CollapsedCodeStore {
         collapsedScopes.contains(scope) != flipped.contains(Self.key(for: symbol, openFile: openFile))
     }
 
-    func isFileCollapsed(_ file: URL) -> Bool {
-        files.contains(Self.key(forFile: file))
+    func isFileCollapsed(_ file: URL, scope: String) -> Bool {
+        foldedScopes.contains(scope) != files.contains(Self.key(forFile: file))
     }
 
-    /// Not shown at all: in a collapsed file (a file's own title always shows).
-    func isHidden(_ symbol: CodeSymbol, openFile: URL) -> Bool {
-        symbol.kind != .file && isFileCollapsed(symbol.fileURL ?? openFile)
+    /// Not shown at all: in a folded file (a file's own title always shows).
+    func isHidden(_ symbol: CodeSymbol, openFile: URL, scope: String) -> Bool {
+        symbol.kind != .file && isFileCollapsed(symbol.fileURL ?? openFile, scope: scope)
+    }
+
+    /// Collapse All is on in the scope (every symbol collapsed, unless tapped open since).
+    func areAllCollapsed(scope: String) -> Bool {
+        collapsedScopes.contains(scope)
+    }
+
+    /// Every file is folded in the scope (unless tapped open since).
+    func areAllFilesFolded(scope: String) -> Bool {
+        foldedScopes.contains(scope)
     }
 
     /// A file's title folds the file; a symbol's, its code.
     func toggle(_ symbol: CodeSymbol, openFile: URL, scope: String) {
+        let key = symbol.kind == .file ? Self.key(forFile: symbol.fileURL ?? openFile)
+            : Self.key(for: symbol, openFile: openFile)
         if symbol.kind == .file {
-            let key = Self.key(forFile: symbol.fileURL ?? openFile)
             if files.contains(key) { files.remove(key) } else { files.insert(key) }
         } else {
-            let key = Self.key(for: symbol, openFile: openFile)
             if flipped.contains(key) { flipped.remove(key) } else { flipped.insert(key) }
         }
         save()
@@ -120,7 +134,7 @@ final class CollapsedCodeStore {
         for symbol in symbols where symbol.kind != .file {
             let key = Self.key(for: symbol, openFile: openFile)
             if isCollapsed == byDefault { flipped.remove(key) } else { flipped.insert(key) }
-            files.remove(Self.key(forFile: symbol.fileURL ?? openFile))
+            setFolded(false, symbol.fileURL ?? openFile, scope: scope)
         }
         save()
     }
@@ -128,24 +142,39 @@ final class CollapsedCodeStore {
     /// Collapse All (or Expand All) in a scope: every symbol's code, and no file folded.
     func setAllCollapsed(_ isCollapsed: Bool, scope: String) {
         if isCollapsed { collapsedScopes.insert(scope) } else { collapsedScopes.remove(scope) }
+        foldedScopes.remove(scope)
         flipped = flipped.filter { !$0.hasPrefix(scope) }
+        files = files.filter { !$0.hasPrefix("file#" + scope) }
+        save()
+    }
+
+    /// Folds (or unfolds) every file in a scope, down to the files' titles; symbols stay as
+    /// they are under them.
+    func setAllFilesFolded(_ isFolded: Bool, scope: String) {
+        if isFolded { foldedScopes.insert(scope) } else { foldedScopes.remove(scope) }
         files = files.filter { !$0.hasPrefix("file#" + scope) }
         save()
     }
 
     /// Shows a symbol and its code.
     func reveal(_ symbol: CodeSymbol, openFile: URL, scope: String) {
-        let fileKey = Self.key(forFile: symbol.fileURL ?? openFile)
-        guard isCollapsed(symbol, openFile: openFile, scope: scope) || files.contains(fileKey) else { return }
-        files.remove(fileKey)
+        let file = symbol.fileURL ?? openFile
+        guard isCollapsed(symbol, openFile: openFile, scope: scope) || isFileCollapsed(file, scope: scope) else { return }
+        setFolded(false, file, scope: scope)
         let key = Self.key(for: symbol, openFile: openFile)
         if collapsedScopes.contains(scope) { flipped.insert(key) } else { flipped.remove(key) }
         save()
+    }
+
+    private func setFolded(_ isFolded: Bool, _ file: URL, scope: String) {
+        let key = Self.key(forFile: file)
+        if isFolded == foldedScopes.contains(scope) { files.remove(key) } else { files.insert(key) }
     }
 
     private func save() {
         defaults.set(flipped.sorted(), forKey: Key.flipped)
         defaults.set(files.sorted(), forKey: Key.files)
         defaults.set(collapsedScopes.sorted(), forKey: Key.scopes)
+        defaults.set(foldedScopes.sorted(), forKey: Key.foldedScopes)
     }
 }
