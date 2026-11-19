@@ -2,8 +2,9 @@ import SwiftUI
 
 /// The cards (pagers) and the search results pushed over the Code level, in the order they
 /// were opened: Search on a card pushes its results, and a result pushes another card on top.
-/// Only the latest results stay in the stack (an older results page is taken out when a newer
-/// search is pushed), so going back passes through cards, and those results.
+/// Nothing is ever taken out from under the page on screen (that cost the card above its
+/// swipe-down): every results page stays, but only the latest keeps its results. An older one
+/// keeps its query and searches again when you come back to it.
 enum CardRoute: Hashable {
     case card(UUID)
     case results(UUID)
@@ -13,6 +14,12 @@ enum CardRoute: Hashable {
     }
 
     var isCard: Bool { !isResults }
+}
+
+/// A results page in the stack: what it searches for, and the card it was searched from.
+struct StackedResults {
+    var query: String
+    let source: CardRoute
 }
 
 /// What a card in the stack pages through, and where it opened.
@@ -33,7 +40,8 @@ struct StackedCard {
 /// album, if one is shown), like the list's.
 @MainActor @Observable
 final class StackSearch {
-    let id = UUID()
+    /// Its results page's (`CardRoute.results`).
+    let id: UUID
     /// The card it was made from: its results page zooms out of it.
     let source: CardRoute
     /// Edited on the results page: the search runs again.
@@ -51,7 +59,8 @@ final class StackSearch {
     @ObservationIgnored private let model: CodeDocumentModel
     @ObservationIgnored private var task: Task<Void, Never>?
 
-    init(query: String, source: CardRoute, model: CodeDocumentModel) {
+    init(id: UUID = UUID(), query: String, source: CardRoute, model: CodeDocumentModel) {
+        self.id = id
         self.query = query
         self.source = source
         self.model = model

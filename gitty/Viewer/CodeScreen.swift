@@ -37,7 +37,9 @@ struct CodeScreen: View {
     /// The cards in `cardPath`. Ones no longer in it are dropped when the next card opens (not
     /// when they close: they're still on screen while they zoom away).
     @State private var stackedCards: [UUID: StackedCard] = [:]
-    /// The latest search made from a card, its results page in `cardPath`.
+    /// The results pages in `cardPath`.
+    @State private var stackedResults: [UUID: StackedResults] = [:]
+    /// The search of the latest results page shown: the only one that keeps its results.
     @State private var stackSearch: StackSearch?
     /// The symbol on screen in the card opened from the list.
     @State private var pagerSymbolID: Int?
@@ -135,7 +137,7 @@ struct CodeScreen: View {
             case .card(let id):
                 if let card = stackedCards[id] { cardView(card, route: route) }
             case .results(let id):
-                if let search = stackSearch, search.id == id { resultsView(search, route: route) }
+                if let entry = stackedResults[id] { resultsPage(id: id, entry: entry, route: route) }
             }
         }
         .sheet(item: $historyFile) { file in
@@ -289,6 +291,7 @@ struct CodeScreen: View {
                                         initialID: symbol.id, anchor: anchor,
                                         zoomSource: anchor == nil ? AnyHashable(symbol.id) : Self.screenSourceID,
                                         isBase: true, depth: 1)]
+        stackedResults = [:]
         stackSearch = nil
         pagerSymbolID = symbol.id
         cardPath = [.card(id)]
@@ -326,8 +329,40 @@ struct CodeScreen: View {
         .navigationTransition(.zoom(sourceID: card.zoomSource, in: pagerNamespace))
     }
 
-    /// A search's results, stacked over the card it was made from.
-    private func resultsView(_ search: StackSearch, route: CardRoute) -> some View {
+    /// A results page, stacked over the card it was searched from: the latest search's results,
+    /// or an older page coming back (it searches again).
+    private func resultsPage(id: UUID, entry: StackedResults, route: CardRoute) -> some View {
+        Group {
+            if let search = stackSearch, search.id == id {
+                resultsView(search)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(uiColor: .systemGroupedBackground))
+                    .toolbar(.hidden, for: .navigationBar)
+                    .onAppear { reviveSearch(id) }
+            }
+        }
+        // Its cards zoom out of it; it zooms out of (and back into) its card. Outside the `if`, so
+        // they stay the same while it searches again.
+        .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
+        .navigationTransition(.zoom(sourceID: AnyHashable(entry.source), in: pagerNamespace))
+    }
+
+    /// An older results page is back on screen: it's the latest one now, searching again.
+    private func reviveSearch(_ id: UUID) {
+        guard stackSearch?.id != id, let entry = stackedResults[id] else { return }
+        keepQuery()
+        stackSearch = StackSearch(id: id, query: entry.query, source: entry.source, model: model)
+    }
+
+    /// The live search's query, changed on its page, for when that page comes back.
+    private func keepQuery() {
+        if let search = stackSearch { stackedResults[search.id]?.query = search.query }
+    }
+
+    /// The latest search's results.
+    private func resultsView(_ search: StackSearch) -> some View {
         StackResultsView(search: search) { symbols, query, onScrollDown in
             SymbolsView(
                 symbols: symbols,
@@ -356,23 +391,29 @@ struct CodeScreen: View {
             )
             .equatable()
         }
-        // Its cards zoom out of it; it zooms out of (and back into) its card.
-        .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
-        .navigationTransition(.zoom(sourceID: AnyHashable(search.source), in: pagerNamespace))
     }
 
-    /// Search on a card: its results go on top of it. Only the latest results stay in the stack:
-    /// an older results page (under this card) is taken out.
+    /// Search on a card: its results go on top of it. Older results pages stay where they are,
+    /// keeping only their query.
     private func searchInStack(for query: String, from card: CardRoute) {
+        pruneStack()
+        keepQuery()
         let search = StackSearch(query: query, source: card, model: model)
+        stackedResults[search.id] = StackedResults(query: query, source: card)
         stackSearch = search
-        cardPath = cardPath.filter(\.isCard) + [.results(search.id)]
+        cardPath.append(.results(search.id))
+    }
+
+    /// Cards and results pages that have closed since are gone for good. (Not as they close:
+    /// they're still on screen while they zoom away.)
+    private func pruneStack() {
+        stackedCards = stackedCards.filter { cardPath.contains(.card($0.key)) }
+        stackedResults = stackedResults.filter { cardPath.contains(.results($0.key)) }
     }
 
     /// A result's card, on top of the results, paging through them.
     private func openStackedCard(at symbol: CodeSymbol, anchor: PageAnchor?, from search: StackSearch) {
-        // Cards that have closed since are gone for good.
-        stackedCards = stackedCards.filter { cardPath.contains(.card($0.key)) }
+        pruneStack()
         let id = UUID()
         stackedCards[id] = StackedCard(symbols: search.results, initialID: symbol.id, anchor: anchor,
                                        zoomSource: AnyHashable(CardRoute.results(search.id)),
