@@ -258,9 +258,12 @@ struct SymbolsView: View, Equatable {
     private var groupedByFolder: some View {
         let collapsed = collapsed
         let scope = collapseScope
-        let layout = FolderRows(groups: folderGroups.groups(of: symbols, openFile: openFile, scope: scope)) {
-            collapsed.isFolderFolded($0.path, scope: scope)
-        }
+        let openFile = openFile
+        let layout = FolderRows(groups: folderGroups.groups(of: symbols, openFile: openFile, scope: scope),
+                                isFolded: { collapsed.isFolderFolded($0.path, scope: scope) },
+                                // A folded file's symbols aren't items at all: thousands of empty
+                                // ones made scrolling here lag.
+                                isShown: { !collapsed.isHidden($0, openFile: openFile, scope: scope) })
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(layout.leading) { folderHeader($0) }
             ForEach(layout.rows, id: \.symbol.id) { row in
@@ -626,11 +629,12 @@ private struct FolderRows {
     private(set) var leading: [FolderGroup] = []
     private(set) var rows: [Row] = []
 
-    init(groups: [FolderGroup], isFolded: (FolderGroup) -> Bool) {
+    /// - Parameter isShown: whether a symbol shows (not in a folded file).
+    init(groups: [FolderGroup], isFolded: (FolderGroup) -> Bool, isShown: (CodeSymbol) -> Bool) {
         for group in groups {
             if rows.isEmpty { leading.append(group) } else { rows[rows.count - 1].folders.append(group) }
             guard !isFolded(group) else { continue }
-            rows += group.symbols.map { Row(symbol: $0) }
+            for symbol in group.symbols where isShown(symbol) { rows.append(Row(symbol: symbol)) }
         }
     }
 }
