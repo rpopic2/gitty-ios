@@ -40,7 +40,7 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
             string.addAttribute(NSAttributedString.Key(kCTForegroundColorAttributeName as String),
                                 value: color.resolvedColor(with: traits).cgColor, range: run.range)
         }
-        let framesetter = CTFramesetterCreateWithAttributedString(string)
+        let framesetter = CTFramesetterCreateWithAttributedString(string as CFAttributedString)
         let width = max(1, key.width)
         let suggested = CTFramesetterSuggestFrameSizeWithConstraints(
             framesetter, CFRange(location: 0, length: 0), nil,
