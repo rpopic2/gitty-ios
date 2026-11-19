@@ -57,12 +57,17 @@ final class StackSearch {
     /// What's collapsed on its page: its own, starting with nothing, so every result shows
     /// (the Code level's folded files hid theirs, under a count that included them).
     @ObservationIgnored let collapsed = CollapsedCodeStore.temporary()
+    /// Its page opens with the search field focused (a search from the bar, which starts empty
+    /// and shows results as you type).
+    @ObservationIgnored let startsEditing: Bool
 
     @ObservationIgnored private let model: CodeDocumentModel
     @ObservationIgnored private var task: Task<Void, Never>?
 
-    init(id: UUID = UUID(), query: String, source: AnyHashable, model: CodeDocumentModel) {
+    init(id: UUID = UUID(), query: String, source: AnyHashable, startsEditing: Bool = false,
+         model: CodeDocumentModel) {
         self.id = id
+        self.startsEditing = startsEditing
         self.query = query
         self.source = source
         self.model = model
@@ -116,9 +121,10 @@ final class StackSearch {
     }
 }
 
-/// A search's results, stacked over the card it was made from: the same code blocks as the Code
-/// level's, with the search in a capsule at the bottom (tap it to change the search). Tap a
-/// result's code for its card, stacked on top. Swipe down to go back to the card.
+/// A search's results, stacked over the card it was made from (or the Code level): the same code
+/// blocks as the Code level's, with the search in a capsule at the bottom (tap it to change the
+/// search; the results follow as you type). Tap a result's code for its card, stacked on top.
+/// Swipe down to go back.
 struct StackResultsView<Results: View>: View {
     @Bindable var search: StackSearch
     /// Its place in the stack, shown before the search from 2 up.
@@ -129,9 +135,20 @@ struct StackResultsView<Results: View>: View {
     /// The list, for the results so far and their query.
     @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String, _ onScrollDown: @escaping @MainActor (Bool) -> Void) -> Results
 
-    @State private var isEditing = false
+    @State private var isEditing: Bool
     /// Scrolling down hides the capsule; scrolling up shows it.
     @State private var isBarHidden = false
+    @Environment(\.dismiss) private var dismiss
+
+    init(search: StackSearch, stackDepth: Int, shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
+         @ViewBuilder list: @escaping (_ symbols: [CodeSymbol], _ query: String,
+                                       _ onScrollDown: @escaping @MainActor (Bool) -> Void) -> Results) {
+        self.search = search
+        self.stackDepth = stackDepth
+        self.shownCount = shownCount
+        self.list = list
+        _isEditing = State(initialValue: search.startsEditing)
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -140,11 +157,21 @@ struct StackResultsView<Results: View>: View {
                 .animation(.smooth(duration: 0.25), value: isBarHidden)
         }
         .toolbar(.hidden, for: .navigationBar)
+        // Closing the field before typing anything: nothing to show, so back to where it was.
+        .onChange(of: isEditing) {
+            if !isEditing, isQueryEmpty { dismiss() }
+        }
+    }
+
+    private var isQueryEmpty: Bool {
+        search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     @ViewBuilder
     private var content: some View {
-        if search.results.isEmpty && search.isPending {
+        if isQueryEmpty {
+            placeholder { EmptyView() }  // waiting for the first letters
+        } else if search.results.isEmpty && search.isPending {
             placeholder { ProgressView() }
         } else if search.results.isEmpty {
             placeholder { ContentUnavailableView.search(text: search.query) }

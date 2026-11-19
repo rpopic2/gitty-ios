@@ -55,9 +55,6 @@ struct CodeScreen: View {
         let url: URL
         var id: URL { url }
     }
-    /// The bar's search field, while it's open. Search pushes a results page (`searchFromList`).
-    @State private var symbolQuery = ""
-    @State private var isSearchingSymbols = false
     /// The list hasn't started yet: when `opensAtFile`, it starts at the file's own entry.
     @State private var startsAtFile: Bool
     /// Project has been shown at least once (it's kept from then on).
@@ -113,7 +110,6 @@ struct CodeScreen: View {
         }
         .onChange(of: mode) { old, _ in
             model.setBarCollapsed(false)
-            if mode == .project { isSearchingSymbols = false }
             // Back from Project, where the filter may have changed: index again if it did.
             if mode.showsSymbols, model.symbolIndex.isReady { model.loadProjectSymbols() }
             // …and where files may have been added to the album.
@@ -390,16 +386,12 @@ struct CodeScreen: View {
         }
     }
 
-    /// Search in the bar: the results page is the first in the stack, zooming out of the whole
-    /// screen. The search field empties for next time.
+    /// Search in the bar: a results page, the first in the stack (zooming out of the whole
+    /// screen), with its search field focused. The results follow as you type.
     private func searchFromList() {
-        let query = symbolQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        isSearchingSymbols = false
-        symbolQuery = ""
-        guard !query.isEmpty else { return }
-        let search = StackSearch(query: query, source: Self.screenSourceID, model: model)
+        let search = StackSearch(query: "", source: Self.screenSourceID, startsEditing: true, model: model)
         stackedCards = [:]
-        stackedResults = [search.id: StackedResults(query: query, source: Self.screenSourceID, depth: 1)]
+        stackedResults = [search.id: StackedResults(query: "", source: Self.screenSourceID, depth: 1)]
         stackSearch = search
         cardPath = [.results(search.id)]
     }
@@ -492,18 +484,12 @@ struct CodeScreen: View {
             .background(Color(uiColor: .systemGroupedBackground))
     }
 
-    /// The address editor or the symbol search while editing, otherwise the bar with the mode
-    /// selector. At the symbol levels, tapping the bar searches symbols instead of editing the
+    /// The address editor while editing, otherwise the bar with the mode selector. At the
+    /// symbol levels, tapping the bar opens a search (a results page) instead of editing the
     /// address.
     @ViewBuilder
     private var bottom: some View {
-        if isSearchingSymbols && barSearchesSymbols {
-            // Search pushes a results page (as Search on a card does): the list stays as it is.
-            SymbolSearchEditor(query: $symbolQuery,
-                               placeholder: String(localized: "Search Files and Symbols"),
-                               onClose: { isSearchingSymbols = false },
-                               onSubmit: { searchFromList() })
-        } else if isEditingAddress {
+        if isEditingAddress {
             AddressEditor(
                 initialText: rejectedAddress ?? barAddress,
                 showsInitialError: rejectedAddress != nil,
@@ -522,7 +508,7 @@ struct CodeScreen: View {
                 onEdit: {
                     // The symbol levels search symbols; the address is edited from Project (or
                     // while the file hasn't loaded).
-                    if barSearchesSymbols { isSearchingSymbols = true } else { isEditingAddress = true }
+                    if barSearchesSymbols { searchFromList() } else { isEditingAddress = true }
                 },
                 copyText: barAddress,
                 onPasteAndGo: onPasteAndGo,
@@ -556,7 +542,7 @@ struct CodeScreen: View {
     @ViewBuilder
     private var webPageBanner: some View {
         if model.isWebPage, mode.showsSymbols, !isWebPageBannerDismissed, !isEditingAddress,
-           !isSearchingSymbols, !model.isBarCollapsed {
+           !model.isBarCollapsed {
             WebPageBanner(
                 onOpenInBrowser: { openInBrowser() },
                 onDismiss: { withAnimation(.smooth(duration: 0.25)) { isWebPageBannerDismissed = true } }
