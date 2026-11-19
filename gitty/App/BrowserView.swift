@@ -13,6 +13,9 @@ struct BrowserView: View {
     /// The file just opened (from Project, the bar or a link), which starts at its own entry in
     /// the Code level. The file shown at launch comes back where it was left instead.
     @State private var openedURL: URL?
+    /// When the open file isn't in the project chosen in the sidebar: that project's file to open
+    /// on moving from Project to Files, Symbols or Code, which list the open file's project.
+    @State private var projectStartURL: URL?
     @State private var isEditingAddress = false
     /// A shared or pasted address that isn't a URL we can open: shown in the editor with the reason.
     @State private var rejectedAddress: String?
@@ -32,7 +35,7 @@ struct BrowserView: View {
         SideBarContainer(state: sideBar) {
             NavigationStack {
                 if let url = currentURL {
-                    CodeScreen(url: url, mode: $mode, projectID: openProjectID,
+                    CodeScreen(url: url, mode: modeBinding, projectID: openProjectID,
                                opensAtFile: url == openedURL,
                                isEditingAddress: $isEditingAddress, rejectedAddress: rejectedAddress,
                                onOpen: open, onPasteAndGo: pasteAndGo)
@@ -60,6 +63,11 @@ struct BrowserView: View {
         .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize)))
         .sheet(isPresented: $isShowingSettings) { SettingsView() }
         .onOpenURL(perform: openShared)
+        .task(id: [openProjectID, currentURLString]) {
+            let current = currentURL
+            projectStartURL = nil  // until it's known: the open file stays
+            projectStartURL = await ProjectStartFile.find(projectID: openProjectID, current: current)
+        }
         .onChange(of: isEditingAddress) { _, isEditing in
             if !isEditing { rejectedAddress = nil }
         }
@@ -87,7 +95,24 @@ struct BrowserView: View {
         }
     }
 
+    /// The level shown. Leaving Project for a symbol level switches to the chosen project's
+    /// file first, if the open file is in another project (see `projectStartURL`).
+    private var modeBinding: Binding<ViewMode> {
+        Binding(get: { mode }, set: { level in
+            if mode == .project, level.showsSymbols, let url = projectStartURL {
+                openFile(url, at: level)
+            } else {
+                mode = level
+            }
+        })
+    }
+
+    /// Opening a file shows its code, from its own entry (or another level, from the selector).
     private func open(_ url: URL) {
+        openFile(url, at: .code)
+    }
+
+    private func openFile(_ url: URL, at level: ViewMode) {
         isEditingAddress = false
         if let repository = RepoLink(url) {
             openProject(repository)
@@ -96,7 +121,8 @@ struct BrowserView: View {
         RecentFilesStore.standard.add(url)
         Task { await OpenHistory.shared.recordOpen(url) }  // for recently opened order
         openedURL = url
-        mode = .code  // opening a file shows its code, from its own entry
+        projectStartURL = nil
+        mode = level
         currentURLString = url.absoluteString  // the same URL keeps its screen: no reload
     }
 
