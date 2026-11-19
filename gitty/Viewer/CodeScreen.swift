@@ -19,6 +19,8 @@ struct CodeScreen: View {
     let rejectedAddress: String?
     let onOpen: @MainActor (URL) -> Void
     let onPasteAndGo: @MainActor () -> Void
+    /// An album chosen in the Project tab.
+    let onOpenAlbum: @MainActor (UUID) -> Void
     @Binding var mode: ViewMode
     /// The project chosen in the sidebar ("" for Files), shown in Project mode.
     let projectID: String
@@ -69,6 +71,7 @@ struct CodeScreen: View {
     init(url: URL, mode: Binding<ViewMode>, projectID: String, opensAtFile: Bool = false, albumID: UUID? = nil,
          isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
          onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
+         onOpenAlbum: @escaping @MainActor (UUID) -> Void = { _ in },
          store: DocumentStore = .shared) {
         _model = State(initialValue: CodeDocumentModel(url: url, store: store))
         _mode = mode
@@ -80,6 +83,7 @@ struct CodeScreen: View {
         self.rejectedAddress = rejectedAddress
         self.onOpen = onOpen
         self.onPasteAndGo = onPasteAndGo
+        self.onOpenAlbum = onOpenAlbum
     }
 
     var body: some View {
@@ -171,7 +175,7 @@ struct CodeScreen: View {
             // instant: it doesn't read and group the project's files again.
             if hasShownProject {
                 ProjectView(projectID: projectID, currentURL: model.url, isActive: mode == .project,
-                            sorting: ListSorting()) { url in
+                            sorting: ListSorting(), currentAlbumID: albumID, onOpenAlbum: onOpenAlbum) { url in
                     open(url)
                 }
                 .equatable()  // hidden, its big list mustn't redraw each time this screen does
@@ -262,7 +266,10 @@ struct CodeScreen: View {
                 onShowHistory: {
                     historyDetent = .large
                     historyFile = HistoryFile(url: $0)
-                }
+                },
+                onDownloadFile: { model.download(file: $0) },
+                downloadingFiles: model.downloadingFiles,
+                onOpenURL: { onOpen($0) }
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()

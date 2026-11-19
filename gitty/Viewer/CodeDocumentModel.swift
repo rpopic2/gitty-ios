@@ -234,9 +234,13 @@ final class CodeDocumentModel {
 
     /// Indexes the project's other downloaded files that its filter lets through: once per
     /// opened file, and again if the filter has changed since. Only when Symbols or a search
-    /// needs them, so reading a file costs nothing extra. The open file is always included.
+    /// needs them, so reading a file costs nothing extra. The open file is always included. The
+    /// project's other files (from its file list) come in too, as titles that download them.
     func loadProjectSymbols() {
-        guard !isLoadingProjectSymbols else { return }
+        guard !isLoadingProjectSymbols else {
+            reloadsProjectSymbols = true  // again once this one is done
+            return
+        }
         isLoadingProjectSymbols = true
         Task {
             let projects = await ProjectStore.shared.projects()
@@ -254,12 +258,74 @@ final class CodeDocumentModel {
                 return
             }
             if let project {
-                otherFiles = await ProjectSymbolIndex.shared.symbols(in: project, excluding: url, matching: filter)
+                let saved = await ProjectSymbolIndex.shared.symbols(in: project, excluding: url, matching: filter)
+                let listed = (try? await ProjectStore.shared.tree(for: project.id))?.1
+                let own = url
+                otherFiles = await Task.detached(priority: .userInitiated) {
+                    Self.merging(saved, notDownloadedFrom: listed, of: project, matching: filter, excluding: own)
+                }.value
             }
             loadedFilter = filter
             isLoadingProjectSymbols = false
             projectSymbolsLoaded = true
             publishSymbols()
+            if reloadsProjectSymbols {
+                reloadsProjectSymbols = false
+                loadedFilter = nil
+                loadProjectSymbols()
+            }
+        }
+    }
+
+    /// Asked for while loading: load again after.
+    @ObservationIgnored private var reloadsProjectSymbols = false
+
+    /// The saved files' symbols, with the project's other files from its list (`tree`) as titles
+    /// only, all in path order. Leaves out images and other files that are never text.
+    nonisolated static func merging(_ saved: [ProjectSymbolIndex.FileSymbols], notDownloadedFrom tree: ProjectTree?,
+                                    of project: ProjectInfo, matching filter: FileFilter,
+                                    excluding own: URL) -> [ProjectSymbolIndex.FileSymbols] {
+        guard let tree else { return saved }
+        let known = Set(saved.map(\.url)).union([own])
+        let missing = tree.files(under: project.folder ?? "", matching: filter).compactMap { entry -> ProjectSymbolIndex.FileSymbols? in
+            guard !isNeverText(entry.path), let url = project.rawURL(for: entry.path), !known.contains(url) else { return nil }
+            let name = (entry.path as NSString).lastPathComponent
+            let title = CodeSymbol(id: 0, name: name, kind: .file, range: NSRange(location: 0, length: 0), line: 1,
+                                   preview: "", fileURL: url, isDownloaded: false)
+            return ProjectSymbolIndex.FileSymbols(url: url, file: title, symbols: [])
+        }
+        guard !missing.isEmpty else { return saved }
+        return (saved + missing).sorted {
+            $0.url.absoluteString.localizedStandardCompare($1.url.absoluteString) == .orderedAscending
+        }
+    }
+
+    /// Files that are never text, by their extension (images, archives, fonts, media…).
+    nonisolated static func isNeverText(_ path: String) -> Bool {
+        let neverText: Set<String> = ["png", "jpg", "jpeg", "gif", "bmp", "ico", "icns", "webp", "tif", "tiff", "heic",
+                                      "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "jar", "a", "o", "so",
+                                      "dylib", "dll", "exe", "bin", "class", "woff", "woff2", "ttf", "otf", "mp3",
+                                      "mp4", "mov", "wav", "m4a", "aac", "psd", "sketch", "car", "pbxuser"]
+        return neverText.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// Files being downloaded from their title at the Code level.
+    private(set) var downloadingFiles: Set<URL> = []
+
+    /// A title of a file that isn't downloaded was tapped: download it, then index it, so its
+    /// symbols show under its title.
+    func download(file: URL) {
+        guard !downloadingFiles.contains(file) else { return }
+        downloadingFiles.insert(file)
+        Task {
+            do {
+                _ = try await store.fetch(file)
+            } catch {
+                refreshError = error.localizedDescription
+            }
+            downloadingFiles.remove(file)
+            loadedFilter = nil  // index again (only the new file is new)
+            loadProjectSymbols()
         }
     }
 

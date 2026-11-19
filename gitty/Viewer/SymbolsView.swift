@@ -53,6 +53,12 @@ struct SymbolsView: View, Equatable {
     let albumContext: AlbumMenuContext?
     /// The long-press menu's Show History: a file's info and history.
     let onShowHistory: (@MainActor (URL) -> Void)?
+    /// A not-downloaded file's title was tapped: download it (its symbols then show).
+    let onDownloadFile: (@MainActor (URL) -> Void)?
+    /// Files downloading now (their titles show it).
+    let downloadingFiles: Set<URL>
+    /// Open on a not-downloaded file's title: open the file (which downloads it).
+    let onOpenURL: (@MainActor (URL) -> Void)?
 
     /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
@@ -90,7 +96,10 @@ struct SymbolsView: View, Equatable {
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
          onCloseSearch: (@MainActor () -> Void)? = nil,
          albumContext: AlbumMenuContext? = nil,
-         onShowHistory: (@MainActor (URL) -> Void)? = nil) {
+         onShowHistory: (@MainActor (URL) -> Void)? = nil,
+         onDownloadFile: (@MainActor (URL) -> Void)? = nil,
+         downloadingFiles: Set<URL> = [],
+         onOpenURL: (@MainActor (URL) -> Void)? = nil) {
         self.symbols = symbols
         self.query = query
         self.isActive = isActive
@@ -110,6 +119,9 @@ struct SymbolsView: View, Equatable {
         self.onCloseSearch = onCloseSearch
         self.albumContext = albumContext
         self.onShowHistory = onShowHistory
+        self.onDownloadFile = onDownloadFile
+        self.downloadingFiles = downloadingFiles
+        self.onOpenURL = onOpenURL
     }
 
     /// What the list shows. The closures aren't compared: they reach the screen's state and
@@ -123,6 +135,7 @@ struct SymbolsView: View, Equatable {
             && lhs.rootFolderName == rhs.rootFolderName
             && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
             && lhs.albumContext == rhs.albumContext && (lhs.onShowHistory == nil) == (rhs.onShowHistory == nil)
+            && lhs.downloadingFiles == rhs.downloadingFiles
     }
 
     var body: some View {
@@ -274,6 +287,8 @@ struct SymbolsView: View, Equatable {
     private func header(for symbol: CodeSymbol) -> some View {
         CodeHeader(symbol: symbol, collapsed: collapsed, blocks: codeBlocks, openFile: openFile, scope: collapseScope,
                    symbolCount: symbol.kind == .file ? fileCounts.count(of: symbol, in: symbols) : 0,
+                   isDownloading: symbol.fileURL.map(downloadingFiles.contains) ?? false,
+                   onDownload: onDownloadFile,
                    contextMenu: contextMenu(for: symbol))
     }
 
@@ -282,8 +297,14 @@ struct SymbolsView: View, Equatable {
     /// on a file's title, Collapse All and Expand All in it.
     private func contextMenu(for symbol: CodeSymbol) -> CodeMenu {
         let view = self
+        let onOpen = onOpen
+        let onOpenURL = onOpenURL
         return CodeMenu(symbol: symbol, openFile: openFile, albumContext: albumContext,
-                        onOpen: onOpen, onShowHistory: onShowHistory,
+                        onOpen: { symbol in
+                            // Not downloaded: open the file itself, which downloads it.
+                            if !symbol.isDownloaded, let url = symbol.fileURL, let onOpenURL { onOpenURL(url) } else { onOpen(symbol) }
+                        },
+                        onShowHistory: onShowHistory,
                         onSetFileCollapsed: { view.setFileCollapsed($0, symbol) })
     }
 
@@ -417,6 +438,10 @@ private struct CodeHeader: View {
     let scope: String
     /// A file's: how many symbols it has.
     let symbolCount: Int
+    /// A not-downloaded file's: it's downloading.
+    let isDownloading: Bool
+    /// A not-downloaded file's title was tapped.
+    let onDownload: (@MainActor (URL) -> Void)?
     /// Touch and hold (the same menu as the code's).
     let contextMenu: CodeMenu
 
@@ -430,7 +455,8 @@ private struct CodeHeader: View {
                     toggle(isCollapsed)
                 } label: {
                     if symbol.kind == .file {
-                        FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed)
+                        FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed,
+                                  isDownloaded: symbol.isDownloaded, isDownloading: isDownloading)
                     } else {
                         SymbolTitle(symbol: symbol, isCollapsed: isCollapsed, canCollapse: canCollapse(isCollapsed),
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension)
@@ -444,6 +470,10 @@ private struct CodeHeader: View {
 
     /// Nothing to do for a one-line symbol: there's nothing under its title.
     private func toggle(_ isCollapsed: Bool) {
+        if !symbol.isDownloaded {
+            if let url = symbol.fileURL { onDownload?(url) }
+            return
+        }
         guard symbol.kind == .file || canCollapse(isCollapsed) else { return }
         withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile, scope: scope) }
     }
@@ -474,6 +504,9 @@ private struct FileTitle: View {
     let name: String
     let count: Int
     let isFolded: Bool
+    /// Not downloaded: grayed, with a download mark (a tap downloads it), no chevron or count.
+    var isDownloaded = true
+    var isDownloading = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -481,24 +514,35 @@ private struct FileTitle: View {
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(isFolded ? 0 : 90))
+                .opacity(isDownloaded ? 1 : 0)
             Text(name)
                 .font(.headline)
+                .foregroundStyle(isDownloaded ? .primary : .secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Text("· \(count)")
-                .font(.subheadline)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
+            if isDownloaded {
+                Text("· \(count)")
+                    .font(.subheadline)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
             Spacer(minLength: 8)
+            if isDownloading {
+                ProgressView()
+            } else if !isDownloaded {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.tint)
+            }
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 44)
         .background(.bar)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(name), \(count) symbols")
-        .accessibilityValue(isFolded ? Text("Folded") : Text("Unfolded"))
-        .accessibilityHint(isFolded ? Text("Shows the file’s symbols") : Text("Hides the file’s symbols"))
+        .accessibilityLabel(isDownloaded ? Text("\(name), \(count) symbols") : Text("\(name), not downloaded"))
+        .accessibilityValue(isDownloaded ? (isFolded ? Text("Folded") : Text("Unfolded")) : Text(verbatim: ""))
+        .accessibilityHint(!isDownloaded ? Text("Downloads the file")
+            : isFolded ? Text("Shows the file’s symbols") : Text("Hides the file’s symbols"))
         .accessibilityAddTraits([.isHeader, .isButton])
     }
 }
@@ -957,9 +1001,10 @@ private struct CodeMenu: ViewModifier {
                 Button("Show History", systemImage: "clock.arrow.circlepath") { onShowHistory(file) }
             }
             if let albumContext {
-                AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
+                AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext,
+                               download: symbol.isDownloaded ? nil : symbol.fileURL)
             }
-            if symbol.kind == .file {
+            if symbol.kind == .file, symbol.isDownloaded {
                 Section {
                     Button("Collapse All in File", systemImage: "chevron.right.2") { onSetFileCollapsed(true) }
                     Button("Expand All in File", systemImage: "chevron.down.2") { onSetFileCollapsed(false) }

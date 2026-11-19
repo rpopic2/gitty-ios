@@ -16,23 +16,31 @@ struct ProjectView: View, Equatable {
     let isActive: Bool
     /// The project's order (the sort button beside the mode selector). Files has its own.
     let sorting: ListSorting
+    /// The album shown (marked among the project's albums).
+    let currentAlbumID: UUID?
+    let onOpenAlbum: @MainActor (UUID) -> Void
     let onOpen: @MainActor (URL) -> Void
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(projectID: String, currentURL: URL? = nil, isActive: Bool = true,
-         sorting: ListSorting = ListSorting(), onOpen: @escaping @MainActor (URL) -> Void) {
+         sorting: ListSorting = ListSorting(), currentAlbumID: UUID? = nil,
+         onOpenAlbum: @escaping @MainActor (UUID) -> Void = { _ in },
+         onOpen: @escaping @MainActor (URL) -> Void) {
         self.projectID = projectID
         self.currentURL = currentURL
         self.isActive = isActive
         self.sorting = sorting
+        self.currentAlbumID = currentAlbumID
+        self.onOpenAlbum = onOpenAlbum
         self.onOpen = onOpen
     }
 
-    /// `onOpen` isn't compared: what it does never changes.
+    /// `onOpen` and `onOpenAlbum` aren't compared: what they do never changes.
     nonisolated static func == (lhs: ProjectView, rhs: ProjectView) -> Bool {
         lhs.projectID == rhs.projectID && lhs.currentURL == rhs.currentURL
             && lhs.isActive == rhs.isActive && lhs.sorting == rhs.sorting
+            && lhs.currentAlbumID == rhs.currentAlbumID
     }
 
     var body: some View {
@@ -40,7 +48,8 @@ struct ProjectView: View, Equatable {
             LooseFilesView(currentURL: currentURL, isActive: isActive, onOpen: onOpen)
         } else {
             ProjectFilesView(projectID: projectID, currentURL: currentURL, isActive: isActive,
-                             sorting: sorting, onOpen: onOpen)
+                             sorting: sorting, currentAlbumID: currentAlbumID, onOpenAlbum: onOpenAlbum,
+                             onOpen: onOpen)
                 .id(projectID)  // another project starts fresh
         }
     }

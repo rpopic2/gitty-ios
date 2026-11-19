@@ -49,11 +49,12 @@ struct BrowserView: View {
                     CodeScreen(url: url, mode: modeBinding, projectID: openProjectID,
                                opensAtFile: url == openedURL, albumID: openAlbumID,
                                isEditingAddress: $isEditingAddress, rejectedAddress: rejectedAddress,
-                               onOpen: open, onPasteAndGo: pasteAndGo)
+                               onOpen: open, onPasteAndGo: pasteAndGo, onOpenAlbum: showAlbum)
                         .id(url)  // a new URL gets a fresh screen and model
                 } else {
                     StartScreen(projectID: openProjectID, isEditingAddress: $isEditingAddress,
-                                rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo)
+                                rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo,
+                                onOpenAlbum: showAlbum)
                 }
             }
             // Like Mail's compose window: swiping it down sets the review aside, docked above the bar.
@@ -61,11 +62,8 @@ struct BrowserView: View {
         } sideBar: {
             SideBarView(
                 selectedID: openProjectID,
-                selectedAlbumID: openAlbumID,
                 onSelect: showProject,
-                onSelectAlbum: showAlbum,
                 onDelete: { id in if id == openProjectID { openProjectID = "" } },
-                onDeleteAlbum: { id in if id == openAlbumID { openAlbumIDString = "" } },
                 onSettings: {
                     sideBar.close()
                     isShowingSettings = true
@@ -77,6 +75,10 @@ struct BrowserView: View {
         .environment(highlights)
         .environment(albumNaming)
         .modifier(AlbumNamingAlert(naming: albumNaming, onCreated: { showAlbum($0.id) }))
+        // The open album was deleted (from the Project tab, or with its project).
+        .onChange(of: AlbumStore.shared.albums) {
+            if !openAlbumIDString.isEmpty, AlbumStore.shared.album(id: openAlbumID) == nil { openAlbumIDString = "" }
+        }
         .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize), theme: syntaxTheme))
         .sheet(isPresented: $isShowingSettings) { SettingsView() }
         .onOpenURL(perform: openShared)
@@ -204,21 +206,24 @@ private struct StartScreen: View {
     let rejectedAddress: String?
     let onOpen: @MainActor (URL) -> Void
     let onPasteAndGo: @MainActor () -> Void
+    let onOpenAlbum: @MainActor (UUID) -> Void
     /// The project chosen in the sidebar, for the bar (`nil` for Files).
     @State private var project: ProjectInfo?
 
     init(projectID: String, isEditingAddress: Binding<Bool>, rejectedAddress: String?,
-         onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void) {
+         onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
+         onOpenAlbum: @escaping @MainActor (UUID) -> Void) {
         self.projectID = projectID
         _isEditingAddress = isEditingAddress
         self.rejectedAddress = rejectedAddress
         self.onOpen = onOpen
         self.onPasteAndGo = onPasteAndGo
+        self.onOpenAlbum = onOpenAlbum
     }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            ProjectView(projectID: projectID, onOpen: onOpen)
+            ProjectView(projectID: projectID, onOpenAlbum: onOpenAlbum, onOpen: onOpen)
             if isEditingAddress {
                 AddressEditor(initialText: rejectedAddress ?? projectAddress,
                               showsInitialError: rejectedAddress != nil,

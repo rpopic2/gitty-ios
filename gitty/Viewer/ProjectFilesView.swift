@@ -1,12 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// The open project in the Project tab: every file, grouped under a header per directory, code
-/// files first in each. Tap a file for its details, and Open there for its code (the Code
-/// level). Pull to refresh the list; Clone downloads the whole project with Git (its latest
-/// commit) for offline reading and history. The filter under the header (`*.cs *.md`, see `FileFilter`) narrows the list and the
-/// project's symbols, and the branch row under it switches branch or tag. In recently opened
-/// order (the sort button beside the mode selector) the files are one flat list instead.
+/// The open project in the Project tab: its header (Clone downloads the whole project with Git,
+/// its latest commit, for offline reading and history), the filter (`*.cs *.md`, see
+/// `FileFilter`) that narrows the project's files at the Code level, the branch row (switch
+/// branch or tag, and its history), and the project's albums. The files themselves are at the
+/// Code level. Pull to refresh the project's file list.
 struct ProjectFilesView: View {
     let projectID: String
     /// The file on screen, marked in the list.
@@ -16,6 +15,10 @@ struct ProjectFilesView: View {
     /// Name (directory headers) or recently opened (one flat list), and reversed or not.
     let sorting: ListSorting
     let onOpen: @MainActor (URL) -> Void
+    /// The album shown, marked in the list.
+    let currentAlbumID: UUID?
+    let onOpenAlbum: @MainActor (UUID) -> Void
+    @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
 
     @State private var state: LoadState = .loading
     /// Files with a saved copy (they open offline).
@@ -31,16 +34,9 @@ struct ProjectFilesView: View {
     /// Branches and tags, for the branch row.
     @State private var refs: ProjectRefs?
     @State private var isSwitchingRef = false
-    /// The file whose details are showing.
-    @State private var detailFile: DetailFile?
     /// The branch's history (the branch row's History button).
     @State private var isShowingHistory = false
 
-    private struct DetailFile: Identifiable {
-        let url: URL
-        let size: Int?
-        var id: URL { url }
-    }
     @State private var isSignedIn = false
     @State private var isSigningIn = false
     /// The filter as typed. It's applied (and saved) when editing ends.
@@ -74,11 +70,14 @@ struct ProjectFilesView: View {
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(projectID: String, currentURL: URL?, isActive: Bool, sorting: ListSorting,
+         currentAlbumID: UUID? = nil, onOpenAlbum: @escaping @MainActor (UUID) -> Void = { _ in },
          onOpen: @escaping @MainActor (URL) -> Void) {
         self.projectID = projectID
         self.currentURL = currentURL
         self.isActive = isActive
         self.sorting = sorting
+        self.currentAlbumID = currentAlbumID
+        self.onOpenAlbum = onOpenAlbum
         self.onOpen = onOpen
     }
 
@@ -105,14 +104,6 @@ struct ProjectFilesView: View {
                 BranchHistoryView(projectID: projectID)
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
-            }
-            .sheet(item: $detailFile) { file in
-                FileInfoView(url: file.url, knownSize: file.size) {
-                    detailFile = nil
-                    onOpen(file.url)
-                }
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
             }
             .alert("Couldn’t Clone", isPresented: cloneErrorIsPresented, presenting: cloneError) { _ in
                 if cloneNeedsSignIn {
@@ -167,39 +158,12 @@ struct ProjectFilesView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            switch layout {
-            case .directories(let directories):
-                ForEach(directories) { directory in
-                    Section {
-                        ForEach(directory.files, id: \.path) { entry in
-                            row(for: entry, in: project)
-                        }
-                    } header: {
-                        Text(directory.path.isEmpty ? project.title : directory.path)
-                            .textCase(nil)  // paths keep their case
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                    }
-                }
-            case .flat(let files):
-                Section {
-                    ForEach(files, id: \.path) { entry in
-                        row(for: entry, in: project, showsFolder: true)
-                    }
-                } header: {
-                    Text(sorting.isReversed ? "Opened Longest Ago" : "Recently Opened")
-                }
-            }
+            // The files are at the Code level (by folder, every file folded); here, the albums.
+            albumsSection(project: project)
         }
         .listStyle(.insetGrouped)
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
-        .overlay {
-            if layout.fileCount == 0 && filter.isEmpty {
-                ContentUnavailableView("No Files", systemImage: "folder")
-                    .allowsHitTesting(false)
-            }
-        }
         .refreshable { await load(refresh: true) }
         .scrollDisabled(!isActive)  // hidden: leaves status-bar taps to the mode on screen
     }
@@ -339,51 +303,43 @@ struct ProjectFilesView: View {
         saved = now
     }
 
-    /// Swiping a saved file: deletes its saved copy. It stays in the list and downloads again
-    /// when opened; its reading position is kept. A file that's open stays on screen.
-    private func deleteDownload(_ url: URL) {
-        saved.remove(url)
-        Task { await DocumentStore.shared.delete(url) }
-    }
+    // MARK: Albums
 
+    /// The project's albums, like Photos': tap one to show only what's in it at the Code level;
+    /// swipe one to rename or delete it.
     @ViewBuilder
-    private func row(for entry: ProjectTree.Entry, in project: ProjectInfo, showsFolder: Bool = false) -> some View {
-        if let url = project.rawURL(for: entry.path) {
-            let isCurrent = url == currentURL
-            let isSaved = saved.contains(url)
-            // A tap shows the file's details first; Open there opens its code.
-            Button { detailFile = DetailFile(url: url, size: entry.size) } label: {
-                FileEntryRow(entry: entry, isSaved: isSaved,
-                             folder: showsFolder ? folder(of: entry, in: project) : nil)
-            }
-            // The whole file, downloaded first if it isn't, so its symbols can be listed.
-            .contextMenu {
-                AlbumMenuItems(items: [.file(url)], context: AlbumMenuContext(projectID: project.id, shownAlbumID: nil),
-                               download: isSaved ? nil : url)
-            }
-            .swipeActions {
-                if isSaved && clone == nil {  // a cloned file goes with the clone
-                    // Not `.destructive`: the row stays, only its saved copy goes.
-                    Button { deleteDownload(url) } label: {
-                        Label("Delete Download", systemImage: "trash")
+    private func albumsSection(project: ProjectInfo) -> some View {
+        let albums = AlbumStore.shared.albums(inProject: project.id)
+        Section {
+            ForEach(albums) { album in
+                Button { onOpenAlbum(album.id) } label: {
+                    AlbumRow(album: album)
+                }
+                .listRowBackground(album.id == currentAlbumID
+                    ? Color(uiColor: .systemGray4)
+                    : Color(uiColor: .secondarySystemGroupedBackground))
+                .accessibilityAddTraits(album.id == currentAlbumID ? .isSelected : [])
+                .swipeActions {
+                    Button(role: .destructive) { AlbumStore.shared.delete(album.id) } label: {
+                        Label("Delete", systemImage: "trash")
                     }
-                    .tint(.red)
+                    Button { albumNaming?.beginRenaming(album) } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
                 }
             }
-            // The open file looks selected, as in Files.
-            .listRowBackground(isCurrent
-                ? Color(uiColor: .systemGray4)
-                : Color(uiColor: .secondarySystemGroupedBackground))
-            .accessibilityAddTraits(isCurrent ? .isSelected : [])
+            Button {
+                albumNaming?.begin(projectID: project.id, opensAlbum: true)
+            } label: {
+                Label("New Album", systemImage: "plus")
+            }
+        } header: {
+            Text("Albums")
+        } footer: {
+            if albums.isEmpty {
+                Text("An album keeps the symbols, files and lines of this project you want to see together. To add something to one, touch and hold it at the Code level, then choose Add to Album.")
+            }
         }
-    }
-
-    /// The folder a file is in, inside the project (the project's name at its top).
-    private func folder(of entry: ProjectTree.Entry, in project: ProjectInfo) -> String {
-        let prefix = (project.folder ?? "").isEmpty ? "" : (project.folder ?? "") + "/"
-        let relative = entry.path.dropFirst(prefix.count)
-        guard let slash = relative.lastIndex(of: "/") else { return project.title }
-        return String(relative[..<slash])
     }
 
     // MARK: Failure
@@ -664,44 +620,23 @@ struct ProjectFilesView: View {
 
 /// A file in a project: a code icon for files with symbols, the name, its size, and the
 /// offline icon once it's saved.
-private struct FileEntryRow: View {
-    let entry: ProjectTree.Entry
-    let isSaved: Bool
-    /// In the flat (recently opened) list: the folder it's in, after its name on the same
-    /// line, so the rows are as compact as the ones under directory headers.
-    var folder: String? = nil
+/// An album: its name and how many items it has.
+private struct AlbumRow: View {
+    let album: Album
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: ProjectTree.isCode(entry) ? "chevron.left.forwardslash.chevron.right" : "doc")
-                .foregroundStyle(ProjectTree.isCode(entry) ? Color.accentColor : Color.secondary)
-                .frame(width: 24)
-                .accessibilityHidden(true)
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(entry.name)
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(album.name)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(1)  // the folder gives way first
-                if let folder {
-                    Text(folder)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-            }
-            Spacer(minLength: 8)
-            if let size = entry.size {
-                Text(Int64(size), format: .byteCount(style: .file))
+                Text("\(album.items.count) items")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if isSaved {
-                Image(systemName: "arrow.down.circle.fill")
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Saved on this device")
-            }
+        } icon: {
+            Image(systemName: "rectangle.stack")
+                .foregroundStyle(.tint)
         }
     }
 }
