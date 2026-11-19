@@ -222,7 +222,7 @@ struct SymbolsView: View, Equatable {
                 && !collapsed.isCollapsed($0, openFile: openFile, scope: scope)
         }
         codeBlocks.layoutKey = codeWidth > 0
-            ? CodeLayoutKey(width: codeWidth - 2 * RawTextStyle.insets.left, style: codeTextStyle,
+            ? CodeLayoutKey(width: codeWidth - CodeIndent.text - RawTextStyle.insets.left, style: codeTextStyle,
                             isDark: colorScheme == .dark)
             : nil
         return Group {
@@ -682,6 +682,17 @@ private final class FileSymbolCounts {
     }
 }
 
+/// Where a symbol's declaration starts in its title (after the chevron and its kind's icon),
+/// and so where its code starts under it, lined up.
+private enum CodeIndent {
+    static let margin: CGFloat = 12
+    static let chevron: CGFloat = 10
+    static let icon: CGFloat = 16
+    static let spacing: CGFloat = 6
+    /// The declaration's and the code's start.
+    static let text = margin + chevron + spacing + icon + spacing
+}
+
 /// A title's line number while peeking: in the strip the slide uncovers, left of the title, its
 /// right edge where the code's numbers end. Observes the peek itself, so only it redraws when a
 /// peek starts and ends.
@@ -698,8 +709,8 @@ private struct PeekLineNumber: View {
                 .foregroundStyle(Color(uiColor: .secondaryLabel))
                 .lineLimit(1)
                 .frame(width: width, alignment: .trailing)
-                // The code's numbers end 8 points left of the code, which starts at the inset.
-                .offset(x: RawTextStyle.insets.left - 8 - width)
+                // The code's numbers end 8 points left of the code, which starts at `CodeIndent.text`.
+                .offset(x: CodeIndent.text - 8 - width)
                 .accessibilityHidden(true)
         }
     }
@@ -718,16 +729,20 @@ private struct SymbolTitle: View {
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     var body: some View {
-        HStack(spacing: 6) {
+        // Fixed widths, so the declaration starts at `CodeIndent.text`, where the code under it
+        // does.
+        HStack(spacing: CodeIndent.spacing) {
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                 .opacity(canCollapse ? 1 : 0)  // still there, so the declarations line up
+                .frame(width: CodeIndent.chevron)
                 .accessibilityHidden(true)
             Image(systemName: symbol.kind.systemImage)
                 .font(.caption)
                 .foregroundStyle(.tint)
+                .frame(width: CodeIndent.icon)
                 .accessibilityHidden(true)
             title
                 .lineLimit(1)
@@ -735,7 +750,7 @@ private struct SymbolTitle: View {
             Spacer(minLength: 8)
             // No line number: peek at the numbers instead.
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, CodeIndent.margin)
         .padding(.vertical, 4)
         .frame(minHeight: symbol.kind == .file ? 36 : 28)
         .background(.bar)
@@ -1138,7 +1153,9 @@ private struct SymbolCodeText: View {
             .font(codeTextStyle.swiftUIFont)
             .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, RawTextStyle.insets.left)
+            // Lined up with the declaration in the title above it.
+            .padding(.leading, CodeIndent.text)
+            .padding(.trailing, RawTextStyle.insets.left)
             .padding(.vertical, isEmpty ? 0 : 8)
             .background(Color(uiColor: RawTextStyle.backgroundColor))
             .contentShape(Rectangle())
