@@ -49,12 +49,13 @@ struct BrowserView: View {
                     CodeScreen(url: url, mode: modeBinding, projectID: openProjectID,
                                opensAtFile: url == openedURL, albumID: openAlbumID,
                                isEditingAddress: $isEditingAddress, rejectedAddress: rejectedAddress,
-                               onOpen: open, onPasteAndGo: pasteAndGo, onOpenAlbum: showAlbum)
+                               onOpen: open, onPasteAndGo: pasteAndGo, onOpenAlbum: showAlbum,
+                               onShowProject: showWholeProject)
                         .id(url)  // a new URL gets a fresh screen and model
                 } else {
                     StartScreen(projectID: openProjectID, isEditingAddress: $isEditingAddress,
                                 rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo,
-                                onOpenAlbum: showAlbum)
+                                onOpenAlbum: showAlbum, onShowProject: showWholeProject)
                 }
             }
             // Like Mail's compose window: swiping it down sets the review aside, docked above the bar.
@@ -118,8 +119,6 @@ struct BrowserView: View {
     /// file first, if the open file is in another project (see `projectStartURL`).
     private var modeBinding: Binding<ViewMode> {
         Binding(get: { mode }, set: { level in
-            // The selector's Project leaves an album: the project's tab, with its albums.
-            if level == .project, !openAlbumIDString.isEmpty { openAlbumIDString = "" }
             if mode == .project, level.showsSymbols, let url = projectStartURL {
                 openFile(url, at: level)
             } else {
@@ -172,12 +171,22 @@ extension BrowserView {
     private func showAlbum(_ id: UUID) {
         guard let album = AlbumStore.shared.album(id: id) else { return }
         openAlbumIDString = id.uuidString
-        openProjectID = album.projectID
+        showCode(of: album.projectID)
+    }
+
+    /// The Project tab's project row: out of the album, the whole project at the Code level.
+    private func showWholeProject() {
+        openAlbumIDString = ""
+        showCode(of: openProjectID)
+    }
+
+    private func showCode(of projectID: String) {
+        openProjectID = projectID
         isEditingAddress = false
         sideBar.close()
         let current = currentURL
         Task {
-            if let start = await ProjectStartFile.find(projectID: album.projectID, current: current) {
+            if let start = await ProjectStartFile.find(projectID: projectID, current: current) {
                 openFile(start, at: .code)
             } else if current != nil {
                 mode = .code
@@ -209,23 +218,25 @@ private struct StartScreen: View {
     let onOpen: @MainActor (URL) -> Void
     let onPasteAndGo: @MainActor () -> Void
     let onOpenAlbum: @MainActor (UUID) -> Void
+    let onShowProject: @MainActor () -> Void
     /// The project chosen in the sidebar, for the bar (`nil` for Files).
     @State private var project: ProjectInfo?
 
     init(projectID: String, isEditingAddress: Binding<Bool>, rejectedAddress: String?,
          onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
-         onOpenAlbum: @escaping @MainActor (UUID) -> Void) {
+         onOpenAlbum: @escaping @MainActor (UUID) -> Void, onShowProject: @escaping @MainActor () -> Void) {
         self.projectID = projectID
         _isEditingAddress = isEditingAddress
         self.rejectedAddress = rejectedAddress
         self.onOpen = onOpen
         self.onPasteAndGo = onPasteAndGo
         self.onOpenAlbum = onOpenAlbum
+        self.onShowProject = onShowProject
     }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            ProjectView(projectID: projectID, onOpenAlbum: onOpenAlbum, onOpen: onOpen)
+            ProjectView(projectID: projectID, onOpenAlbum: onOpenAlbum, onShowProject: onShowProject, onOpen: onOpen)
             if isEditingAddress {
                 AddressEditor(initialText: rejectedAddress ?? projectAddress,
                               showsInitialError: rejectedAddress != nil,

@@ -21,6 +21,8 @@ struct CodeScreen: View {
     let onPasteAndGo: @MainActor () -> Void
     /// An album chosen in the Project tab.
     let onOpenAlbum: @MainActor (UUID) -> Void
+    /// The Project tab's project row: the whole project (out of an album).
+    let onShowProject: @MainActor () -> Void
     @Binding var mode: ViewMode
     /// The project chosen in the sidebar ("" for Files), shown in Project mode.
     let projectID: String
@@ -72,6 +74,7 @@ struct CodeScreen: View {
          isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
          onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
          onOpenAlbum: @escaping @MainActor (UUID) -> Void = { _ in },
+         onShowProject: @escaping @MainActor () -> Void = {},
          store: DocumentStore = .shared) {
         _model = State(initialValue: CodeDocumentModel(url: url, store: store))
         _mode = mode
@@ -84,6 +87,7 @@ struct CodeScreen: View {
         self.onOpen = onOpen
         self.onPasteAndGo = onPasteAndGo
         self.onOpenAlbum = onOpenAlbum
+        self.onShowProject = onShowProject
     }
 
     var body: some View {
@@ -175,7 +179,8 @@ struct CodeScreen: View {
             // instant: it doesn't read and group the project's files again.
             if hasShownProject {
                 ProjectView(projectID: projectID, currentURL: model.url, isActive: mode == .project,
-                            sorting: ListSorting(), currentAlbumID: albumID, onOpenAlbum: onOpenAlbum) { url in
+                            sorting: ListSorting(), currentAlbumID: albumID, onOpenAlbum: onOpenAlbum,
+                            onShowProject: onShowProject) { url in
                     open(url)
                 }
                 .equatable()  // hidden, its big list mustn't redraw each time this screen does

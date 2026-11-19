@@ -19,6 +19,7 @@ struct ProjectView: View, Equatable {
     /// The album shown (marked among the project's albums).
     let currentAlbumID: UUID?
     let onOpenAlbum: @MainActor (UUID) -> Void
+    let onShowProject: @MainActor () -> Void
     let onOpen: @MainActor (URL) -> Void
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
@@ -26,6 +27,7 @@ struct ProjectView: View, Equatable {
     init(projectID: String, currentURL: URL? = nil, isActive: Bool = true,
          sorting: ListSorting = ListSorting(), currentAlbumID: UUID? = nil,
          onOpenAlbum: @escaping @MainActor (UUID) -> Void = { _ in },
+         onShowProject: @escaping @MainActor () -> Void = {},
          onOpen: @escaping @MainActor (URL) -> Void) {
         self.projectID = projectID
         self.currentURL = currentURL
@@ -33,6 +35,7 @@ struct ProjectView: View, Equatable {
         self.sorting = sorting
         self.currentAlbumID = currentAlbumID
         self.onOpenAlbum = onOpenAlbum
+        self.onShowProject = onShowProject
         self.onOpen = onOpen
     }
 
@@ -49,7 +52,7 @@ struct ProjectView: View, Equatable {
         } else {
             ProjectFilesView(projectID: projectID, currentURL: currentURL, isActive: isActive,
                              sorting: sorting, currentAlbumID: currentAlbumID, onOpenAlbum: onOpenAlbum,
-                             onOpen: onOpen)
+                             onShowProject: onShowProject, onOpen: onOpen)
                 .id(projectID)  // another project starts fresh
         }
     }

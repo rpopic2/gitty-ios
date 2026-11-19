@@ -18,6 +18,8 @@ struct ProjectFilesView: View {
     /// The album shown, marked in the list.
     let currentAlbumID: UUID?
     let onOpenAlbum: @MainActor (UUID) -> Void
+    /// The project's row: the whole project (out of an album), at the Code level.
+    let onShowProject: @MainActor () -> Void
     @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
 
     @State private var state: LoadState = .loading
@@ -71,6 +73,7 @@ struct ProjectFilesView: View {
     // doesn't warn about converting it to `@Sendable`.
     init(projectID: String, currentURL: URL?, isActive: Bool, sorting: ListSorting,
          currentAlbumID: UUID? = nil, onOpenAlbum: @escaping @MainActor (UUID) -> Void = { _ in },
+         onShowProject: @escaping @MainActor () -> Void = {},
          onOpen: @escaping @MainActor (URL) -> Void) {
         self.projectID = projectID
         self.currentURL = currentURL
@@ -78,6 +81,7 @@ struct ProjectFilesView: View {
         self.sorting = sorting
         self.currentAlbumID = currentAlbumID
         self.onOpenAlbum = onOpenAlbum
+        self.onShowProject = onShowProject
         self.onOpen = onOpen
     }
 
@@ -146,7 +150,16 @@ struct ProjectFilesView: View {
     private func list(project: ProjectInfo, tree: ProjectTree, layout: Layout) -> some View {
         List {
             Section {
+                // Like "all of it" above the albums: a tap shows the whole project at the Code
+                // level, out of an album. Its Clone button (or menu) works as before.
                 header(project: project, tree: tree)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onShowProject() }
+                    .listRowBackground(currentAlbumID == nil
+                        ? Color(uiColor: .systemGray4)
+                        : Color(uiColor: .secondarySystemGroupedBackground))
+                    .accessibilityAddTraits(currentAlbumID == nil ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityAction { onShowProject() }
                 filterRow
                 branchRow(project: project)
             } footer: {
