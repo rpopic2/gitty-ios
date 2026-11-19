@@ -70,6 +70,8 @@ struct SymbolsView: View, Equatable {
     @State private var scroll = ScrollTracking()
     /// The line-number peek.
     @State private var peek = CodePeek()
+    /// The list follows the fingers while pinching, like Photos' grid (`PinchScale`).
+    @State private var pinchZoom = PinchZoom()
     /// This pinch has already collapsed or expanded everything (once per pinch).
     @State private var pinchHandled = false
     /// What's collapsed: the Code level's (shared, saved), or a results page's own.
@@ -143,6 +145,7 @@ struct SymbolsView: View, Equatable {
     var body: some View {
         ScrollViewReader { reader in
             scrollContainer { fullCode }
+                .modifier(PinchScale(zoom: pinchZoom))
                 .onAppear { moveToStart(reader) }
                 .simultaneousGesture(pinch(reader), including: isActive ? .all : .subviews)
                 .onChange(of: scrollRequest) { _, request in
@@ -354,9 +357,11 @@ struct SymbolsView: View, Equatable {
         MagnifyGesture()
             .onChanged { value in
                 guard !pinchHandled else { return }
+                pinchZoom.follow(value.magnification, anchor: value.startAnchor)
                 let scope = collapseScope
                 if value.magnification < 0.8 {
                     pinchHandled = true
+                    pinchZoom.settle()
                     if !collapsed.areAllCollapsed(scope: scope) {
                         setAllCollapsed(true, reader)
                     } else if !collapsed.areAllFilesFolded(scope: scope) {
@@ -366,6 +371,7 @@ struct SymbolsView: View, Equatable {
                     }
                 } else if value.magnification > 1.25 {
                     pinchHandled = true
+                    pinchZoom.settle()
                     if collapsed.areAllFoldersFolded(scope: scope) {
                         withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(false, scope: scope) }
                     } else if collapsed.areAllFilesFolded(scope: scope) {
@@ -375,7 +381,10 @@ struct SymbolsView: View, Equatable {
                     }
                 }
             }
-            .onEnded { _ in pinchHandled = false }
+            .onEnded { _ in
+                pinchHandled = false
+                pinchZoom.settle()  // let go before the next step: back as it was
+            }
     }
 
     // MARK: Scrolling

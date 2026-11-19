@@ -41,3 +41,33 @@ struct PeekShift: ViewModifier {
         content.offset(x: peek.offset)
     }
 }
+
+/// The Code level's pinch, as the fingers move: the list shrinks or grows a little toward the
+/// pinch (less than the fingers, so it feels held back), then springs back as the step it was
+/// heading for happens (or as you let go). Only `PinchScale` reads it, so the list itself
+/// doesn't redraw while the fingers move.
+@MainActor @Observable
+final class PinchZoom {
+    private(set) var scale: CGFloat = 1
+    private(set) var anchor: UnitPoint = .center
+
+    /// A step happens at 0.8 or 1.25 (see `SymbolsView.pinch`): the list is at 0.9 or 1.12 then.
+    func follow(_ magnification: CGFloat, anchor: UnitPoint) {
+        self.anchor = anchor
+        scale = min(max(1 + (magnification - 1) * 0.5, 0.85), 1.15)
+    }
+
+    func settle() {
+        guard scale != 1 else { return }
+        withAnimation(.spring(duration: 0.35, bounce: 0.2)) { scale = 1 }
+    }
+}
+
+/// Scales the Code level's list while pinching. Only this redraws as the fingers move.
+struct PinchScale: ViewModifier {
+    let zoom: PinchZoom
+
+    func body(content: Content) -> some View {
+        content.scaleEffect(zoom.scale, anchor: zoom.anchor)
+    }
+}
