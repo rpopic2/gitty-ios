@@ -86,6 +86,9 @@ struct AlbumMenuItems: View {
     var download: URL? = nil
     /// After any choice (the selection ends).
     var onDone: (@MainActor () -> Void)? = nil
+    /// The albums right in the menu, not under "Add to Album" (a menu of its own, such as an
+    /// Add to Album button's).
+    var isInline = false
 
     @Environment(AlbumNaming.self) private var naming: AlbumNaming?
 
@@ -95,32 +98,43 @@ struct AlbumMenuItems: View {
         if let album = store.album(id: context.shownAlbumID) {
             removeButton(album)
         }
-        Menu {
-            Button("New Album…", systemImage: "plus") {
-                startDownload()
-                naming?.begin(projectID: context.projectID, items: items)
-                onDone?()
+        if isInline {
+            albumChoices
+        } else {
+            Menu {
+                albumChoices
+            } label: {
+                Label("Add to Album", systemImage: "rectangle.stack.badge.plus")
             }
-            Section {
-                ForEach(store.albums(inProject: context.projectID)) { album in
-                    let hasAll = !items.isEmpty && items.allSatisfy { album.contains($0) }
-                    Button {
-                        if hasAll {
-                            store.remove(items, from: album.id)
-                        } else {
-                            startDownload()
-                            store.add(items, to: album.id)
-                        }
-                        onDone?()
-                    } label: {
-                        if hasAll { Label(album.name, systemImage: "checkmark") } else { Text(album.name) }
-                    }
-                }
-            }
-        } label: {
-            Label("Add to Album", systemImage: "rectangle.stack.badge.plus")
+            .disabled(items.isEmpty)
+        }
+    }
+
+    @ViewBuilder
+    private var albumChoices: some View {
+        Button("New Album…", systemImage: "plus") {
+            startDownload()
+            naming?.begin(projectID: context.projectID, items: items)
+            onDone?()
         }
         .disabled(items.isEmpty)
+        Section {
+            ForEach(store.albums(inProject: context.projectID)) { album in
+                let hasAll = !items.isEmpty && items.allSatisfy { album.contains($0) }
+                Button {
+                    if hasAll {
+                        store.remove(items, from: album.id)
+                    } else {
+                        startDownload()
+                        store.add(items, to: album.id)
+                    }
+                    onDone?()
+                } label: {
+                    if hasAll { Label(album.name, systemImage: "checkmark") } else { Text(album.name) }
+                }
+                .disabled(items.isEmpty)
+            }
+        }
     }
 
     /// Takes it out of the album on screen; a symbol that's there through its whole file takes

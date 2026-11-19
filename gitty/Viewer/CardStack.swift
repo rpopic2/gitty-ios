@@ -335,10 +335,13 @@ struct StackDepthLabel: View {
 }
 
 /// The stack's symbols (each card's, as it is now, the bottom card's first), in a sheet: the
-/// same code blocks as the Code level. Tap one to go back to its card.
+/// same code blocks as the Code level. Tap one to go back to its card. The button at the top
+/// adds them all to an album.
 struct StackSheet<List: View>: View {
+    let actions: StackActions
     @ViewBuilder let list: () -> List
     @Environment(\.dismiss) private var dismiss
+    @Environment(AlbumNaming.self) private var naming: AlbumNaming?
 
     var body: some View {
         NavigationStack {
@@ -346,10 +349,34 @@ struct StackSheet<List: View>: View {
                 .navigationTitle("Stack")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    if let context = actions.albumContext {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Menu {
+                                AlbumMenuItems(items: actions.albumItems(), context: context, isInline: true)
+                            } label: {
+                                Label("Add to Album", systemImage: "rectangle.stack.badge.plus")
+                            }
+                        }
+                    }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
                     }
                 }
+        }
+        // New Album… asks for the name over this sheet (the app's alert can't show while the
+        // sheet is up).
+        .modifier(OptionalAlbumNamingAlert(naming: naming))
+    }
+}
+
+private struct OptionalAlbumNamingAlert: ViewModifier {
+    let naming: AlbumNaming?
+
+    func body(content: Content) -> some View {
+        if let naming {
+            content.modifier(AlbumNamingAlert(naming: naming, onCreated: { _ in }))
+        } else {
+            content
         }
     }
 }

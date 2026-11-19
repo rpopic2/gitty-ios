@@ -452,7 +452,7 @@ struct CodeScreen: View {
             stackJump = cards[symbol.id]
             isShowingStack = false
         }
-        return StackSheet {
+        return StackSheet(actions: stackActions) {
             SymbolsView(
                 symbols: entries.map(\.symbol),
                 query: "",
