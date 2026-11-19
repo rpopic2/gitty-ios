@@ -287,9 +287,34 @@ struct SymbolsView: View, Equatable {
     private func folderHeader(_ group: FolderGroup) -> some View {
         let collapsed = collapsed
         let scope = collapseScope
+        let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
+        let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) } }
         return FolderHeader(path: group.path.isEmpty ? rootFolderName : group.path, fileCount: group.fileCount,
-                            isFolded: collapsed.isFolderFolded(group.path, scope: scope)) {
-            withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) }
+                            isFolded: isFolded, onToggle: toggle)
+            .contextMenu { folderMenu(group, isFolded: isFolded, toggle: toggle) }
+    }
+
+    /// A folder's long-press menu: fold or unfold it (or all of them), and add its files to an
+    /// album.
+    @ViewBuilder
+    private func folderMenu(_ group: FolderGroup, isFolded: Bool, toggle: @escaping () -> Void) -> some View {
+        let collapsed = collapsed
+        let scope = collapseScope
+        Button(isFolded ? "Unfold Folder" : "Fold Folder",
+               systemImage: isFolded ? "chevron.down" : "chevron.right", action: toggle)
+        if let albumContext {
+            let files = group.symbols.compactMap { symbol -> AlbumItem? in
+                symbol.kind == .file ? AlbumItem(symbol, openFile: openFile) : nil
+            }
+            AlbumMenuItems(items: files, context: albumContext)
+        }
+        Section {
+            Button("Fold All Folders", systemImage: "chevron.right.2") {
+                withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(true, scope: scope) }
+            }
+            Button("Unfold All Folders", systemImage: "chevron.down.2") {
+                withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(false, scope: scope) }
+            }
         }
     }
 
