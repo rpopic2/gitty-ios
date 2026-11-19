@@ -576,27 +576,32 @@ private struct FolderHeader: View {
     }
 
     var body: some View {
+        // Bigger than a file's title, and on another background, so a folder doesn't look like
+        // one of its files.
         Button(action: onToggle) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isFolded ? 0 : 90))
-                Image(systemName: "folder")
+                Image(systemName: "folder.fill")
+                    .font(.title3)
                     .foregroundStyle(.tint)
                 Text(path)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.title3.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.head)
                 Text("· \(fileCount)")
-                    .font(.subheadline)
+                    .font(.body)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
             }
             .padding(.horizontal, 16)
-            .frame(minHeight: 40)
-            .background(.bar)
+            .padding(.top, 10)
+            .frame(minHeight: 60)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .overlay(alignment: .bottom) { Divider() }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
