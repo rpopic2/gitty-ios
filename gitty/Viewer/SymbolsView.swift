@@ -491,8 +491,7 @@ private struct SymbolTitle: View {
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     var body: some View {
-        // The chevron and icon on the first line, when the declaration wraps.
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(spacing: 6) {
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -503,10 +502,10 @@ private struct SymbolTitle: View {
                 .font(.caption)
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
-            // A long declaration wraps, like the code under it.
             title
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
             // No line number: peek at the numbers instead.
         }
         .padding(.horizontal, 12)
