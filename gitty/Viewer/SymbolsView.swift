@@ -527,7 +527,10 @@ private struct SymbolTitle: View {
 @Observable
 private final class CodeBlock {
     let symbol: CodeSymbol
-    private(set) var code: AttributedString?
+    /// The code as pieces of `CodePieces.linesPerPiece` lines (see `SymbolCodeText`).
+    private(set) var pieces: [AttributedString]?
+    /// The part of the file shown: the symbol, or for a type, up to its first member.
+    private let range: NSRange
     /// The open file's symbol's code, plain, ready at once.
     private let ownCode: String?
     private let fileExtension: String
@@ -536,14 +539,15 @@ private final class CodeBlock {
 
     /// The open file's symbols get their code right away, from its text (plain: it's colored
     /// in the background).
-    init(symbol: CodeSymbol, ownText: NSString?, fileExtension: String, theme: SyntaxTheme) {
+    init(symbol: CodeSymbol, range: NSRange, ownText: NSString?, fileExtension: String, theme: SyntaxTheme) {
         self.symbol = symbol
+        self.range = range
         self.fileExtension = fileExtension
         self.theme = theme
-        if symbol.fileURL == nil, let ownText, NSMaxRange(symbol.range) <= ownText.length {
-            let plain = TabExpansion.expand(ownText.substring(with: symbol.range))
+        if symbol.fileURL == nil, let ownText, NSMaxRange(range) <= ownText.length {
+            let plain = CodePieces.trimmingTrailingWhitespace(TabExpansion.expand(ownText.substring(with: range)))
             ownCode = plain
-            code = AttributedString(plain)
+            pieces = SyntaxTheme.none.pieces(plain, fileExtension: fileExtension)
         } else {
             ownCode = nil
         }
@@ -557,7 +561,7 @@ private final class CodeBlock {
         guard file != nil || (ownCode != nil && theme != .none) else { return }
         isLoading = true
         let priority: TaskPriority = isVisible ? .userInitiated : .utility
-        let range = symbol.range
+        let range = range
         let preview = symbol.preview
         let ownCode = ownCode
         let fileExtension = fileExtension
@@ -566,11 +570,11 @@ private final class CodeBlock {
             var plain = ownCode
             if plain == nil, let file {
                 plain = await FileTextCache.shared.code(of: range, in: file, priority: priority)
-                    ?? TabExpansion.expand(preview)
+                    .map(CodePieces.trimmingTrailingWhitespace) ?? TabExpansion.expand(preview)
             }
             guard let plain else { return }
-            code = await Task.detached(priority: priority) {
-                theme.attributed(plain, fileExtension: fileExtension)
+            pieces = await Task.detached(priority: priority) {
+                theme.pieces(plain, fileExtension: fileExtension)
             }.value
         }
     }
@@ -601,21 +605,38 @@ private final class CodeBlockStore {
 
     func block(for symbol: CodeSymbol) -> CodeBlock {
         if let block = blocks[symbol.id] { return block }
-        let block = CodeBlock(symbol: symbol, ownText: ownText,
+        let block = CodeBlock(symbol: symbol, range: shownRange(of: symbol), ownText: ownText,
                               fileExtension: symbol.fileURL?.pathExtension ?? openFileExtension, theme: theme)
         blocks[symbol.id] = block
         return block
+    }
+
+    /// What a symbol's block shows. A type (a class and its members) stops where its first
+    /// member starts: the members follow as their own blocks, so the type isn't shown twice
+    /// (and a big class isn't one huge block). Members follow their type in the full list;
+    /// in search results, where they don't, the type is whole.
+    private func shownRange(of symbol: CodeSymbol) -> NSRange {
+        updatePositions()
+        guard let position = positions[symbol.id], position + 1 < symbols.count else { return symbol.range }
+        let next = symbols[position + 1]
+        guard next.kind != .file, next.fileURL == symbol.fileURL,
+              next.range.location > symbol.range.location, NSMaxRange(next.range) <= NSMaxRange(symbol.range)
+        else { return symbol.range }
+        return NSRange(location: symbol.range.location, length: next.range.location - symbol.range.location)
+    }
+
+    private func updatePositions() {
+        let key: [Int?] = [symbols.count, symbols.first?.id, symbols.last?.id]
+        guard key != positionsKey else { return }
+        positionsKey = key
+        positions = Dictionary(symbols.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// A symbol came into view: prepare it first, then the next few, so they're usually ready
     /// (at their final height) before they're on screen.
     func appeared(_ symbol: CodeSymbol) {
         block(for: symbol).load(isVisible: true)
-        let key: [Int?] = [symbols.count, symbols.first?.id, symbols.last?.id]
-        if key != positionsKey {
-            positionsKey = key
-            positions = Dictionary(symbols.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
-        }
+        updatePositions()
         guard let start = positions[symbol.id] else { return }
         let end = min(start + Self.lookahead + 1, symbols.count)
         for next in symbols[(start + 1)..<max(start + 1, end)] where next.kind != .file {
@@ -653,7 +674,9 @@ private struct SymbolCode: View {
     }
 }
 
-/// A symbol's code, redrawn when its block's code is ready.
+/// A symbol's code, redrawn when its block's code is ready. Long code is several `Text`s of
+/// `CodePieces.linesPerPiece` lines each, in a lazy stack: only the pieces on screen are laid
+/// out, so a long function never stalls scrolling while one huge `Text` is measured.
 private struct SymbolCodeText: View {
     let block: CodeBlock
     let onTap: @MainActor () -> Void
@@ -665,19 +688,33 @@ private struct SymbolCodeText: View {
     }
 
     var body: some View {
-        Button(action: onTap) {
-            Text(block.code ?? AttributedString(TabExpansion.expand(block.symbol.preview)))
-                .font(codeTextStyle.swiftUIFont)
-                .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, RawTextStyle.insets.left)
-                .padding(.vertical, 8)
-                .background(Color(uiColor: RawTextStyle.backgroundColor))
-                .contentShape(Rectangle())
+        code
+            .font(codeTextStyle.swiftUIFont)
+            .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, RawTextStyle.insets.left)
+            .padding(.vertical, 8)
+            .background(Color(uiColor: RawTextStyle.backgroundColor))
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(block.symbol.spokenDescription)
+            .accessibilityHint(Text("Opens its page"))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { onTap() }
+    }
+
+    @ViewBuilder
+    private var code: some View {
+        if let pieces = block.pieces, pieces.count > 1 {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(pieces.indices, id: \.self) { index in
+                    Text(pieces[index])
+                }
+            }
+        } else {
+            Text(block.pieces?.first ?? AttributedString(TabExpansion.expand(block.symbol.preview)))
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(block.symbol.spokenDescription)
-        .accessibilityHint(Text("Opens its page"))
     }
 }
 

@@ -75,6 +75,37 @@ nonisolated enum SyntaxTheme: String, CaseIterable, Sendable {
         }
     }
 
+    /// `text` for SwiftUI as pieces of `CodePieces.linesPerPiece` lines (the newline between
+    /// two pieces left out), colored like `attributed`. The text is parsed once, whole.
+    func pieces(_ text: String, fileExtension: String) -> [AttributedString] {
+        let utf16 = text as NSString
+        let ranges = CodePieces.ranges(in: utf16)
+        let runs = self == .none ? nil : SyntaxHighlighter.runs(in: text, fileExtension: fileExtension)
+        guard let runs, runs.contains(where: { $0.category != nil }) else {
+            return ranges.map { AttributedString(utf16.substring(with: $0)) }
+        }
+        var next = 0
+        return ranges.map { range in
+            var piece = AttributedString()
+            // Runs are in order: start from the first that reaches this piece.
+            while next < runs.count, NSMaxRange(runs[next].range) <= range.location { next += 1 }
+            var index = next
+            while index < runs.count, runs[index].range.location < NSMaxRange(range) {
+                let run = runs[index]
+                let part = NSIntersectionRange(run.range, range)
+                if part.length > 0 {
+                    var text = AttributedString(utf16.substring(with: part))
+                    if let category = run.category, let color = color(for: category) {
+                        text.swiftUI.foregroundColor = Color(uiColor: color)
+                    }
+                    piece.append(text)
+                }
+                index += 1
+            }
+            return piece
+        }
+    }
+
     /// `text` for SwiftUI `Text`, colored (plain for `none` and file types without a grammar).
     func attributed(_ text: String, fileExtension: String) -> AttributedString {
         var result = AttributedString(text)
