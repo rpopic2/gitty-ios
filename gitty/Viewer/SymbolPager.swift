@@ -697,7 +697,10 @@ struct ReadOnlyTextView: UIViewRepresentable {
             switch gesture.state {
             case .began, .changed:
                 pressCount += 1
-                pressIndex = characterIndex(at: gesture.location(in: textView), in: textView)
+                let index = characterIndex(at: gesture.location(in: textView), in: textView)
+                // Moving within a character changes nothing.
+                guard gesture.state == .began || index != pressIndex else { return }
+                pressIndex = index
                 snapSelection(in: textView)  // in case the word was selected first
             default:
                 let count = pressCount
@@ -719,7 +722,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
             guard !isSnapping, let index = pressIndex else { return }
             let selected = textView.selectedRange
             guard selected.length > 0, NSLocationInRange(index, selected),
-                  let token = CodeToken.range(at: index, in: textView.textStorage.string as NSString),
+                  let token = CodeToken.range(at: index, in: textView.textStorage.mutableString),
                   token != selected
             else { return }
             isSnapping = true
@@ -834,7 +837,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         /// Scrolls so `anchor.line` starts `anchor.screenY` below the text view's top, as far as
         /// the text allows.
         func scroll(to anchor: PageAnchor, in textView: UITextView) {
-            let text = textView.textStorage.string as NSString
+            let text: NSString = textView.textStorage.mutableString  // `string` would copy it all
             guard text.length > 0 else { return }
             var location = 0
             var line = 0

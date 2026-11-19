@@ -33,12 +33,18 @@ struct CodeTokenTests {
         #expect(token(in: "x = 1.25;", at: "1") == "1.25")
         #expect(token(in: "x = 1.25;", at: "25") == "1.25")
         #expect(token(in: "0x1F + 2", at: "x1") == "0x1F")
-        #expect(token(in: "v1.x", at: "v") == "v1")  // not a number
+        #expect(token(in: "x = 1.25;", at: ".") == "1.25")
+        #expect(token(in: "v1.x", at: "v") == "v1")  // a member, not a number
     }
 
     @Test func spaceKeepsTheTextViewsSelection() {
         #expect(CodeToken.range(at: 1, in: "a b") == nil)
         #expect(CodeToken.range(at: 5, in: "abc") == nil)
+    }
+
+    @Test func readsAMutableString() {
+        let text = NSMutableString(string: "a.bc")
+        #expect(CodeToken.range(at: 3, in: text) == NSRange(location: 2, length: 2))
     }
 
     @Test func otherScriptsAreWords() {
