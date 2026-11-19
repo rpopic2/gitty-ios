@@ -317,6 +317,28 @@ final class CodeDocumentModel {
         }
     }
 
+    /// The Files level's search, by file name (see `SymbolFileGroup.symbols(inFilesNamed:in:)`),
+    /// worked out once per search and list.
+    func symbols(inFilesNamed query: String) -> [CodeSymbol] {
+        guard case .ready(let all) = symbolIndex else { return [] }
+        let key = FileSearchKey(query: query, count: all.count, first: all.first?.id, last: all.last?.id,
+                                sorting: symbolSorting)
+        if let fileSearch, fileSearch.key == key { return fileSearch.result }
+        let result = SymbolFileGroup.symbols(inFilesNamed: query, in: all)
+        fileSearch = (key, result)
+        return result
+    }
+
+    private struct FileSearchKey: Equatable {
+        let query: String
+        let count: Int
+        let first: Int?
+        let last: Int?
+        let sorting: ListSorting
+    }
+
+    @ObservationIgnored private var fileSearch: (key: FileSearchKey, result: [CodeSymbol])?
+
     /// The text of one symbol, styled like the file. `nil` while another file's text is loading.
     /// A file's own entry gets the file's text object itself, the same one until it's refreshed.
     func text(of symbol: CodeSymbol) -> NSAttributedString? {

@@ -95,15 +95,18 @@ private struct BarTextField: UIViewRepresentable {
     let onSubmit: @MainActor () -> Void
     /// Adds Paste and Go to the edit menu when set.
     let onPasteAndGo: (@MainActor (String) -> Void)?
+    /// In place of the style's placeholder.
+    var placeholder: String? = nil
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(style: Style, text: Binding<String>, onSubmit: @escaping @MainActor () -> Void,
-         onPasteAndGo: (@MainActor (String) -> Void)? = nil) {
+         onPasteAndGo: (@MainActor (String) -> Void)? = nil, placeholder: String? = nil) {
         self.style = style
         _text = text
         self.onSubmit = onSubmit
         self.onPasteAndGo = onPasteAndGo
+        self.placeholder = placeholder
     }
 
     func makeCoordinator() -> Coordinator {
@@ -130,6 +133,7 @@ private struct BarTextField: UIViewRepresentable {
             field.keyboardType = .asciiCapable  // symbol names
             field.returnKeyType = .search
         }
+        if let placeholder { field.placeholder = placeholder }
         field.delegate = context.coordinator
         field.addTarget(context.coordinator, action: #selector(Coordinator.textChanged(_:)), for: .editingChanged)
         // Fill the width it's given instead of sizing to its text.
@@ -149,6 +153,7 @@ private struct BarTextField: UIViewRepresentable {
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onPasteAndGo = onPasteAndGo
         if field.text != text { field.text = text }
+        if let placeholder, field.placeholder != placeholder { field.placeholder = placeholder }
     }
 
     final class Coordinator: NSObject, UITextFieldDelegate {
@@ -215,11 +220,15 @@ struct SymbolSearchEditor: View {
     @Binding var query: String
     /// Results are still coming in: a small spinner at the end of the field.
     let isSearching: Bool
+    /// What it searches: "Search Symbols", or "Search Files" at the Files level.
+    let placeholder: String
     let onClose: @MainActor () -> Void
 
-    init(query: Binding<String>, isSearching: Bool = false, onClose: @escaping @MainActor () -> Void) {
+    init(query: Binding<String>, isSearching: Bool = false, placeholder: String = String(localized: "Search Symbols"),
+         onClose: @escaping @MainActor () -> Void) {
         _query = query
         self.isSearching = isSearching
+        self.placeholder = placeholder
         self.onClose = onClose
     }
 
@@ -228,7 +237,7 @@ struct SymbolSearchEditor: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            BarTextField(style: .search, text: $query, onSubmit: onClose)
+            BarTextField(style: .search, text: $query, onSubmit: onClose, placeholder: placeholder)
             if isSearching {
                 ProgressView()
                     .controlSize(.small)

@@ -55,4 +55,20 @@ struct SymbolGroupsTests {
         #expect(store.foldedFiles() == [other])
         #expect(SymbolFoldStore(defaults: defaults).foldedFiles() == [other])
     }
+
+    @Test func theFilesLevelSearchesFileNames() {
+        func entry(_ id: Int, _ name: String, in file: URL?) -> CodeSymbol {
+            CodeSymbol(id: id, name: name, kind: .file, range: NSRange(location: 0, length: 9),
+                       line: 1, preview: "", fileURL: file)
+        }
+        let list = [entry(0, "a.c", in: nil), symbol(1, "main"),
+                    entry(2, "b.c", in: other), symbol(3, "abc", in: other),
+                    entry(4, "c.c", in: third), symbol(5, "b", in: third)]
+        // "b" names b.c (and the function `b` in c.c doesn't count): b.c, with all its symbols.
+        #expect(SymbolFileGroup.symbols(inFilesNamed: "b", in: list).map(\.id) == [2, 3])
+        // ".c" matches all three, equally: list order.
+        #expect(SymbolFileGroup.symbols(inFilesNamed: ".c", in: list).map(\.id) == [0, 1, 2, 3, 4, 5])
+        #expect(SymbolFileGroup.symbols(inFilesNamed: "c.c", in: list).first?.id == 4)  // exact name first
+        #expect(SymbolFileGroup.symbols(inFilesNamed: "zzz", in: list).isEmpty)
+    }
 }

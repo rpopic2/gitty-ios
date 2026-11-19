@@ -37,6 +37,35 @@ nonisolated struct SymbolFileGroup: Identifiable, Sendable {
     }
 }
 
+extension SymbolFileGroup {
+    /// The Files level's search: the files whose name matches (fuzzy, like symbol search), the
+    /// best match first (equal ones in list order), each with its entry and all its symbols.
+    /// `symbols` is the whole list, where each file's entry and symbols come together.
+    static func symbols(inFilesNamed query: String, in symbols: [CodeSymbol]) -> [CodeSymbol] {
+        let search = SymbolSearch.Query(query)
+        guard !search.text.isEmpty else { return symbols }
+        // Each file's run of the list, from its entry.
+        var matches: [(range: Range<Int>, rank: Int)] = []
+        var start = 0
+        while start < symbols.count {
+            var end = start + 1
+            while end < symbols.count, symbols[end].kind != .file, symbols[end].fileURL == symbols[start].fileURL {
+                end += 1
+            }
+            let entry = symbols[start]
+            let name = entry.kind == .file ? entry.name : (entry.fileURL?.lastPathComponent ?? entry.name)
+            if let rank = SymbolSearch.rank(search, SymbolSearch.Index.Entry(name)) {
+                matches.append((start..<end, rank))
+            }
+            start = end
+        }
+        // `sorted` isn't stable: break ties by place.
+        return matches
+            .sorted { $0.rank != $1.rank ? $0.rank < $1.rank : $0.range.lowerBound < $1.range.lowerBound }
+            .flatMap { symbols[$0.range] }
+    }
+}
+
 /// The files folded away in Symbols' grouped view, saved in `UserDefaults`. Files are kept by
 /// URL, so each project (and each file opened by URL) keeps its own.
 nonisolated struct SymbolFoldStore: @unchecked Sendable {

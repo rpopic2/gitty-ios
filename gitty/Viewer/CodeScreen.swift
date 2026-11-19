@@ -230,7 +230,8 @@ struct CodeScreen: View {
             .equatable()
             // A fresh list for each search's results, for the full list after, and for each order
             // (ids are places in the list, so they move; the list finds its symbol by name).
-            .id([shownQuery, model.symbolSorting.order.rawValue, model.symbolSorting.isReversed ? "reversed" : ""])
+            .id([shownQuery, model.symbolSorting.order.rawValue, model.symbolSorting.isReversed ? "reversed" : "",
+                 hasSymbolQuery && searchesFileNames ? "files" : ""])
         case .unsupportedLanguage:
             placeholder {
                 ContentUnavailableView(
@@ -277,13 +278,22 @@ struct CodeScreen: View {
     /// The symbols matching the search, best first; all of them in file order without one.
     /// The search runs in the background (`CodeDocumentModel.search`): these are the matches so
     /// far, which fill in while it runs.
+    /// At the Files level, the search is by file name instead: the matching files, each with
+    /// all its symbols.
     private var shownSymbols: [CodeSymbol] {
-        hasSymbolQuery ? model.searchResults : indexedSymbols
+        guard hasSymbolQuery else { return indexedSymbols }
+        return searchesFileNames ? model.symbols(inFilesNamed: symbolQuery) : model.searchResults
     }
 
     /// The search `shownSymbols` are for: "" while the full list shows.
     private var shownQuery: String {
-        hasSymbolQuery ? model.resultsQuery : ""
+        guard hasSymbolQuery else { return "" }
+        return searchesFileNames ? symbolQuery : model.resultsQuery
+    }
+
+    /// The Files level searches file names; the other levels, symbols.
+    private var searchesFileNames: Bool {
+        mode == .files
     }
 
     private var hasSymbolQuery: Bool {
@@ -292,7 +302,7 @@ struct CodeScreen: View {
 
     /// The search hasn't finished going through the symbols (or hasn't started on this query).
     private var isSearchPending: Bool {
-        hasSymbolQuery && (model.isSearching || model.resultsQuery != symbolQuery)
+        hasSymbolQuery && !searchesFileNames && (model.isSearching || model.resultsQuery != symbolQuery)
     }
 
     /// Full-screen, opaque, so the hidden file text never shows through.
@@ -309,6 +319,8 @@ struct CodeScreen: View {
     private var bottom: some View {
         if isSearchingSymbols && barSearchesSymbols {
             SymbolSearchEditor(query: $symbolQuery, isSearching: isSearchPending,
+                               placeholder: searchesFileNames ? String(localized: "Search Files")
+                                   : String(localized: "Search Symbols"),
                                onClose: { isSearchingSymbols = false })
         } else if isEditingAddress {
             AddressEditor(
