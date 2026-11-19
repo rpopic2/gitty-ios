@@ -122,11 +122,11 @@ struct SymbolPager: View {
                                     positionURL: isFilePage ? symbol.fileURL ?? openFile : nil,
                                     onRefresh: refreshAction(for: symbol),
                                     lineNumbering: .counted(firstLine: { firstLine(symbol) }),
+                                    onScrollDown: { isCaptionHidden = $0 },
                                     // The page's text view starts below the status bar.
                                     startAnchor: symbol.id == initialID
                                         ? initialAnchor.map { PageAnchor(line: $0.line, screenY: $0.screenY - safeArea.top) }
-                                        : nil,
-                                    onScrollDown: { isCaptionHidden = $0 }
+                                        : nil
                                 )
                                 // The text starts below the status bar and never scrolls under
                                 // it: just the page's background shows there.
