@@ -41,6 +41,7 @@ struct CodeScreen: View {
     @State private var collapseRequest: CollapseRequest?
     /// The file whose info and history are showing (Show History in the Code level's menu).
     @State private var historyFile: HistoryFile?
+    @State private var historyDetent: PresentationDetent = .large
 
     private struct HistoryFile: Identifiable {
         let url: URL
@@ -151,8 +152,9 @@ struct CodeScreen: View {
                                         in: pagerNamespace))
         }
         .sheet(item: $historyFile) { file in
+            // All the way up, for the history: it can be pulled down to half.
             FileInfoView(url: file.url)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.medium, .large], selection: $historyDetent)
                 .presentationDragIndicator(.visible)
         }
         .alert("Couldn’t Refresh", isPresented: refreshAlertIsPresented, presenting: model.refreshError) { _ in
@@ -258,7 +260,10 @@ struct CodeScreen: View {
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 onCloseSearch: closeSearchAction,
                 albumContext: albumContext,
-                onShowHistory: { historyFile = HistoryFile(url: $0) }
+                onShowHistory: {
+                    historyDetent = .large
+                    historyFile = HistoryFile(url: $0)
+                }
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()
