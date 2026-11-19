@@ -257,6 +257,15 @@ struct ProjectFilesView: View {
     /// Saves the filter and lists again with it, if it changed.
     private func applyFilter() {
         ProjectFilterStore.standard.save(filterText, for: projectID)
+        if clone?.scope != nil {
+            // A clone of the filtered files only follows the filter.
+            let saved = ProjectFilterStore.standard.text(for: projectID)
+            Task {
+                guard (try? await CloneStore.shared.applyFilter(saved, projectID: projectID)) == true else { return }
+                clone = await CloneStore.shared.record(forProject: projectID)
+                self.saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))
+            }
+        }
         let new = FileFilter(filterText.trimmingCharacters(in: .whitespaces))
         guard new != filter else { return }
         filter = new
@@ -432,6 +441,9 @@ struct ProjectFilesView: View {
             .accessibilityValue(Text(cloneProgress, format: .percent.precision(.fractionLength(0))))
         } else if clone != nil {
             Menu {
+                if clone?.scope != nil {
+                    Text("Only the filtered files are kept, following the filter.")
+                }
                 Button("Delete Clone", systemImage: "trash", role: .destructive) { isConfirmingDeleteClone = true }
             } label: {
                 Image(systemName: "checkmark.circle.fill")
@@ -440,18 +452,25 @@ struct ProjectFilesView: View {
             }
             .buttonStyle(.borderless)  // only the button, not the whole row
             .accessibilityLabel("Cloned")
-        } else {
-            Button { startClone(project) } label: {
-                HStack(spacing: 6) {
-                    if repositoryBytes > 0 {
-                        Text(repositoryBytes, format: .byteCount(style: .file))
-                            .font(.footnote)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                    Image(systemName: "arrow.down.circle")
-                        .font(.title2)
+        } else if !filter.isEmpty || !(project.folder ?? "").isEmpty {
+            // A filter (or a folder of the repository): clone all of it, or keep just those files.
+            Menu {
+                Button { startClone(project, filtered: true) } label: {
+                    Text("Clone Filtered Files")
+                    Text("Only the files the filter shows are kept on this device. Git still downloads them all.")
                 }
+                Button { startClone(project, filtered: false) } label: {
+                    Text("Clone All Files")
+                }
+            } label: {
+                cloneLabel
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Clone")
+            .accessibilityHint("Downloads the project with Git, its latest commit only, for offline reading and history.")
+        } else {
+            Button { startClone(project, filtered: false) } label: {
+                cloneLabel
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("Clone")
@@ -459,9 +478,23 @@ struct ProjectFilesView: View {
         }
     }
 
+    private var cloneLabel: some View {
+        HStack(spacing: 6) {
+            if repositoryBytes > 0 {
+                Text(repositoryBytes, format: .byteCount(style: .file))
+                    .font(.footnote)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            Image(systemName: "arrow.down.circle")
+                .font(.title2)
+        }
+    }
+
     /// Clones the project (the latest commit). Its files then come from the clone, and the ones
     /// downloaded one by one are deleted.
-    private func startClone(_ project: ProjectInfo) {
+    /// - Parameter filtered: keep only the files the project's filter lets through.
+    private func startClone(_ project: ProjectInfo, filtered: Bool) {
         cloneProgress = 0
         let (fractions, continuation) = AsyncStream.makeStream(of: Double.self, bufferingPolicy: .bufferingNewest(1))
         Task {
@@ -470,7 +503,7 @@ struct ProjectFilesView: View {
         }
         Task {
             do {
-                try await CloneStore.shared.clone(project) { continuation.yield($0) }
+                try await CloneStore.shared.clone(project, filtered: filtered) { continuation.yield($0) }
                 continuation.finish()
                 clone = await CloneStore.shared.record(forProject: projectID)
                 saved = Set(await DocumentStore.shared.savedDocuments().map(\.url))

@@ -74,16 +74,19 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
         lineStarts = starts
     }
 
-    /// Draws the code slid right by `offset`, and while it's slid, each line's number (counted
-    /// from `firstFileLine`, the block's first line in its file) left of it.
-    func draw(in context: CGContext, offset: CGFloat, firstFileLine: Int) {
+    /// Draws the code.
+    func draw(in context: CGContext) {
         context.saveGState()
         context.textMatrix = .identity
-        context.translateBy(x: offset, y: height)
+        context.translateBy(x: 0, y: height)
         context.scaleBy(x: 1, y: -1)
         CTFrameDraw(frame, context)
         context.restoreGState()
-        guard offset > 0 else { return }
+    }
+
+    /// Draws each line's number (counted from `firstFileLine`, the block's first line in its
+    /// file) on its first row, right-aligned at `right`.
+    func drawNumbers(in context: CGContext, right: CGFloat, firstFileLine: Int) {
         let font = UIFont.monospacedDigitSystemFont(ofSize: max(9, key.style.size - 2), weight: .regular)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.secondaryLabel]
         UIGraphicsPushContext(context)
@@ -91,25 +94,27 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
             let label = String(firstFileLine + firstLine + line) as NSString
             let size = label.size(withAttributes: attributes)
             let baseline = height - origins[row].y
-            label.draw(at: CGPoint(x: offset - 8 - size.width, y: baseline - font.ascender), withAttributes: attributes)
+            label.draw(at: CGPoint(x: right - size.width, y: baseline - font.ascender), withAttributes: attributes)
         }
         UIGraphicsPopContext()
     }
 }
 
 /// Draws a `CodePieceLayout`. Its height is the layout's, so SwiftUI never measures text.
+/// While peeking (the whole list slides right), the line numbers show left of the code, in
+/// the strip that uncovers.
 struct CodePieceView: UIViewRepresentable {
     let layout: CodePieceLayout
     /// The block's first line in its file, for the line peek.
     let firstFileLine: Int
-    let peekOffset: CGFloat
+    let isPeeking: Bool
 
     func makeUIView(context: Context) -> CodePieceUIView {
         CodePieceUIView()
     }
 
     func updateUIView(_ view: CodePieceUIView, context: Context) {
-        view.update(layout: layout, firstFileLine: firstFileLine, peekOffset: peekOffset)
+        view.update(layout: layout, firstFileLine: firstFileLine, isPeeking: isPeeking)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: CodePieceUIView, context: Context) -> CGSize? {
@@ -120,7 +125,10 @@ struct CodePieceView: UIViewRepresentable {
 final class CodePieceUIView: UIView {
     private var layout: CodePieceLayout?
     private var firstFileLine = 1
-    private var peekOffset: CGFloat = 0
+    private let numbers = CodeLineNumbersView()
+
+    /// Room left of the code for the numbers: the peek's slide and the block's margin.
+    static let gutterWidth = CodePeek.width + RawTextStyle.insets.left
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -128,20 +136,54 @@ final class CodePieceUIView: UIView {
         backgroundColor = .clear
         isUserInteractionEnabled = false  // taps go to the block (it opens its page)
         contentMode = .redraw
+        clipsToBounds = false  // the numbers sit left of the code
+        numbers.isHidden = true
+        addSubview(numbers)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    func update(layout: CodePieceLayout, firstFileLine: Int, peekOffset: CGFloat) {
-        guard layout !== self.layout || firstFileLine != self.firstFileLine || peekOffset != self.peekOffset else { return }
-        self.layout = layout
-        self.firstFileLine = firstFileLine
-        self.peekOffset = peekOffset
-        setNeedsDisplay()
+    func update(layout: CodePieceLayout, firstFileLine: Int, isPeeking: Bool) {
+        if layout !== self.layout || firstFileLine != self.firstFileLine {
+            self.layout = layout
+            self.firstFileLine = firstFileLine
+            setNeedsDisplay()
+            numbers.layout = layout
+            numbers.firstFileLine = firstFileLine
+            numbers.setNeedsDisplay()
+        }
+        numbers.isHidden = !isPeeking
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let width = Self.gutterWidth
+        numbers.frame = CGRect(x: -width, y: 0, width: width, height: bounds.height)
     }
 
     override func draw(_ rect: CGRect) {
         guard let layout, let context = UIGraphicsGetCurrentContext() else { return }
-        layout.draw(in: context, offset: peekOffset, firstFileLine: firstFileLine)
+        layout.draw(in: context)
+    }
+}
+
+/// A piece's line numbers, drawn once per layout and shown only while peeking.
+final class CodeLineNumbersView: UIView {
+    var layout: CodePieceLayout?
+    var firstFileLine = 1
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        contentMode = .redraw
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func draw(_ rect: CGRect) {
+        guard let layout, let context = UIGraphicsGetCurrentContext() else { return }
+        layout.drawNumbers(in: context, right: bounds.width - 8, firstFileLine: firstFileLine)
     }
 }

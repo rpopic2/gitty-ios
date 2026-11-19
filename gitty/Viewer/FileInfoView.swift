@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A file's info, like a photo's in Photos: pull up past the end of a file's page to see it.
+/// A file's info, like a photo's in Photos: tap a page's caption (or a file in Project) to see it.
 /// Its path, size and lines, its last change and its history (from the project's clone: Clone
 /// first if there's none), and a link to it on github.com. Tap a commit to see what it changed.
 struct FileInfoView: View {
@@ -10,7 +10,7 @@ struct FileInfoView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
-    /// Open, at the top: from the Project tab, where a tap on a file shows this first.
+    /// Open, in place of Done: from the Project tab, where a tap on a file shows this first.
     private let onOpen: (@MainActor () -> Void)?
 
     /// - Parameters:
@@ -44,7 +44,12 @@ struct FileInfoView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    // From Project, Open takes Done's place (a swipe down still closes it).
+                    if let onOpen {
+                        Button("Open") { onOpen() }
+                    } else {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
             .navigationDestination(for: CommitPage.self) { page in
@@ -70,17 +75,6 @@ struct FileInfoView: View {
 
     private var fileSection: some View {
         Section {
-            if let onOpen {
-                Button {
-                    onOpen()
-                } label: {
-                    Label("Open", systemImage: "doc.text")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.location?.path ?? model.url.absoluteString)
                     .font(.callout.monospaced())

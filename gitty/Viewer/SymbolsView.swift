@@ -284,6 +284,7 @@ struct SymbolsView: View, Equatable {
             }
         }
         .scrollTargetLayout()
+        .modifier(PeekShift(peek: peek))  // the whole list slides while peeking
     }
 
     /// What adding this entry to an album adds.
@@ -380,7 +381,8 @@ struct SymbolsView: View, Equatable {
             if zoom == .code, width != codeWidth { codeWidth = width }
         }
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
-        .background(Color(uiColor: .systemGroupedBackground))
+        // At the Code level, the strip a peek uncovers is the code's background.
+        .background(Color(uiColor: zoom == .code ? RawTextStyle.backgroundColor : .systemGroupedBackground))
         .onScrollPhaseChange { _, phase, context in
             scroll.isUserScrolling = phase == .interacting || phase == .decelerating
             scroll.isCoasting = phase == .decelerating
@@ -568,12 +570,7 @@ private struct SymbolTitle: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 8)
-            if symbol.kind != .file {
-                Text(symbol.lineLabel)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
+            // No line number: peek at the numbers instead.
         }
         .padding(.horizontal, 12)
         .frame(height: symbol.kind == .file ? 36 : 28)
@@ -869,7 +866,7 @@ private struct SymbolCodeText: View {
 
     /// While peeking, slid right with its line numbers.
     private func piece(_ layout: CodePieceLayout) -> some View {
-        CodePieceView(layout: layout, firstFileLine: block.firstLine, peekOffset: peek.isActive ? peek.offset : 0)
+        CodePieceView(layout: layout, firstFileLine: block.firstLine, isPeeking: peek.isActive)
     }
 }
 

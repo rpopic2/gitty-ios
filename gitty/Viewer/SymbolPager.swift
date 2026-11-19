@@ -6,8 +6,8 @@ import UIKit
 /// list at the symbol on screen (the zoom navigation transition provides those gestures).
 ///
 /// A file's own page is the whole file, where File used to be: select text for Comment and
-/// Search, pull to refresh it, and it comes back where you left off. Pull up past its end for
-/// the file's info and history, like swiping up on a photo.
+/// Search, pull to refresh it, and it comes back where you left off. Tap the caption for the
+/// file's info and history.
 struct SymbolPager: View {
     let symbols: [CodeSymbol]
     /// The symbol that was tapped. The pager opens on it.
@@ -117,7 +117,6 @@ struct SymbolPager: View {
                                     onHighlight: { highlights?.current = $0 },
                                     positionURL: isFilePage ? symbol.fileURL ?? openFile : nil,
                                     onRefresh: refreshAction(for: symbol),
-                                    onPullUp: infoAction(for: symbol),
                                     lineNumbering: .counted(firstLine: { firstLine(symbol) }),
                                     onScrollDown: { isCaptionHidden = $0 }
                                 )
@@ -173,7 +172,7 @@ struct SymbolPager: View {
         }
     }
 
-    /// Pulling up past the end of a page (or its caption): the info panel of its file.
+    /// Tapping a page's caption: the info panel of its file.
     private func infoAction(for symbol: CodeSymbol) -> @MainActor () -> Void {
         let url = symbol.fileURL ?? openFile
         return { infoFile = InfoFile(url: url) }
@@ -257,7 +256,7 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
 }
 
 /// "name · Line N" in a small capsule at the bottom, in place of the bar and selector. Tap it
-/// or pull it up for the file's info.
+/// for the file's info.
 private struct SymbolCaption: View {
     let symbol: CodeSymbol
     let onInfo: @MainActor () -> Void
@@ -265,8 +264,6 @@ private struct SymbolCaption: View {
     static let height: CGFloat = 36
     /// Space kept free under the text so its end isn't hidden behind the caption.
     static let reservedHeight: CGFloat = height + 16
-    /// How far up to pull it (or flick it) for the info.
-    private static let pullDistance: CGFloat = 40
 
     init(symbol: CodeSymbol, onInfo: @escaping @MainActor () -> Void) {
         self.symbol = symbol
@@ -276,14 +273,6 @@ private struct SymbolCaption: View {
     var body: some View {
         capsule
             .onTapGesture { onInfo() }
-            .gesture(
-                DragGesture(minimumDistance: 8).onEnded { value in
-                    if value.translation.height < -Self.pullDistance
-                        || value.predictedEndTranslation.height < -3 * Self.pullDistance {
-                        onInfo()
-                    }
-                }
-            )
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityHint(Text("Shows the file’s info and history"))
@@ -350,8 +339,6 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var positionURL: URL? = nil
     /// A file's page: pull to refresh.
     var onRefresh: (@MainActor () async -> Void)? = nil
-    /// Pulled up past the end of the text: the file's info.
-    var onPullUp: (@MainActor () -> Void)? = nil
     /// Swiping in from the left edge and holding shows the line numbers, numbered this way.
     var lineNumbering: LineNumbering? = nil
     /// The reader scrolled down (`true`: hide what covers the text) or back up.
@@ -410,15 +397,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.highlight = highlight
         coordinator.onHighlight = onHighlight
         coordinator.onRefresh = onRefresh
-        coordinator.onPullUp = onPullUp
         coordinator.lineNumbering = lineNumbering
         coordinator.onScrollDown = onScrollDown
-        textView.accessibilityCustomActions = onPullUp == nil ? nil : [
-            UIAccessibilityCustomAction(name: String(localized: "File Info")) { _ in
-                coordinator.onPullUp?()
-                return true
-            },
-        ]
         coordinator.positionURL = positionURL
         coordinator.positionStore = positionStore
 
@@ -472,7 +452,6 @@ struct ReadOnlyTextView: UIViewRepresentable {
         var highlight: IdentifierHighlight?
         var onHighlight: (@MainActor (IdentifierHighlight?) -> Void)?
         var onRefresh: (@MainActor () async -> Void)?
-        var onPullUp: (@MainActor () -> Void)?
         var lineNumbering: LineNumbering?
         /// Showing while a peek is held.
         private var gutter: LineNumberGutter?
@@ -712,17 +691,6 @@ struct ReadOnlyTextView: UIViewRepresentable {
             guard down != isScrolledDown else { return }
             isScrolledDown = down
             onScrollDown(down)
-        }
-
-        /// Let go while pulled this far past the end: the file's info opens.
-        static let pullUpDistance: CGFloat = 60
-
-        func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
-                                       targetContentOffset: UnsafeMutablePointer<CGPoint>) {
-            guard let onPullUp else { return }
-            let inset = scrollView.adjustedContentInset
-            let end = max(scrollView.contentSize.height + inset.bottom - scrollView.bounds.height, -inset.top)
-            if scrollView.contentOffset.y > end + Self.pullUpDistance { onPullUp() }
         }
 
         // MARK: Reading position (a file's page)
