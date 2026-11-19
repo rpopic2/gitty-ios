@@ -23,6 +23,8 @@ struct BrowserView: View {
     @State private var isShowingSettings = false
     /// The review that Comment adds to, kept until it's shared or deleted.
     @State private var review = ReviewDraft()
+    /// The identifier highlighted on pages, kept across files until it's removed.
+    @State private var highlights = HighlightState()
     /// The code font and size, chosen in the sidebar.
     @AppStorage(CodeTextStyle.fontKey) private var codeFont: CodeFont = .courier
     @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
@@ -60,6 +62,7 @@ struct BrowserView: View {
         }
         .environment(sideBar)
         .environment(review)
+        .environment(highlights)
         .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize)))
         .sheet(isPresented: $isShowingSettings) { SettingsView() }
         .onOpenURL(perform: openShared)

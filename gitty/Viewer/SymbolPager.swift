@@ -34,6 +34,8 @@ struct SymbolPager: View {
     @State private var hasPaged = false
     /// Swiping from the right edge pages here, so it doesn't open the sidebar.
     @Environment(SideBarState.self) private var sideBar: SideBarState?
+    /// The identifier highlighted on every page (Highlight in the text menu).
+    @Environment(HighlightState.self) private var highlights: HighlightState?
     /// A page takes its text again when the code font changes.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
@@ -96,6 +98,9 @@ struct SymbolPager: View {
                                     symbolSearchTerm: symbolSearchTerm,
                                     onSearchSymbols: onSearchSymbols,
                                     onComment: { onComment(symbol, $0) },
+                                    fileExtension: (symbol.fileURL ?? openFile).pathExtension,
+                                    highlight: highlights?.current,
+                                    onHighlight: { highlights?.current = $0 },
                                     positionURL: isFilePage ? symbol.fileURL ?? openFile : nil,
                                     onRefresh: refreshAction(for: symbol)
                                 )
@@ -244,6 +249,12 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var onSearchSymbols: (@MainActor (String) -> Void)? = nil
     /// Comment in the text menu: adds a comment on the selected range to the review.
     var onComment: (@MainActor (NSRange) -> Void)? = nil
+    /// Highlight in the text menu: the file's extension, for its tree-sitter grammar…
+    var fileExtension = ""
+    /// …the identifier highlighted on every page…
+    var highlight: IdentifierHighlight? = nil
+    /// …and choosing it (`nil`: Remove Highlight). `nil` hides the item.
+    var onHighlight: (@MainActor (IdentifierHighlight?) -> Void)? = nil
     /// A file's page: the file whose reading position it keeps (saved when scrolling stops,
     /// restored when the page takes its text).
     var positionURL: URL? = nil
@@ -276,6 +287,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.symbolSearchTerm = symbolSearchTerm
         coordinator.onSearchSymbols = onSearchSymbols
         coordinator.onComment = onComment
+        coordinator.fileExtension = fileExtension
+        coordinator.highlight = highlight
+        coordinator.onHighlight = onHighlight
         coordinator.onRefresh = onRefresh
         coordinator.positionURL = positionURL
         coordinator.positionStore = positionStore
@@ -293,12 +307,17 @@ struct ReadOnlyTextView: UIViewRepresentable {
             textView.textContainerInset = containerInset
         }
 
-        guard coordinator.textID != textID else { return }
+        guard coordinator.textID != textID else {
+            coordinator.updateHighlight(in: textView)
+            return
+        }
         // Refreshed text keeps the place on screen; first text goes back to the saved one.
         let keep = coordinator.textID != nil && textView.textStorage.length > 0
             ? coordinator.currentPosition(in: textView) : nil
         coordinator.textID = textID
         textView.attributedText = text
+        coordinator.textChanged()
+        coordinator.updateHighlight(in: textView)
         textView.contentOffset.y = -contentInset.top
         if let positionURL, let position = keep ?? positionStore.position(for: positionURL) {
             // Once the page has its size, so the lines are where they'll be.
@@ -319,9 +338,20 @@ struct ReadOnlyTextView: UIViewRepresentable {
         var symbolSearchTerm: (@MainActor (String) -> String?)?
         var onSearchSymbols: (@MainActor (String) -> Void)?
         var onComment: (@MainActor (NSRange) -> Void)?
+        var fileExtension = ""
+        /// The highlight wanted on this page.
+        var highlight: IdentifierHighlight?
+        var onHighlight: (@MainActor (IdentifierHighlight?) -> Void)?
         var onRefresh: (@MainActor () async -> Void)?
         var positionURL: URL?
         var positionStore: ReadingPositionStore = .standard
+
+        /// The page's identifiers, made the first time Highlight needs them.
+        private var identifiers: IdentifierMap?
+        /// The highlight drawn, and where.
+        private var shownHighlight: IdentifierHighlight?
+        private var highlightedRanges: [NSRange] = []
+        private var highlightTask: Task<Void, Never>?
 
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
@@ -329,7 +359,82 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 + RawTextStyle.searchItems(for: range, in: textView,
                                            searchTerm: symbolSearchTerm,
                                            onSearch: onSearchSymbols)
+                + highlightItems(for: range, in: textView)
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
+        }
+
+        // MARK: Highlight
+
+        /// "Highlight" when the selection is inside an identifier (a word, on a page without
+        /// a grammar); "Remove Highlight" on one that's highlighted.
+        private func highlightItems(for range: NSRange, in textView: UITextView) -> [UIMenuElement] {
+            guard let onHighlight, textView.textStorage.length > 0,
+                  NSMaxRange(range) <= textView.textStorage.length
+            else { return [] }
+            let map = identifiers ?? IdentifierMap(text: textView.textStorage.string, fileExtension: fileExtension)
+            identifiers = map
+            guard let identifier = map.identifier(containing: range) else { return [] }
+            let isHighlighted = highlightedRanges.contains {
+                $0.location <= range.location && NSMaxRange(range) <= NSMaxRange($0)
+            }
+            if isHighlighted {
+                return [UIAction(title: String(localized: "Remove Highlight"),
+                                 image: UIImage(systemName: "highlighter")) { _ in onHighlight(nil) }]
+            }
+            return [UIAction(title: String(localized: "Highlight"),
+                             image: UIImage(systemName: "highlighter")) { _ in onHighlight(identifier) }]
+        }
+
+        /// The page has new text, without any highlight.
+        func textChanged() {
+            highlightTask?.cancel()
+            highlightTask = nil
+            identifiers = nil
+            shownHighlight = nil
+            highlightedRanges = []
+        }
+
+        /// Draws `highlight` if it isn't yet. The page's identifiers are found off the main
+        /// thread the first time (a few milliseconds for a big file).
+        func updateHighlight(in textView: UITextView) {
+            guard highlight != shownHighlight else { return }
+            shownHighlight = highlight
+            highlightTask?.cancel()
+            highlightTask = nil
+            guard let highlight, textView.textStorage.length > 0 else {
+                mark([], in: textView)
+                return
+            }
+            if let identifiers {
+                mark(identifiers.occurrences(of: highlight), in: textView)
+                return
+            }
+            let text = textView.textStorage.string
+            let fileExtension = fileExtension
+            highlightTask = Task { [weak self, weak textView] in
+                let map = await Task.detached(priority: .userInitiated) {
+                    IdentifierMap(text: text, fileExtension: fileExtension)
+                }.value
+                guard !Task.isCancelled, let self, let textView else { return }
+                self.identifiers = map
+                self.mark(map.occurrences(of: highlight), in: textView)
+            }
+        }
+
+        /// Replaces the highlighted ranges. Only the background changes, so nothing moves.
+        private func mark(_ ranges: [NSRange], in textView: UITextView) {
+            let storage = textView.textStorage
+            guard !(ranges.isEmpty && highlightedRanges.isEmpty) else { return }
+            let color = (textView.tintColor ?? .systemBlue).withAlphaComponent(0.3)
+            storage.beginEditing()
+            for range in highlightedRanges where NSMaxRange(range) <= storage.length {
+                storage.removeAttribute(.backgroundColor, range: range)
+            }
+            for range in ranges where NSMaxRange(range) <= storage.length {
+                storage.addAttribute(.backgroundColor, value: color, range: range)
+            }
+            storage.endEditing()
+            highlightedRanges = ranges
         }
 
         @objc func handleRefresh(_ control: UIRefreshControl) {
