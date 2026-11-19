@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The cards (pagers) and the search results pushed over the Code level, in the order they
 /// were opened: tapping a symbol in the list opens a card, searching (in the bar, or Search on
@@ -139,6 +140,10 @@ struct StackResultsView<Results: View>: View {
     @State private var isEditing: Bool
     /// Scrolling down hides the capsule; scrolling up shows it.
     @State private var isBarHidden = false
+    /// The keyboard's top in the window (`nil`: hidden), and the page's bottom (above the home
+    /// indicator), for `keyboardOverlap`.
+    @State private var keyboardTop: CGFloat?
+    @State private var pageBottom: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
 
     init(search: StackSearch, stackDepth: Int, stackActions: StackActions?,
@@ -158,12 +163,39 @@ struct StackResultsView<Results: View>: View {
             content
             bottom
                 .animation(.smooth(duration: 0.25), value: isBarHidden)
+                .padding(.bottom, keyboardOverlap)
+        }
+        // On a pushed page, SwiftUI made room for the keyboard twice (the field floated far
+        // above it): the room is worked out here instead, from where the keyboard is.
+        .ignoresSafeArea(.keyboard)
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { pageBottom = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) {
+            keyboardMoved($0, hiding: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) {
+            keyboardMoved($0, hiding: true)
         }
         .toolbar(.hidden, for: .navigationBar)
         // Closing the field before typing anything: nothing to show, so back to where it was.
         .onChange(of: isEditing) {
             if !isEditing, isQueryEmpty { dismiss() }
         }
+    }
+
+    /// How much of the page the keyboard covers: the field sits right on top of it.
+    private var keyboardOverlap: CGFloat {
+        guard let keyboardTop else { return 0 }
+        return max(0, pageBottom - keyboardTop)
+    }
+
+    /// The keyboard's new top (in the window), as it moves, with its own timing.
+    private func keyboardMoved(_ notification: Notification, hiding: Bool) {
+        let info = notification.userInfo
+        let frame = (info?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        let duration = (info?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
+        let top: CGFloat? = hiding ? nil : frame.map(\.minY)
+        guard top != keyboardTop else { return }
+        withAnimation(.smooth(duration: max(duration, 0.1))) { keyboardTop = top }
     }
 
     private var isQueryEmpty: Bool {
