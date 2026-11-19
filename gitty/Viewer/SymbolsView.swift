@@ -41,6 +41,9 @@ struct SymbolsView: View, Equatable {
     /// The open file, which symbols without a `fileURL` are in (for the grouped view).
     let openFile: URL
     let onOpen: @MainActor (CodeSymbol) -> Void
+    /// A tap on a symbol's code at the Code level: open its page with the tapped line where
+    /// it was on screen.
+    let onOpenAt: (@MainActor (CodeSymbol, PageAnchor) -> Void)?
     /// A file header's open button: show that file's code (the Code level, at its entry).
     let onOpenFile: @MainActor (URL) -> Void
     let onBarCollapsedChange: @MainActor (Bool) -> Void
@@ -86,6 +89,7 @@ struct SymbolsView: View, Equatable {
          onCenteredSymbolChange: @escaping @MainActor (Int) -> Void,
          isBarCollapsed: @escaping @MainActor () -> Bool, barTapCount: Int, openFile: URL,
          onOpen: @escaping @MainActor (CodeSymbol) -> Void,
+         onOpenAt: (@MainActor (CodeSymbol, PageAnchor) -> Void)? = nil,
          onOpenFile: @escaping @MainActor (URL) -> Void,
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
          onCloseSearch: (@MainActor () -> Void)? = nil,
@@ -105,6 +109,7 @@ struct SymbolsView: View, Equatable {
         self.barTapCount = barTapCount
         self.openFile = openFile
         self.onOpen = onOpen
+        self.onOpenAt = onOpenAt
         self.onOpenFile = onOpenFile
         self.onBarCollapsedChange = onBarCollapsedChange
         self.onCloseSearch = onCloseSearch
@@ -269,7 +274,10 @@ struct SymbolsView: View, Equatable {
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(symbols) { symbol in
                 Section {
-                    SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, onTap: { onOpen(symbol) })
+                    SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, onTap: { onOpen(symbol) },
+                               onTapAt: { anchor in
+                                   if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
+                               })
                 } header: {
                     // A file's title opens its page with the whole file (as its card does);
                     // a symbol's opens its page, like its code.
@@ -788,21 +796,24 @@ private struct SymbolCode: View {
     let store: CodeBlockStore
     let peek: CodePeek
     let onTap: @MainActor () -> Void
+    let onTapAt: @MainActor (PageAnchor) -> Void
     /// Read so a new theme makes it take its new block.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, onTap: @escaping @MainActor () -> Void) {
+    init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, onTap: @escaping @MainActor () -> Void,
+         onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.symbol = symbol
         self.store = store
         self.peek = peek
         self.onTap = onTap
+        self.onTapAt = onTapAt
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if symbol.kind != .file {
                 let block = store.block(for: symbol)
-                SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, onTap: onTap)
+                SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, onTap: onTap, onTapAt: onTapAt)
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
@@ -818,14 +829,19 @@ private struct SymbolCodeText: View {
     let block: CodeBlock
     let peek: CodePeek
     let layoutKey: CodeLayoutKey?
+    /// Around the code, or before it's laid out: opens the page at the top.
     let onTap: @MainActor () -> Void
+    /// On the code: opens the page at the line tapped.
+    let onTapAt: @MainActor (PageAnchor) -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(block: CodeBlock, peek: CodePeek, layoutKey: CodeLayoutKey?, onTap: @escaping @MainActor () -> Void) {
+    init(block: CodeBlock, peek: CodePeek, layoutKey: CodeLayoutKey?, onTap: @escaping @MainActor () -> Void,
+         onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.block = block
         self.peek = peek
         self.layoutKey = layoutKey
         self.onTap = onTap
+        self.onTapAt = onTapAt
     }
 
     var body: some View {
@@ -867,6 +883,18 @@ private struct SymbolCodeText: View {
     /// While peeking, slid right with its line numbers.
     private func piece(_ layout: CodePieceLayout) -> some View {
         CodePieceView(layout: layout, firstFileLine: block.firstLine, isPeeking: peek.isActive)
+            .contentShape(Rectangle())
+            // Where in the piece (for the line) and where on screen (for where it goes on the page).
+            .gesture(
+                SpatialTapGesture(coordinateSpace: .local)
+                    .simultaneously(with: SpatialTapGesture(coordinateSpace: .global))
+                    .onEnded { value in
+                        guard let local = value.first?.location, let screen = value.second?.location,
+                              let found = layout.line(atY: local.y)
+                        else { return onTap() }
+                        onTapAt(PageAnchor(line: found.line, screenY: screen.y - (local.y - found.top)))
+                    }
+            )
     }
 }
 

@@ -30,6 +30,9 @@ struct CodeScreen: View {
 
     /// The symbol opened in the pager (drives the navigation push).
     @State private var openedSymbolID: Int?
+    /// Where its code was tapped at the Code level: the page opens at those lines, and fades in
+    /// over them (zooming from the whole screen) instead of zooming from the middle.
+    @State private var openedAnchor: PageAnchor?
     /// The symbol on screen in the pager.
     @State private var pagerSymbolID: Int?
     /// Brings a card into view in the Symbols list (the pager closing on another symbol).
@@ -118,6 +121,7 @@ struct CodeScreen: View {
             SymbolPager(
                 symbols: pagerSymbols,
                 initialID: openedID,
+                initialAnchor: openedAnchor,
                 currentID: $pagerSymbolID,
                 text: model.text(of:),
                 // Once you page, the list (hidden behind) follows, so going back lands on the
@@ -138,7 +142,8 @@ struct CodeScreen: View {
                 firstLine: { model.firstLine(of: $0) },
                 albumMenu: albumMenuAction
             )
-            .navigationTransition(.zoom(sourceID: openedID, in: pagerNamespace))
+            .navigationTransition(.zoom(sourceID: openedAnchor == nil ? AnyHashable(openedID) : Self.screenSourceID,
+                                        in: pagerNamespace))
         }
         .alert("Couldn’t Refresh", isPresented: refreshAlertIsPresented, presenting: model.refreshError) { _ in
             Button("OK", role: .cancel) {}
@@ -147,7 +152,6 @@ struct CodeScreen: View {
         }
     }
 
-    @ViewBuilder
     private var content: some View {
         ZStack {
             document
@@ -173,6 +177,8 @@ struct CodeScreen: View {
                 )
             }
         }
+        // The source for pages opened at the lines tapped (see `screenSourceID`).
+        .matchedTransitionSource(id: Self.screenSourceID, in: pagerNamespace)
     }
 
     /// The open file's symbol levels: loading, loaded, or the reason it couldn't load.
@@ -243,11 +249,8 @@ struct CodeScreen: View {
                 isBarCollapsed: { model.isBarCollapsed },
                 barTapCount: model.barTapCount,
                 openFile: model.url,
-                onOpen: { symbol in
-                    pagerSymbols = shownSymbols  // page through the search results only
-                    pagerSymbolID = symbol.id
-                    openedSymbolID = symbol.id
-                },
+                onOpen: { openPager(at: $0, anchor: nil) },
+                onOpenAt: { openPager(at: $0, anchor: $1) },
                 onOpenFile: { openFile($0) },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 onCloseSearch: closeSearchAction,
@@ -269,6 +272,17 @@ struct CodeScreen: View {
                 )
             }
         }
+    }
+
+    /// The whole screen, as the zoom's source for a page opened at the lines tapped: zooming
+    /// from a frame the size of the page looks like a quick fade.
+    private static let screenSourceID = AnyHashable("codeScreen")
+
+    private func openPager(at symbol: CodeSymbol, anchor: PageAnchor?) {
+        pagerSymbols = shownSymbols  // page through the search results only
+        pagerSymbolID = symbol.id
+        openedAnchor = anchor
+        openedSymbolID = symbol.id
     }
 
     /// The open file's text, for its symbols' code at the Code level (the same object until

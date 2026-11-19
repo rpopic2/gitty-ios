@@ -74,6 +74,21 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
         lineStarts = starts
     }
 
+    /// The line of the code at `y` (counted from the block's first, as `firstLine` is), and
+    /// where that line's first row starts in this piece. For opening its page at that line.
+    func line(atY y: CGFloat) -> (line: Int, top: CGFloat)? {
+        guard !lines.isEmpty else { return nil }
+        func top(of row: Int) -> CGFloat {
+            var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+            CTLineGetTypographicBounds(lines[row], &ascent, &descent, &leading)
+            return height - origins[row].y - ascent
+        }
+        var row = 0
+        while row + 1 < lines.count, top(of: row + 1) <= y { row += 1 }
+        guard let start = lineStarts.last(where: { $0.row <= row }) ?? lineStarts.first else { return nil }
+        return (firstLine + start.line, top(of: start.row))
+    }
+
     /// Draws the code.
     func draw(in context: CGContext) {
         context.saveGState()
@@ -134,7 +149,7 @@ final class CodePieceUIView: UIView {
         super.init(frame: frame)
         isOpaque = false
         backgroundColor = .clear
-        isUserInteractionEnabled = false  // taps go to the block (it opens its page)
+        isUserInteractionEnabled = false  // taps go to SwiftUI (see `SymbolCodeText`)
         contentMode = .redraw
         clipsToBounds = false  // the numbers sit left of the code
         numbers.isHidden = true
@@ -165,6 +180,13 @@ final class CodePieceUIView: UIView {
         guard let layout, let context = UIGraphicsGetCurrentContext() else { return }
         layout.draw(in: context)
     }
+}
+
+/// Where to open a page: its `line` (0-based, from the page's first) goes where it was on
+/// screen, its top at `screenY` (window coordinates), so opening it barely moves anything.
+nonisolated struct PageAnchor: Equatable, Sendable {
+    let line: Int
+    let screenY: CGFloat
 }
 
 /// A piece's line numbers, drawn once per layout and shown only while peeking.

@@ -12,6 +12,9 @@ struct SymbolPager: View {
     let symbols: [CodeSymbol]
     /// The symbol that was tapped. The pager opens on it.
     let initialID: Int
+    /// Where its code was tapped at the Code level: its page opens with that line where it was
+    /// on screen (`nil`: at the top, or where a file's page was left).
+    let initialAnchor: PageAnchor?
     /// The symbol on screen. Reported only after the pager has opened on `initialID`.
     @Binding var currentID: Int?
     let text: @MainActor (CodeSymbol) -> NSAttributedString?
@@ -50,7 +53,7 @@ struct SymbolPager: View {
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(symbols: [CodeSymbol], initialID: Int, currentID: Binding<Int?>,
+    init(symbols: [CodeSymbol], initialID: Int, initialAnchor: PageAnchor? = nil, currentID: Binding<Int?>,
          text: @escaping @MainActor (CodeSymbol) -> NSAttributedString?,
          onPage: @escaping @MainActor (Int) -> Void,
          onWillClose: @escaping @MainActor (Int) -> Void,
@@ -63,6 +66,7 @@ struct SymbolPager: View {
          albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)? = nil) {
         self.symbols = symbols
         self.initialID = initialID
+        self.initialAnchor = initialAnchor
         _currentID = currentID
         self.text = text
         self.onPage = onPage
@@ -118,6 +122,10 @@ struct SymbolPager: View {
                                     positionURL: isFilePage ? symbol.fileURL ?? openFile : nil,
                                     onRefresh: refreshAction(for: symbol),
                                     lineNumbering: .counted(firstLine: { firstLine(symbol) }),
+                                    // The page's text view starts below the status bar.
+                                    startAnchor: symbol.id == initialID
+                                        ? initialAnchor.map { PageAnchor(line: $0.line, screenY: $0.screenY - safeArea.top) }
+                                        : nil,
                                     onScrollDown: { isCaptionHidden = $0 }
                                 )
                                 // The text starts below the status bar and never scrolls under
@@ -343,6 +351,10 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var lineNumbering: LineNumbering? = nil
     /// The reader scrolled down (`true`: hide what covers the text) or back up.
     var onScrollDown: (@MainActor (Bool) -> Void)? = nil
+    /// Opens with this line's top this far below the text view's top (`screenY`), once its
+    /// text is there: so a page opened from the Code level shows the lines that were on screen.
+    /// Never past either end, so a page that fits doesn't scroll.
+    var startAnchor: PageAnchor? = nil
     var positionStore: ReadingPositionStore = .standard
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -433,6 +445,15 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 guard let textView else { return }
                 textView.layoutIfNeeded()
                 coordinator.restore(position, in: textView)
+            }
+        } else if let startAnchor, !coordinator.didApplyStart, text.length > 0 {
+            coordinator.didApplyStart = true
+            Task { @MainActor [weak textView] in
+                // Once the page has its width, so the lines wrap where they'll stay.
+                for _ in 0..<5 where (textView?.bounds.width ?? 0) == 0 { await Task.yield() }
+                guard let textView else { return }
+                textView.layoutIfNeeded()
+                coordinator.scroll(to: startAnchor, in: textView)
             }
         }
     }
@@ -722,6 +743,34 @@ struct ReadOnlyTextView: UIViewRepresentable {
             let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
             return ReadingPosition(characterIndex: layoutManager.characterIndexForGlyph(at: glyphIndex),
                                    lineOffset: Double(y - lineRect.minY))
+        }
+
+        /// `startAnchor` has been used (on the page's first text).
+        var didApplyStart = false
+
+        /// Scrolls so `anchor.line` starts `anchor.screenY` below the text view's top, as far as
+        /// the text allows.
+        func scroll(to anchor: PageAnchor, in textView: UITextView) {
+            let text = textView.textStorage.string as NSString
+            guard text.length > 0 else { return }
+            var location = 0
+            var line = 0
+            while line < anchor.line {
+                let found = text.range(of: "\n", options: .literal,
+                                       range: NSRange(location: location, length: text.length - location))
+                guard found.location != NSNotFound, NSMaxRange(found) < text.length else { break }
+                location = NSMaxRange(found)
+                line += 1
+            }
+            let layoutManager = textView.layoutManager
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: min(location, text.length - 1))
+            let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            let inset = textView.adjustedContentInset
+            let contentHeight = layoutManager.usedRect(for: textView.textContainer).height
+                + textView.textContainerInset.top + textView.textContainerInset.bottom
+            let maxY = max(-inset.top, contentHeight - textView.bounds.height + inset.bottom)
+            let y = lineRect.minY + textView.textContainerInset.top - anchor.screenY
+            textView.contentOffset.y = min(max(y, -inset.top), maxY)
         }
 
         func restore(_ position: ReadingPosition, in textView: UITextView) {
