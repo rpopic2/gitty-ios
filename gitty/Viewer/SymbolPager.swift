@@ -156,7 +156,8 @@ struct SymbolPager: View {
                 // The caption, then a set-aside review under it: both hide while you scroll down.
                 VStack(spacing: 0) {
                     if let current {
-                        SymbolCaption(symbol: current, onInfo: infoAction(for: current))
+                        SymbolCaption(symbol: current, fileName: (current.fileURL ?? openFile).displayFileName,
+                                      onInfo: infoAction(for: current))
                             .padding(.bottom, 8)
                     }
                     if let review, review.isDocked {
@@ -296,18 +297,21 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
     }
 }
 
-/// "name · Line N" in a small capsule at the bottom, in place of the bar and selector. Tap it
+/// "name · file" in a small capsule at the bottom, in place of the bar and selector. Tap it
 /// for the file's info.
 private struct SymbolCaption: View {
     let symbol: CodeSymbol
+    /// The symbol's file's name, after its name.
+    let fileName: String
     let onInfo: @MainActor () -> Void
 
     static let height: CGFloat = 36
     /// Space kept free under the text so its end isn't hidden behind the caption.
     static let reservedHeight: CGFloat = height + 16
 
-    init(symbol: CodeSymbol, onInfo: @escaping @MainActor () -> Void) {
+    init(symbol: CodeSymbol, fileName: String, onInfo: @escaping @MainActor () -> Void) {
         self.symbol = symbol
+        self.fileName = fileName
         self.onInfo = onInfo
     }
 
@@ -327,10 +331,10 @@ private struct SymbolCaption: View {
             Text(symbol.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            // From another file of the project: which one. A file's own page needs nothing
-            // more than its name.
+            // Its file's name (peek for the line numbers). A file's own page needs nothing more
+            // than its name.
             if symbol.kind != .file {
-                Text(symbol.fileURL.map { "· \($0.lastPathComponent):\(symbol.line)" } ?? "· Line \(symbol.line)")
+                Text(verbatim: "· " + fileName)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
