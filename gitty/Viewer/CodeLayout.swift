@@ -123,6 +123,8 @@ struct CodePieceView: UIViewRepresentable {
     /// The block's first line in its file, for the line peek.
     let firstFileLine: Int
     let isPeeking: Bool
+    /// Opens the symbol's page at a line: for pinching out on the code (`CodePieceUIView.piece`).
+    var onOpenAt: (@MainActor (PageAnchor) -> Void)? = nil
 
     func makeUIView(context: Context) -> CodePieceUIView {
         CodePieceUIView()
@@ -130,6 +132,7 @@ struct CodePieceView: UIViewRepresentable {
 
     func updateUIView(_ view: CodePieceUIView, context: Context) {
         view.update(layout: layout, firstFileLine: firstFileLine, isPeeking: isPeeking)
+        view.onOpenAt = onOpenAt
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: CodePieceUIView, context: Context) -> CGSize? {
@@ -141,6 +144,8 @@ final class CodePieceUIView: UIView {
     private var layout: CodePieceLayout?
     private var firstFileLine = 1
     private let numbers = CodeLineNumbersView()
+    /// Opens the symbol's page at a line (see `open(at:)`).
+    var onOpenAt: (@MainActor (PageAnchor) -> Void)?
 
     /// Room left of the code for the numbers: the peek's slide and the block's margin.
     static let gutterWidth = CodePeek.width + RawTextStyle.insets.left
@@ -179,6 +184,30 @@ final class CodePieceUIView: UIView {
     override func draw(_ rect: CGRect) {
         guard let layout, let context = UIGraphicsGetCurrentContext() else { return }
         layout.draw(in: context)
+    }
+
+    /// The piece of code on screen at a point of the window (pinching out on it opens its
+    /// page): found when asked, so nothing keeps track of the pieces while scrolling.
+    static func piece(at point: CGPoint, in window: UIWindow) -> CodePieceUIView? {
+        var views: [UIView] = [window]
+        while let view = views.popLast() {
+            if let piece = view as? CodePieceUIView, !piece.isHidden, piece.onOpenAt != nil,
+               piece.bounds.contains(piece.convert(point, from: nil)) {
+                return piece
+            }
+            views.append(contentsOf: view.subviews.filter { !$0.isHidden && $0.alpha > 0 })
+        }
+        return nil
+    }
+
+    /// Opens its symbol's page at the line at a point of the window, that line staying where
+    /// it is on screen. `false` if it's not on a line.
+    func open(at point: CGPoint) -> Bool {
+        let local = convert(point, from: nil)
+        guard let onOpenAt, let found = layout?.line(atY: local.y) else { return false }
+        let top = convert(CGPoint(x: 0, y: found.top), to: nil).y
+        onOpenAt(PageAnchor(line: found.line, screenY: top))
+        return true
     }
 }
 
