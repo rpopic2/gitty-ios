@@ -450,8 +450,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
         page.addGestureRecognizer(peek)
         page.peek = peek
         context.coordinator.peek = peek
-        // Hold an identifier to highlight it (or remove its highlight); elsewhere holding
-        // selects, as usual.
+        // Hold an identifier to highlight it (or remove its highlight). Holding never selects:
+        // a double tap does.
         let highlightPress = UILongPressGestureRecognizer(target: context.coordinator,
                                                           action: #selector(Coordinator.handleHighlightPress(_:)))
         highlightPress.minimumPressDuration = 0.35  // before the text view's own long press selects
@@ -719,20 +719,36 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
         weak var highlightPress: UILongPressGestureRecognizer?
 
+        /// Holding only highlights (an identifier; elsewhere it does nothing): it never selects.
+        /// Selecting is a double tap, then the handles.
         @objc func handleHighlightPress(_ gesture: UILongPressGestureRecognizer) {
-            guard gesture.state == .began, let textView = gesture.view as? UITextView, let onHighlight,
-                  let found = identifierAt(gesture.location(in: textView), in: textView)
-            else { return }
-            let (identifier, index) = found
-            let isHighlighted = highlightedRanges.contains { NSLocationInRange(index, $0) }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred(at: gesture.location(in: textView))
-            onHighlight(isHighlighted ? nil : identifier)
-            // This hold is taken: the text view's own (selecting, its loupe) stops here. Turning
-            // a recognizer off and on cancels it for the current touch; scrolling carries on.
-            for other in textView.gestureRecognizers ?? []
-            where other !== gesture && other !== tokenTap && !(other is UIPanGestureRecognizer) && other.isEnabled {
-                other.isEnabled = false
-                other.isEnabled = true
+            guard let textView = gesture.view as? UITextView else { return }
+            switch gesture.state {
+            case .began:
+                cancelTextViewHold(textView, except: gesture)
+                guard let onHighlight, let found = identifierAt(gesture.location(in: textView), in: textView)
+                else { return }
+                let (identifier, index) = found
+                let isHighlighted = highlightedRanges.contains { NSLocationInRange(index, $0) }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred(at: gesture.location(in: textView))
+                onHighlight(isHighlighted ? nil : identifier)
+            default:
+                break
+            }
+        }
+
+        /// This hold is taken: the text view's own (selecting, its loupe) stops here. Its text
+        /// gestures are on the text view and on the views inside it; turning one off and on
+        /// cancels it for the current touch. Scrolling carries on.
+        private func cancelTextViewHold(_ textView: UITextView, except gesture: UIGestureRecognizer) {
+            var views: [UIView] = [textView]
+            while let view = views.popLast() {
+                for other in view.gestureRecognizers ?? []
+                where other !== gesture && other !== tokenTap && !(other is UIPanGestureRecognizer) && other.isEnabled {
+                    other.isEnabled = false
+                    other.isEnabled = true
+                }
+                views.append(contentsOf: view.subviews)
             }
         }
 
@@ -784,6 +800,14 @@ struct ReadOnlyTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            // A hold selected anyway (a gesture of the text view's that wasn't cancelled): undo it.
+            if let hold = highlightPress, hold.state == .began || hold.state == .changed,
+               textView.selectedRange.length > 0, !isSnapping {
+                isSnapping = true
+                textView.selectedRange = NSRange(location: textView.selectedRange.location, length: 0)
+                isSnapping = false
+                return
+            }
             // Dragging a handle afterwards: the text view shows its own menu, so not this one too.
             if pressIndex == nil { menuInteraction?.dismissMenu() }
             snapSelection(in: textView)
@@ -893,9 +917,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 let velocity = pan.velocity(in: pan.view)
                 return velocity.x > abs(velocity.y)  // rightwards
             }
-            if gestureRecognizer === highlightPress, let textView = gestureRecognizer.view as? UITextView {
-                // Elsewhere holding selects, as usual.
-                return onHighlight != nil && identifierAt(gestureRecognizer.location(in: textView), in: textView) != nil
+            if gestureRecognizer === highlightPress {
+                // Pages that highlight take every hold, so holding never selects there.
+                return onHighlight != nil
             }
             return true
         }
