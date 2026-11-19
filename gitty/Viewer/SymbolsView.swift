@@ -581,27 +581,24 @@ private struct FolderHeader: View {
         Button(action: onToggle) {
             HStack(spacing: 10) {
                 Image(systemName: "chevron.right")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isFolded ? 0 : 90))
                 Image(systemName: "folder.fill")
-                    .font(.title3)
                     .foregroundStyle(.tint)
                 Text(path)
-                    .font(.title3.weight(.semibold))
+                    .font(.headline)
                     .lineLimit(1)
                     .truncationMode(.head)
                 Text("· \(fileCount)")
-                    .font(.body)
+                    .font(.subheadline)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .frame(minHeight: 60)
+            .frame(minHeight: 50)
             .background(Color(uiColor: .systemGroupedBackground))
-            .overlay(alignment: .bottom) { Divider() }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
