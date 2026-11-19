@@ -365,8 +365,6 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var lineNumbering: LineNumbering? = nil
     /// The reader scrolled down (`true`: hide what covers the text) or back up.
     var onScrollDown: (@MainActor (Bool) -> Void)? = nil
-    /// Pulled down past the top and let go (a page without pull to refresh): a diff closes.
-    var onPullDown: (@MainActor () -> Void)? = nil
     /// Opens with this line's top this far below the text view's top (`screenY`), once its
     /// text is there: so a page opened from the Code level shows the lines that were on screen.
     /// Never past either end, so a page that fits doesn't scroll.
@@ -427,7 +425,6 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.onRefresh = onRefresh
         coordinator.lineNumbering = lineNumbering
         coordinator.onScrollDown = onScrollDown
-        coordinator.onPullDown = onPullDown
         coordinator.positionURL = positionURL
         coordinator.positionStore = positionStore
 
@@ -511,31 +508,11 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 + RawTextStyle.searchItems(for: range, in: textView,
                                            searchTerm: symbolSearchTerm,
                                            onSearch: onSearchSymbols)
-                + highlightItems(for: range, in: textView)
+            // Highlight is a double tap on an identifier, not a menu item.
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra)
         }
 
         // MARK: Highlight
-
-        /// "Highlight" when the selection is inside an identifier (a word, on a page without
-        /// a grammar); "Remove Highlight" on one that's highlighted.
-        private func highlightItems(for range: NSRange, in textView: UITextView) -> [UIMenuElement] {
-            guard let onHighlight, textView.textStorage.length > 0,
-                  NSMaxRange(range) <= textView.textStorage.length
-            else { return [] }
-            let map = identifiers ?? IdentifierMap(text: textView.textStorage.string, fileExtension: fileExtension)
-            identifiers = map
-            guard let identifier = map.identifier(containing: range) else { return [] }
-            let isHighlighted = highlightedRanges.contains {
-                $0.location <= range.location && NSMaxRange(range) <= NSMaxRange($0)
-            }
-            if isHighlighted {
-                return [UIAction(title: String(localized: "Remove Highlight"),
-                                 image: UIImage(systemName: "highlighter")) { _ in onHighlight(nil) }]
-            }
-            return [UIAction(title: String(localized: "Highlight"),
-                             image: UIImage(systemName: "highlighter")) { _ in onHighlight(identifier) }]
-        }
 
         /// The page has new text, without any highlight.
         func textChanged() {
@@ -760,17 +737,6 @@ struct ReadOnlyTextView: UIViewRepresentable {
             let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
             return ReadingPosition(characterIndex: layoutManager.characterIndexForGlyph(at: glyphIndex),
                                    lineOffset: Double(y - lineRect.minY))
-        }
-
-        var onPullDown: (@MainActor () -> Void)?
-
-        /// Let go while pulled this far past the top: `onPullDown`.
-        static let pullDownDistance: CGFloat = 70
-
-        func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
-                                       targetContentOffset: UnsafeMutablePointer<CGPoint>) {
-            guard let onPullDown, scrollView.refreshControl == nil else { return }
-            if scrollView.contentOffset.y < -scrollView.adjustedContentInset.top - Self.pullDownDistance { onPullDown() }
         }
 
         /// `startAnchor` has been used (on the page's first text).

@@ -2,8 +2,9 @@ import SwiftUI
 
 /// What a commit changed, one file per page, full screen like a symbol's card: it opens on
 /// one file; swipe sideways for the commit's other changed files. A caption at the bottom says
-/// which file, who and when. Pull down past the top of a page, or pinch, to close.
-/// Present it with `fullScreenCover`.
+/// which file, who and when. Present it with `fullScreenCover` and a zoom transition
+/// (`navigationTransition(.zoom)`), as a card is pushed: it then closes the same way, with a
+/// swipe down or a pinch.
 struct CommitDiffView: View {
     let projectID: String
     let commit: GitCommit
@@ -17,7 +18,6 @@ struct CommitDiffView: View {
     @State private var currentPath: String?
     /// Scrolling down a page hides the caption; scrolling up shows it.
     @State private var isCaptionHidden = false
-    @State private var pinchHandled = false
     @Environment(\.dismiss) private var dismiss
     /// Comments on a diff open the review over this screen.
     @Environment(ReviewDraft.self) private var review: ReviewDraft?
@@ -70,15 +70,6 @@ struct CommitDiffView: View {
             }
         }
         .background(Color(uiColor: RawTextStyle.backgroundColor).ignoresSafeArea())
-        .simultaneousGesture(
-            MagnifyGesture()
-                .onChanged { value in
-                    guard !pinchHandled, value.magnification < 0.8 else { return }
-                    pinchHandled = true
-                    dismiss()
-                }
-                .onEnded { _ in pinchHandled = false }
-        )
         .accessibilityAction(.escape) { dismiss() }
         .accessibilityAction(named: "Close") { dismiss() }
         .task {
@@ -247,7 +238,7 @@ private struct DiffPage: View {
     /// The screen's safe area, plus room for the caption at the bottom.
     let insets: EdgeInsets
     let onScrollDown: @MainActor (Bool) -> Void
-    /// Pulled down past the top: the diff closes.
+    /// The Close button where there's no diff to show.
     let onClose: @MainActor () -> Void
 
     @State private var text: NSAttributedString?
@@ -279,8 +270,7 @@ private struct DiffPage: View {
                     highlight: highlights?.current,
                     onHighlight: { highlights?.current = $0 },
                     lineNumbering: .marked,
-                    onScrollDown: onScrollDown,
-                    onPullDown: onClose
+                    onScrollDown: onScrollDown
                 )
             } else if let errorMessage {
                 ContentUnavailableView {

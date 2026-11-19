@@ -209,3 +209,56 @@ final class CodeLineNumbersView: UIView {
         layout.drawNumbers(in: context, right: bounds.width - 8, firstFileLine: firstFileLine)
     }
 }
+
+/// A long-press menu from UIKit, for the Code level's titles and code: its preview can be
+/// tapped to open the page, which SwiftUI's context menus can't do. Put it behind the view
+/// (`.background`), so taps still go to the view in front: only the long press is this one's.
+struct CodeContextMenu: UIViewRepresentable {
+    /// The preview, made when the menu opens.
+    let preview: @MainActor () -> UIViewController?
+    /// The menu, made when it opens (so it shows the albums as they are then).
+    let menu: @MainActor () -> UIMenu
+    /// The preview was tapped.
+    let onOpen: @MainActor () -> Void
+
+    func makeUIView(context: Context) -> CodeContextMenuView {
+        CodeContextMenuView()
+    }
+
+    func updateUIView(_ view: CodeContextMenuView, context: Context) {
+        view.makePreview = preview
+        view.makeMenu = menu
+        view.onOpen = onOpen
+    }
+}
+
+final class CodeContextMenuView: UIView, UIContextMenuInteractionDelegate {
+    var makePreview: (@MainActor () -> UIViewController?)?
+    var makeMenu: (@MainActor () -> UIMenu)?
+    var onOpen: (@MainActor () -> Void)?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        addInteraction(UIContextMenuInteraction(delegate: self))
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+        guard let makeMenu else { return nil }
+        let makePreview = makePreview
+        return UIContextMenuConfiguration(identifier: nil,
+                                          previewProvider: { MainActor.assumeIsolated { makePreview?() } },
+                                          actionProvider: { _ in MainActor.assumeIsolated { makeMenu() } })
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration,
+                                animator: any UIContextMenuInteractionCommitAnimating) {
+        animator.preferredCommitStyle = .dismiss
+        let onOpen = onOpen
+        animator.addCompletion { MainActor.assumeIsolated { onOpen?() } }
+    }
+}

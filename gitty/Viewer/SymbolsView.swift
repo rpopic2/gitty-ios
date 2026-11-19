@@ -49,7 +49,11 @@ struct SymbolsView: View, Equatable {
     let onCloseSearch: (@MainActor () -> Void)?
     /// For the long-press menus' Add to Album (`nil`: the file isn't in a project).
     let albumContext: AlbumMenuContext?
+    /// The long-press menu's Show History: a file's info and history.
+    let onShowHistory: (@MainActor (URL) -> Void)?
 
+    /// New Album… in the long-press menus.
+    @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
     /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
     /// Not observed: updated every scroll frame without redrawing anything.
@@ -80,7 +84,8 @@ struct SymbolsView: View, Equatable {
          onOpenAt: (@MainActor (CodeSymbol, PageAnchor) -> Void)? = nil,
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
          onCloseSearch: (@MainActor () -> Void)? = nil,
-         albumContext: AlbumMenuContext? = nil) {
+         albumContext: AlbumMenuContext? = nil,
+         onShowHistory: (@MainActor (URL) -> Void)? = nil) {
         self.symbols = symbols
         self.query = query
         self.isActive = isActive
@@ -98,6 +103,7 @@ struct SymbolsView: View, Equatable {
         self.onBarCollapsedChange = onBarCollapsedChange
         self.onCloseSearch = onCloseSearch
         self.albumContext = albumContext
+        self.onShowHistory = onShowHistory
     }
 
     /// What the list shows. The closures aren't compared: they reach the screen's state and
@@ -109,7 +115,7 @@ struct SymbolsView: View, Equatable {
             && lhs.barTapCount == rhs.barTapCount
             && lhs.openFile == rhs.openFile && lhs.collapseScope == rhs.collapseScope
             && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
-            && lhs.albumContext == rhs.albumContext
+            && lhs.albumContext == rhs.albumContext && (lhs.onShowHistory == nil) == (rhs.onShowHistory == nil)
     }
 
     var body: some View {
@@ -187,20 +193,59 @@ struct SymbolsView: View, Equatable {
             ForEach(symbols) { symbol in
                 Section {
                     SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, collapsed: collapsed, openFile: openFile,
-                               scope: scope, albumContext: albumContext, onTap: { onOpen(symbol) },
+                               scope: scope, contextMenu: contextMenu(for: symbol), onTap: { onOpen(symbol) },
                                onTapAt: { anchor in
                                    if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
                                })
                 } header: {
                     // Tap to collapse: a symbol's code, or a whole file's symbols.
                     CodeHeader(symbol: symbol, collapsed: collapsed, openFile: openFile, scope: scope,
-                               albumContext: albumContext,
-                               onSetFileCollapsed: { setFileCollapsed($0, symbol) })
+                               contextMenu: contextMenu(for: symbol))
                 }
             }
         }
         .scrollTargetLayout()
         .modifier(PeekShift(peek: peek))  // the whole list slides while peeking
+    }
+
+    /// The long-press menu of a symbol's title and code (the same for both): its preview (tap it
+    /// to open the page), Add to Album, Show History, and on a file's title, Collapse All and
+    /// Expand All in it. Made when the menu opens.
+    private func contextMenu(for symbol: CodeSymbol) -> CodeContextMenu {
+        let style = codeTextStyle
+        let file = symbol.fileURL ?? openFile
+        let openFile = openFile
+        let albumContext = albumContext
+        let naming = albumNaming
+        let onShowHistory = onShowHistory
+        let onOpen = onOpen
+        let view = self
+        return CodeContextMenu(
+            preview: { CodeMenuPreview.controller(symbol: symbol, fileExtension: file.pathExtension, style: style) },
+            menu: {
+                var children: [UIMenuElement] = []
+                if let albumContext {
+                    children += AlbumTextMenu.items(for: AlbumItem(symbol, openFile: openFile), context: albumContext,
+                                                    naming: naming)
+                }
+                if albumContext != nil, let onShowHistory {
+                    children.append(UIAction(title: String(localized: "Show History"),
+                                             image: UIImage(systemName: "clock.arrow.circlepath")) { _ in
+                        onShowHistory(file)
+                    })
+                }
+                if symbol.kind == .file {
+                    children.append(UIMenu(options: .displayInline, children: [
+                        UIAction(title: String(localized: "Collapse All in File"),
+                                 image: UIImage(systemName: "chevron.right.2")) { _ in view.setFileCollapsed(true, symbol) },
+                        UIAction(title: String(localized: "Expand All in File"),
+                                 image: UIImage(systemName: "chevron.down.2")) { _ in view.setFileCollapsed(false, symbol) },
+                    ]))
+                }
+                return UIMenu(children: children)
+            },
+            onOpen: { onOpen(symbol) }
+        )
     }
 
     /// A file title's Collapse All / Expand All: its symbols.
@@ -319,9 +364,8 @@ private struct CodeHeader: View {
     let collapsed: CollapsedCodeStore
     let openFile: URL
     let scope: String
-    let albumContext: AlbumMenuContext?
-    /// A file's menu: collapse (`true`) or expand all its symbols.
-    let onSetFileCollapsed: @MainActor (Bool) -> Void
+    /// Touch and hold (the same menu as the code's).
+    let contextMenu: CodeContextMenu
 
     var body: some View {
         VStack(spacing: 0) {
@@ -336,18 +380,7 @@ private struct CodeHeader: View {
                                 fileExtension: (symbol.fileURL ?? openFile).pathExtension)
                 }
                 .buttonStyle(.plain)
-                // The same menu and preview as the code's.
-                .contextMenu {
-                    if let albumContext {
-                        AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
-                    }
-                    if symbol.kind == .file {
-                        Button("Collapse All in File", systemImage: "chevron.right.2") { onSetFileCollapsed(true) }
-                        Button("Expand All in File", systemImage: "chevron.down.2") { onSetFileCollapsed(false) }
-                    }
-                } preview: {
-                    CodeMenuPreview(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension)
-                }
+                .background { contextMenu }
             }
         }
     }
@@ -667,14 +700,15 @@ private struct SymbolCode: View {
     let collapsed: CollapsedCodeStore
     let openFile: URL
     let scope: String
-    let albumContext: AlbumMenuContext?
+    /// Touch and hold (the same menu as the title's).
+    let contextMenu: CodeContextMenu
     let onTap: @MainActor () -> Void
     let onTapAt: @MainActor (PageAnchor) -> Void
     /// Read so a new theme makes it take its new block.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, collapsed: CollapsedCodeStore, openFile: URL,
-         scope: String, albumContext: AlbumMenuContext?, onTap: @escaping @MainActor () -> Void,
+         scope: String, contextMenu: CodeContextMenu, onTap: @escaping @MainActor () -> Void,
          onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.symbol = symbol
         self.store = store
@@ -682,7 +716,7 @@ private struct SymbolCode: View {
         self.collapsed = collapsed
         self.openFile = openFile
         self.scope = scope
-        self.albumContext = albumContext
+        self.contextMenu = contextMenu
         self.onTap = onTap
         self.onTapAt = onTapAt
     }
@@ -696,15 +730,9 @@ private struct SymbolCode: View {
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
-                    // Touch and hold the code for Add to Album, with a small preview (not a
-                    // snapshot of what may be hundreds of lines).
-                    .contextMenu {
-                        if let albumContext {
-                            AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
-                        }
-                    } preview: {
-                        CodeMenuPreview(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension)
-                    }
+                    // Touch and hold the code: a small preview (not a snapshot of what may be
+                    // hundreds of lines), which opens the page when tapped, and the menu.
+                    .background { contextMenu }
             }
         }
     }
@@ -712,6 +740,14 @@ private struct SymbolCode: View {
 
 /// The long-press preview of a symbol's code: its title and first lines.
 private struct CodeMenuPreview: View {
+    /// For UIKit's context menu, sized to fit.
+    static func controller(symbol: CodeSymbol, fileExtension: String, style: CodeTextStyle) -> UIViewController {
+        let controller = UIHostingController(rootView: CodeMenuPreview(symbol: symbol, fileExtension: fileExtension)
+            .environment(\.codeTextStyle, style))
+        controller.preferredContentSize = controller.sizeThatFits(in: CGSize(width: 320, height: 2000))
+        return controller
+    }
+
     let symbol: CodeSymbol
     let fileExtension: String
     @Environment(\.codeTextStyle) private var codeTextStyle

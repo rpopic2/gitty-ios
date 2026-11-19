@@ -39,6 +39,13 @@ struct CodeScreen: View {
     @State private var listScrollRequest: SymbolScrollRequest?
     /// Collapse All or Expand All, from the bar's menu.
     @State private var collapseRequest: CollapseRequest?
+    /// The file whose info and history are showing (Show History in the Code level's menu).
+    @State private var historyFile: HistoryFile?
+
+    private struct HistoryFile: Identifiable {
+        let url: URL
+        var id: URL { url }
+    }
     /// The symbols the pager pages through: the list's (search results, too) when one is tapped.
     @State private var pagerSymbols: [CodeSymbol] = []
     /// Symbol search. Stays until it's cleared or another file is opened.
@@ -143,6 +150,11 @@ struct CodeScreen: View {
             .navigationTransition(.zoom(sourceID: openedAnchor == nil ? AnyHashable(openedID) : Self.screenSourceID,
                                         in: pagerNamespace))
         }
+        .sheet(item: $historyFile) { file in
+            FileInfoView(url: file.url)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .alert("Couldn’t Refresh", isPresented: refreshAlertIsPresented, presenting: model.refreshError) { _ in
             Button("OK", role: .cancel) {}
         } message: { message in
@@ -245,7 +257,8 @@ struct CodeScreen: View {
                 onOpenAt: { openPager(at: $0, anchor: $1) },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 onCloseSearch: closeSearchAction,
-                albumContext: albumContext
+                albumContext: albumContext,
+                onShowHistory: { historyFile = HistoryFile(url: $0) }
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()

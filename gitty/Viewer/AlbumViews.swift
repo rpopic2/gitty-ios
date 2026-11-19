@@ -169,4 +169,26 @@ enum AlbumTextMenu {
         return UIMenu(title: String(localized: "Add to Album"), image: UIImage(systemName: "rectangle.stack.badge.plus"),
                       children: [new] + (albums.isEmpty ? [] : [UIMenu(options: .displayInline, children: albums)]))
     }
+
+    /// `AlbumMenuItems` for a UIKit menu: Remove from Album (in the album on screen), then Add to
+    /// Album.
+    @MainActor
+    static func items(for item: AlbumItem, context: AlbumMenuContext, store: AlbumStore = .shared,
+                      naming: AlbumNaming?) -> [UIMenuElement] {
+        var items: [UIMenuElement] = []
+        if let album = store.album(id: context.shownAlbumID) {
+            let remove = UIImage(systemName: "minus.circle")
+            if album.contains(item) {
+                items.append(UIAction(title: String(localized: "Remove from Album"), image: remove,
+                                      attributes: .destructive) { _ in store.remove([item], from: album.id) })
+            } else if album.containsFile(item.file) {
+                items.append(UIAction(title: String(localized: "Remove \(item.file.displayFileName) from Album"),
+                                      image: remove, attributes: .destructive) { _ in
+                    store.remove([.file(item.file)], from: album.id)
+                })
+            }
+        }
+        items.append(menu(for: item, projectID: context.projectID, store: store, naming: naming))
+        return items
+    }
 }

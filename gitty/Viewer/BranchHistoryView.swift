@@ -210,6 +210,8 @@ struct CommitFilesView: View {
     @State private var changes: [GitChange]?
     @State private var errorMessage: String?
     @State private var diffStart: DiffStart?
+    /// The diff zooms out of its file's row, and closes like a symbol's card.
+    @Namespace private var diffNamespace
 
     private struct DiffStart: Identifiable {
         let path: String
@@ -243,6 +245,7 @@ struct CommitFilesView: View {
                             ChangeRow(change: change)
                         }
                         .foregroundStyle(.primary)
+                        .matchedTransitionSource(id: change.path, in: diffNamespace)
                     }
                     if changes.isEmpty {
                         Text("This commit didn’t change any files.").foregroundStyle(.secondary)
@@ -276,6 +279,7 @@ struct CommitFilesView: View {
         }
         .fullScreenCover(item: $diffStart) { start in
             CommitDiffView(projectID: projectID, commit: commit, startPath: start.path, knownChanges: changes)
+                .navigationTransition(.zoom(sourceID: start.path, in: diffNamespace))
         }
     }
 }

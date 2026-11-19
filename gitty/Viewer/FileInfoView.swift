@@ -7,6 +7,8 @@ struct FileInfoView: View {
     @State private var model: FileInfoModel
     /// The commit whose diff is open, full screen.
     @State private var diffPage: CommitPage?
+    /// The diff zooms out of its commit's row, and closes like a symbol's card.
+    @Namespace private var diffNamespace
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -56,6 +58,7 @@ struct FileInfoView: View {
         .task { await model.load() }
         .fullScreenCover(item: $diffPage) { page in
             CommitDiffView(projectID: page.projectID, commit: page.commit, startPath: page.path)
+                .navigationTransition(.zoom(sourceID: page.id, in: diffNamespace))
         }
     }
 
@@ -158,8 +161,9 @@ struct FileInfoView: View {
 
     /// A commit: tap for its diff, full screen, at this file.
     private func commitLink(_ commit: GitCommit, location: ProjectFileLocation) -> some View {
-        Button {
-            diffPage = CommitPage(projectID: location.project.id, commit: commit, path: location.path)
+        let page = CommitPage(projectID: location.project.id, commit: commit, path: location.path)
+        return Button {
+            diffPage = page
         } label: {
             HStack {
                 CommitRow(commit: commit)
@@ -172,6 +176,7 @@ struct FileInfoView: View {
             .contentShape(Rectangle())
         }
         .foregroundStyle(.primary)
+        .matchedTransitionSource(id: page.id, in: diffNamespace)
     }
 }
 
