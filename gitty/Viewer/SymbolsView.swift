@@ -74,6 +74,8 @@ struct SymbolsView: View, Equatable {
     @State private var scroll = ScrollTracking()
     /// The Code level's line-number peek.
     @State private var peek = CodePeek()
+    /// What's collapsed at the Code level (shared, saved).
+    private let collapsed = CollapsedCodeStore.shared
     /// The list's width, which the Code level's code wraps in.
     @State private var codeWidth: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
@@ -248,6 +250,9 @@ struct SymbolsView: View, Equatable {
         codeBlocks.symbols = symbols
         codeBlocks.ownText = ownText
         codeBlocks.use(theme: codeTextStyle.theme, openFile: openFile)
+        let collapsed = collapsed
+        let openFile = openFile
+        codeBlocks.isShown = { !collapsed.isHidden($0, openFile: openFile) && !collapsed.isCollapsed($0, openFile: openFile) }
         codeBlocks.layoutKey = codeWidth > 0
             ? CodeLayoutKey(width: codeWidth - 2 * RawTextStyle.insets.left, style: codeTextStyle,
                             isDark: colorScheme == .dark)
@@ -255,20 +260,14 @@ struct SymbolsView: View, Equatable {
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(symbols) { symbol in
                 Section {
-                    SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, onTap: { onOpen(symbol) },
+                    SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, collapsed: collapsed, openFile: openFile,
+                               albumContext: albumContext, onTap: { onOpen(symbol) },
                                onTapAt: { anchor in
                                    if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
                                })
                 } header: {
-                    // A file's title opens its page with the whole file (as its card does);
-                    // a symbol's opens its page, like its code.
-                    Button { onOpen(symbol) } label: {
-                        SymbolTitle(symbol: symbol)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        if let albumContext { AlbumMenuItems(items: [albumItem(for: symbol)], context: albumContext) }
-                    }
+                    // Tap to collapse: a symbol's code, or a whole file's symbols.
+                    CodeHeader(symbol: symbol, collapsed: collapsed, openFile: openFile, albumContext: albumContext)
                 }
             }
         }
@@ -299,6 +298,7 @@ struct SymbolsView: View, Equatable {
     /// The tapped declaration moves up to the top of the screen, where the symbol's title will
     /// be, and the code slides down from under it, as if a disclosure opened.
     private func showCode(_ symbol: CodeSymbol, from point: CGPoint) {
+        collapsed.reveal(symbol, openFile: openFile)  // it's what you asked to see
         switchAnchor = symbol.id
         scroll.isPositioned = false
         let frame = scroll.frame
@@ -596,12 +596,51 @@ private struct FileDeclarations: View {
     }
 }
 
-/// Zoomed in: the slim title above a symbol's code (or a file's title line, before its symbols).
+/// A Code-level title: tap it to collapse or expand what's under it (a symbol's code, or a
+/// file's symbols), touch and hold for Add to Album. Hidden (but still one view) in a collapsed
+/// file. Observes the collapsed state itself, so a tap redraws just the titles and blocks on
+/// screen, not the list.
+private struct CodeHeader: View {
+    let symbol: CodeSymbol
+    let collapsed: CollapsedCodeStore
+    let openFile: URL
+    let albumContext: AlbumMenuContext?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if !collapsed.isHidden(symbol, openFile: openFile) {
+                let isCollapsed = symbol.kind == .file
+                    ? collapsed.isFileCollapsed(symbol.fileURL ?? openFile)
+                    : collapsed.isCollapsed(symbol, openFile: openFile)
+                Button {
+                    withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile) }
+                } label: {
+                    SymbolTitle(symbol: symbol, isCollapsed: isCollapsed)
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    if let albumContext {
+                        AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Zoomed in: the slim title above a symbol's code (or a file's title line, before its symbols),
+/// with a chevron: down while what's under it shows, right while it's collapsed.
 private struct SymbolTitle: View {
     let symbol: CodeSymbol
+    let isCollapsed: Bool
 
     var body: some View {
         HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                .accessibilityHidden(true)
             Image(systemName: symbol.kind.systemImage)
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
@@ -618,8 +657,11 @@ private struct SymbolTitle: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(symbol.spokenDescription)
-        .accessibilityHint(symbol.kind == .file ? Text("Opens the whole file") : Text("Opens its page"))
-        .accessibilityAddTraits(.isHeader)
+        .accessibilityValue(isCollapsed ? Text("Collapsed") : Text("Expanded"))
+        .accessibilityHint(symbol.kind == .file
+            ? (isCollapsed ? Text("Shows the file’s symbols") : Text("Hides the file’s symbols"))
+            : (isCollapsed ? Text("Shows its code") : Text("Hides its code")))
+        .accessibilityAddTraits([.isHeader, .isButton])
     }
 }
 
@@ -722,6 +764,8 @@ private final class CodeBlockStore {
 
     /// How many of the next symbols to prepare when one comes into view.
     static let lookahead = 6
+    /// Whether a symbol's code shows (not collapsed): only those are prepared ahead.
+    var isShown: @MainActor (CodeSymbol) -> Bool = { _ in true }
 
     /// The colors, and the open file (whose symbols have no `fileURL`). Another theme starts
     /// the blocks over.
@@ -805,7 +849,7 @@ private final class CodeBlockStore {
         updatePositions()
         guard let start = positions[symbol.id] else { return }
         let end = min(start + Self.lookahead + 1, symbols.count)
-        for next in symbols[(start + 1)..<max(start + 1, end)] where next.kind != .file {
+        for next in symbols[(start + 1)..<max(start + 1, end)] where next.kind != .file && isShown(next) {
             prepare(next, for: key, isVisible: false)
         }
     }
@@ -827,31 +871,69 @@ private struct SymbolCode: View {
     let symbol: CodeSymbol
     let store: CodeBlockStore
     let peek: CodePeek
+    let collapsed: CollapsedCodeStore
+    let openFile: URL
+    let albumContext: AlbumMenuContext?
     let onTap: @MainActor () -> Void
     let onTapAt: @MainActor (PageAnchor) -> Void
     /// Read so a new theme makes it take its new block.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, onTap: @escaping @MainActor () -> Void,
+    init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, collapsed: CollapsedCodeStore, openFile: URL,
+         albumContext: AlbumMenuContext?, onTap: @escaping @MainActor () -> Void,
          onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.symbol = symbol
         self.store = store
         self.peek = peek
+        self.collapsed = collapsed
+        self.openFile = openFile
+        self.albumContext = albumContext
         self.onTap = onTap
         self.onTapAt = onTapAt
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if symbol.kind != .file {
+            if symbol.kind != .file, !collapsed.isHidden(symbol, openFile: openFile),
+               !collapsed.isCollapsed(symbol, openFile: openFile) {
                 let block = store.block(for: symbol)
                 SymbolCodeText(block: block, peek: peek, layoutKey: store.layoutKey, onTap: onTap, onTapAt: onTapAt)
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
+                    // Touch and hold the code for Add to Album, with a small preview (not a
+                    // snapshot of what may be hundreds of lines).
+                    .contextMenu {
+                        if let albumContext {
+                            AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext)
+                        }
+                    } preview: {
+                        CodeMenuPreview(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension)
+                    }
             }
         }
     }
+}
+
+/// The long-press preview of a symbol's code: its title and first lines.
+private struct CodeMenuPreview: View {
+    let symbol: CodeSymbol
+    let fileExtension: String
+    @Environment(\.codeTextStyle) private var codeTextStyle
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(symbol.name, systemImage: symbol.kind.systemImage)
+                .font(.headline)
+                .lineLimit(1)
+            Text(SyntaxColoring.shared.attributed(TabExpansion.expand(symbol.preview), fileExtension: fileExtension,
+                                                  theme: codeTextStyle.theme))
+                .font(codeTextStyle.previewFont)
+                .lineLimit(SymbolIndexer.previewLineCount)
+        }
+        .padding(16)
+        .frame(width: 320, alignment: .leading)
+        .background(Color(uiColor: RawTextStyle.backgroundColor))
 }
 
 /// A symbol's code, redrawn when its block is laid out: drawn from Core Text layouts made in

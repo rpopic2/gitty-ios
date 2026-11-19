@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// One file's symbols, for Symbols mode zoomed out (grouped by file).
 nonisolated struct SymbolFileGroup: Identifiable, Sendable {
@@ -86,5 +87,66 @@ nonisolated struct SymbolFoldStore: @unchecked Sendable {
         var files = Set(defaults.stringArray(forKey: key) ?? [])
         if isFolded { files.insert(file.absoluteString) } else { files.remove(file.absoluteString) }
         defaults.set(files.sorted(), forKey: key)
+    }
+}
+
+/// What's collapsed at the Code level (tap a title), saved in `UserDefaults`: symbols, whose
+/// code is hidden under their titles, and files, whose symbols are all hidden under the
+/// file's title. Symbols are kept by file, kind and name, so one stays collapsed when its file
+/// changes. Loaded once; each block only checks the set, and a tap writes it once. Separate
+/// from the Files level's folding.
+@MainActor @Observable
+final class CollapsedCodeStore {
+    static let shared = CollapsedCodeStore(defaults: .standard)
+
+    private(set) var keys: Set<String>
+    @ObservationIgnored private let defaults: UserDefaults
+    private static let key = "collapsedCode"
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        keys = Set(defaults.stringArray(forKey: Self.key) ?? [])
+    }
+
+    /// - Parameter openFile: the file that symbols without a `fileURL` are in.
+    nonisolated static func key(for symbol: CodeSymbol, openFile: URL) -> String {
+        (symbol.fileURL ?? openFile).absoluteString + "#" + symbol.kind.rawValue + "#" + symbol.name
+    }
+
+    func isCollapsed(_ symbol: CodeSymbol, openFile: URL) -> Bool {
+        keys.contains(Self.key(for: symbol, openFile: openFile))
+    }
+
+    nonisolated static func key(forFile file: URL) -> String {
+        "file#" + file.absoluteString
+    }
+
+    func isFileCollapsed(_ file: URL) -> Bool {
+        keys.contains(Self.key(forFile: file))
+    }
+
+    /// Not shown at all: in a collapsed file (a file's own title always shows).
+    func isHidden(_ symbol: CodeSymbol, openFile: URL) -> Bool {
+        symbol.kind != .file && isFileCollapsed(symbol.fileURL ?? openFile)
+    }
+
+    /// A file's title collapses the file; a symbol's, its code.
+    func toggle(_ symbol: CodeSymbol, openFile: URL) {
+        let key = symbol.kind == .file ? Self.key(forFile: symbol.fileURL ?? openFile)
+            : Self.key(for: symbol, openFile: openFile)
+        if keys.contains(key) { keys.remove(key) } else { keys.insert(key) }
+        save()
+    }
+
+    /// Shows a symbol and its code (going to it from the Files level).
+    func reveal(_ symbol: CodeSymbol, openFile: URL) {
+        let removed = [Self.key(for: symbol, openFile: openFile), Self.key(forFile: symbol.fileURL ?? openFile)]
+        guard removed.contains(where: keys.contains) else { return }
+        keys.subtract(removed)
+        save()
+    }
+
+    private func save() {
+        defaults.set(keys.sorted(), forKey: Self.key)
     }
 }
