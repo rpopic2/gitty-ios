@@ -5,6 +5,7 @@ An iOS app for reading and reviewing code on the go: fast, light on the battery,
 ## Features
 
 - **Safari's raw-text look:** Courier 13pt, wrapped lines, Safari's margins, light and dark mode. The sidebar's **Code Font** section switches to JetBrains Mono (bundled, under the SIL Open Font License) and sets the size, for pages and the symbol levels.
+- **Syntax highlighting** for C, C# and Swift, with each tree-sitter grammar's own highlights query: on pages, the Code level, card previews and the Files level's lines. Choose the colors in the sidebar's Code Font section: **GitHub** (the default), **Xcode**, **Subtle** or **Solarized**, each with light and dark colors, or **None** for Safari's plain raw text. Big files are colored in the background, and the Code level shows each block plain until it's colored.
 - **Works offline, never expires:** downloaded files stay on the device and open without the network. They are downloaded again only when you pull to refresh, and an unchanged file costs just an HTTP 304.
 - **Picks up where you left off:** a file's page (the whole file) saves its reading position when scrolling stops, and comes back to it. It is stored as a text position, so it survives rotation and refreshes. The symbol list remembers its place too: the symbol in the middle of the screen, found again by name after a refresh. A file you open starts at its own entry in Code.
 - **Smooth, exact scrolling:** every line's height is known up front, so the scroll bar and text never jump.
@@ -69,7 +70,7 @@ The `gittyTests/` folder holds Swift Testing tests but has no target yet. To add
 ## Adding a language to Symbols mode
 
 1. Add the grammar's Swift package (for example `tree-sitter-python`) to the `gitty` target.
-2. Add `gitty/Languages/symbols-<name>.scm`. Start from the grammar's own `queries/tags.scm` and use its conventions: capture the definition as `@definition.function`, `.method`, `.class`, `.type`, `.macro`, `.variable` or `.constant`, and its name as `@name`. You can also capture `@name.prefix`, which is shown before the name.
+2. Copy the grammar's `queries/highlights.scm` to `gitty/Languages/highlights-<name>.scm` (its captures map to colors in `SyntaxCategory`), and add `gitty/Languages/symbols-<name>.scm`. Start from the grammar's own `queries/tags.scm` and use its conventions: capture the definition as `@definition.function`, `.method`, `.class`, `.type`, `.macro`, `.variable` or `.constant`, and its name as `@name`. You can also capture `@name.prefix`, which is shown before the name.
 3. Add an entry to `SymbolLanguage.all`, with the file extensions, the node types that count as bodies (definitions inside them are skipped), and the container node types whose members get their own cards (such as classes).
 
 The engine is the same for every language. It keeps top-level definitions plus the members of containers (named `Container.Member`), attaches the comment directly above each one, and orders them as they appear in the file.
@@ -96,6 +97,9 @@ The engine is the same for every language. It keeps top-level definitions plus t
 | `gitty/Core/SymbolLanguage.swift` | Languages for Symbols mode: grammar, file extensions, query, body and container node types (C, C#, Swift) |
 | `gitty/Core/CMacroBlanking.swift` | C-only pass before parsing: blanks top-level macro calls such as `OPT_GENERIC(i64)` |
 | `gitty/Languages/symbols-*.scm` | One symbols query per language (tags.scm conventions) |
+| `gitty/Languages/highlights-*.scm` | Each grammar's own highlights query, copied from its repository, for syntax highlighting |
+| `gitty/Core/SyntaxHighlighter.swift` | Syntax highlighting: the code as runs, each with its category (keyword, string, comment…) |
+| `gitty/Viewer/SyntaxTheme.swift` | The color themes, and coloring text for pages and SwiftUI |
 | `gitty/Core/CodeSymbol.swift` | A symbol: name, kind, range (with its leading comment), line, preview |
 | `gitty/Core/RawTextDecoder.swift` | Bytes to text, decoded the way Safari does it (BOM, charset, UTF-8, windows-1252) |
 | `gitty/Viewer/RawTextStyle.swift` | Safari's raw-text style constants, taken from WebKit's source, and the chosen code font (`CodeTextStyle`) |

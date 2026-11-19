@@ -65,6 +65,8 @@ struct SymbolsView: View, Equatable {
     @State private var switchAnchor: Int?
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
+    /// The font and syntax colors: a new theme colors the Code level's blocks again.
+    @Environment(\.codeTextStyle) private var codeTextStyle
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -181,7 +183,7 @@ struct SymbolsView: View, Equatable {
         LazyVStack(spacing: 12) {
             ForEach(symbols) { symbol in
                 Button { onOpen(symbol) } label: {
-                    SymbolCard(symbol: symbol)
+                    SymbolCard(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension)
                 }
                 .buttonStyle(.plain)
                 // The margin is part of each scroll target, so every target spans the full
@@ -201,7 +203,8 @@ struct SymbolsView: View, Equatable {
                 let isFolded = folded.contains(group.file)
                 Section {
                     // Always there (empty when folded): see `fullCode`.
-                    FileDeclarations(symbols: isFolded ? [] : group.symbols) { showCard($0) }
+                    FileDeclarations(symbols: isFolded ? [] : group.symbols,
+                                     fileExtension: group.file.pathExtension) { showCard($0) }
                         .id(group.anchorID ?? -1)  // the file as a scroll target (never -1 here)
                 } header: {
                     SymbolFileHeader(
@@ -232,6 +235,7 @@ struct SymbolsView: View, Equatable {
     private var fullCode: some View {
         codeBlocks.symbols = symbols
         codeBlocks.ownText = ownText
+        codeBlocks.use(theme: codeTextStyle.theme, openFile: openFile)
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(symbols) { symbol in
                 Section {
@@ -434,11 +438,14 @@ private struct SymbolFileHeader: View {
 /// tapping a line goes to that symbol's card.
 private struct FileDeclarations: View {
     let symbols: [CodeSymbol]
+    /// The file's, for its syntax colors.
+    let fileExtension: String
     let onTap: @MainActor (CodeSymbol) -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(symbols: [CodeSymbol], onTap: @escaping @MainActor (CodeSymbol) -> Void) {
+    init(symbols: [CodeSymbol], fileExtension: String, onTap: @escaping @MainActor (CodeSymbol) -> Void) {
         self.symbols = symbols
+        self.fileExtension = fileExtension
         self.onTap = onTap
     }
 
@@ -453,7 +460,9 @@ private struct FileDeclarations: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(symbols) { symbol in
                 (Text(Image(systemName: symbol.kind.systemImage)).foregroundStyle(.tint)
-                    + Text(verbatim: " " + Self.declaration(of: symbol)))
+                    + Text(verbatim: " ")
+                    + Text(SyntaxColoring.shared.attributed(Self.declaration(of: symbol), fileExtension: fileExtension,
+                                                            theme: codeTextStyle.theme)))
                     .font(codeTextStyle.swiftUIFont)
                     .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -513,33 +522,56 @@ private struct SymbolTitle: View {
 }
 
 /// One symbol's code at the Code level: `code` once it's prepared (`nil` until then, when the
-/// preview stands in). Observed by that symbol's view alone, so preparing it redraws nothing
-/// else.
+/// preview stands in), then again once it's colored. Observed by that symbol's view alone, so
+/// preparing it redraws nothing else.
 @Observable
 private final class CodeBlock {
     let symbol: CodeSymbol
-    private(set) var code: String?
+    private(set) var code: AttributedString?
+    /// The open file's symbol's code, plain, ready at once.
+    private let ownCode: String?
+    private let fileExtension: String
+    private let theme: SyntaxTheme
     @ObservationIgnored private var isLoading = false
 
-    /// The open file's symbols get their code right away, from its text.
-    init(symbol: CodeSymbol, ownText: NSString?) {
+    /// The open file's symbols get their code right away, from its text (plain: it's colored
+    /// in the background).
+    init(symbol: CodeSymbol, ownText: NSString?, fileExtension: String, theme: SyntaxTheme) {
         self.symbol = symbol
+        self.fileExtension = fileExtension
+        self.theme = theme
         if symbol.fileURL == nil, let ownText, NSMaxRange(symbol.range) <= ownText.length {
-            code = TabExpansion.expand(ownText.substring(with: symbol.range))
+            let plain = TabExpansion.expand(ownText.substring(with: symbol.range))
+            ownCode = plain
+            code = AttributedString(plain)
+        } else {
+            ownCode = nil
         }
     }
 
-    /// Another file's symbol: prepared in the background. On screen it goes first; the ones
-    /// loaded ahead wait at a lower priority.
+    /// Prepared in the background: another file's code is read, and either is colored. On
+    /// screen it goes first; the ones loaded ahead wait at a lower priority.
     func load(isVisible: Bool) {
-        guard code == nil, !isLoading, let file = symbol.fileURL else { return }
+        guard !isLoading else { return }
+        let file = symbol.fileURL
+        guard file != nil || (ownCode != nil && theme != .none) else { return }
         isLoading = true
+        let priority: TaskPriority = isVisible ? .userInitiated : .utility
         let range = symbol.range
         let preview = symbol.preview
+        let ownCode = ownCode
+        let fileExtension = fileExtension
+        let theme = theme
         Task {
-            let loaded = await FileTextCache.shared.code(of: range, in: file,
-                                                         priority: isVisible ? .userInitiated : .utility)
-            code = loaded ?? TabExpansion.expand(preview)
+            var plain = ownCode
+            if plain == nil, let file {
+                plain = await FileTextCache.shared.code(of: range, in: file, priority: priority)
+                    ?? TabExpansion.expand(preview)
+            }
+            guard let plain else { return }
+            code = await Task.detached(priority: priority) {
+                theme.attributed(plain, fileExtension: fileExtension)
+            }.value
         }
     }
 }
@@ -550,6 +582,8 @@ private final class CodeBlockStore {
     var symbols: [CodeSymbol] = []
     var ownText: NSString?
     private var blocks: [Int: CodeBlock] = [:]
+    private var theme = SyntaxTheme.none
+    private var openFileExtension = ""
     /// Where each symbol is in `symbols`, for loading ahead (worked out when `symbols` changes).
     private var positions: [Int: Int] = [:]
     private var positionsKey: [Int?] = []
@@ -557,9 +591,18 @@ private final class CodeBlockStore {
     /// How many of the next symbols to prepare when one comes into view.
     static let lookahead = 6
 
+    /// The colors, and the open file (whose symbols have no `fileURL`). Another theme starts
+    /// the blocks over.
+    func use(theme: SyntaxTheme, openFile: URL) {
+        if theme != self.theme { blocks.removeAll() }
+        self.theme = theme
+        openFileExtension = openFile.pathExtension
+    }
+
     func block(for symbol: CodeSymbol) -> CodeBlock {
         if let block = blocks[symbol.id] { return block }
-        let block = CodeBlock(symbol: symbol, ownText: ownText)
+        let block = CodeBlock(symbol: symbol, ownText: ownText,
+                              fileExtension: symbol.fileURL?.pathExtension ?? openFileExtension, theme: theme)
         blocks[symbol.id] = block
         return block
     }
@@ -588,6 +631,8 @@ private struct SymbolCode: View {
     let symbol: CodeSymbol
     let store: CodeBlockStore
     let onTap: @MainActor () -> Void
+    /// Read so a new theme makes it take its new block.
+    @Environment(\.codeTextStyle) private var codeTextStyle
 
     init(symbol: CodeSymbol, store: CodeBlockStore, onTap: @escaping @MainActor () -> Void) {
         self.symbol = symbol
@@ -598,8 +643,11 @@ private struct SymbolCode: View {
     var body: some View {
         VStack(spacing: 0) {
             if symbol.kind != .file {
-                SymbolCodeText(block: store.block(for: symbol), onTap: onTap)
+                let block = store.block(for: symbol)
+                SymbolCodeText(block: block, onTap: onTap)
                     .onAppear { store.appeared(symbol) }
+                    // A new theme's block, while this is on screen.
+                    .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
             }
         }
     }
@@ -618,7 +666,7 @@ private struct SymbolCodeText: View {
 
     var body: some View {
         Button(action: onTap) {
-            Text(verbatim: block.code ?? TabExpansion.expand(block.symbol.preview))
+            Text(block.code ?? AttributedString(TabExpansion.expand(block.symbol.preview)))
                 .font(codeTextStyle.swiftUIFont)
                 .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -670,6 +718,8 @@ nonisolated struct SymbolScrollRequest: Equatable, Sendable {
 /// One symbol in the list: its kind, name, line and the first lines of its code.
 struct SymbolCard: View {
     let symbol: CodeSymbol
+    /// The symbol's file's, for its syntax colors.
+    var fileExtension = ""
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     private var shape: RoundedRectangle {
@@ -692,7 +742,8 @@ struct SymbolCard: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
-            Text(symbol.preview)
+            Text(SyntaxColoring.shared.attributed(symbol.preview, fileExtension: fileExtension,
+                                                  theme: codeTextStyle.theme))
                 .font(codeTextStyle.previewFont)
                 .foregroundStyle(.secondary)
                 .lineLimit(SymbolIndexer.previewLineCount)

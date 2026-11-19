@@ -236,6 +236,7 @@ struct SideBarView: View {
     /// The code font and its size, for pages and the symbol levels.
     @AppStorage(CodeTextStyle.fontKey) private var codeFont: CodeFont = .courier
     @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
+    @AppStorage(CodeTextStyle.themeKey) private var syntaxTheme: SyntaxTheme = .default
     /// Whether it shows: it's built ahead of time, and loads the projects each time it opens.
     @Environment(SideBarState.self) private var state: SideBarState?
 
@@ -289,8 +290,14 @@ struct SideBarView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                // How code looks in the chosen font and size.
-                Text(verbatim: "int main(void) { return 0; }")
+                Picker("Colors", selection: $syntaxTheme) {
+                    ForEach(SyntaxTheme.allCases, id: \.self) { theme in
+                        Text(theme.title).tag(theme)
+                    }
+                }
+                // How code looks in the chosen font, size and colors.
+                Text(SyntaxColoring.shared.attributed("int main(void) { return 0; } // hi",
+                                                      fileExtension: "c", theme: syntaxTheme))
                     .font(CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize)).swiftUIFont)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)

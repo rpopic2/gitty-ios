@@ -138,16 +138,20 @@ nonisolated enum RawTextStyle {
         return name.range(of: "searchweb", options: .caseInsensitive) != nil
     }
 
-    /// Decodes and styles a document. Safe to call off the main thread.
+    /// Decodes and styles a document, with the chosen syntax colors. Safe to call off the main
+    /// thread.
     static func render(_ document: StoredDocument) -> RenderedText {
         let string = RawTextDecoder.decode(document.data, contentType: document.metadata.contentType)
-        let font = self.font
+        let style = CodeTextStyle.current
+        let font = style.uiFont
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: textColor,
             .paragraphStyle: paragraphStyle(for: font),
         ]
-        return RenderedText(attributedString: NSAttributedString(string: string, attributes: attributes))
+        let text = NSMutableAttributedString(string: string, attributes: attributes)
+        style.theme.color(text, fileExtension: document.url.pathExtension)
+        return RenderedText(attributedString: text)
     }
 }
 
@@ -171,22 +175,27 @@ nonisolated enum CodeFont: String, CaseIterable, Sendable {
     }
 }
 
-/// The code font and its size, as chosen in the sidebar (saved in `UserDefaults`).
+/// The code font, its size and the syntax colors, as chosen in the sidebar (saved in
+/// `UserDefaults`).
 nonisolated struct CodeTextStyle: Equatable, Hashable, Sendable {
     var font: CodeFont
     var size: CGFloat
+    var theme: SyntaxTheme = .default
 
     static let fontKey = "codeFont"
     static let sizeKey = "codeFontSize"
+    static let themeKey = "syntaxTheme"
     static let defaultSize: CGFloat = 13
     static let sizes: ClosedRange<Double> = 9...24
 
-    /// What's saved now (Courier 13 until something is chosen).
+    /// What's saved now (Courier 13 and GitHub colors until something is chosen).
     static var current: CodeTextStyle {
         let defaults = UserDefaults.standard
         let font = defaults.string(forKey: fontKey).flatMap(CodeFont.init(rawValue:)) ?? .courier
         let size = defaults.object(forKey: sizeKey) as? Double ?? Double(defaultSize)
-        return CodeTextStyle(font: font, size: CGFloat(min(max(size, sizes.lowerBound), sizes.upperBound)))
+        let theme = defaults.string(forKey: themeKey).flatMap(SyntaxTheme.init(rawValue:)) ?? .default
+        return CodeTextStyle(font: font, size: CGFloat(min(max(size, sizes.lowerBound), sizes.upperBound)),
+                             theme: theme)
     }
 
     var uiFont: UIFont {

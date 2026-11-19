@@ -28,6 +28,7 @@ struct BrowserView: View {
     /// The code font and size, chosen in the sidebar.
     @AppStorage(CodeTextStyle.fontKey) private var codeFont: CodeFont = .courier
     @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
+    @AppStorage(CodeTextStyle.themeKey) private var syntaxTheme: SyntaxTheme = .default
 
     private var currentURL: URL? {
         currentURLString.isEmpty ? nil : URL(string: currentURLString)
@@ -63,7 +64,7 @@ struct BrowserView: View {
         .environment(sideBar)
         .environment(review)
         .environment(highlights)
-        .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize)))
+        .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize), theme: syntaxTheme))
         .sheet(isPresented: $isShowingSettings) { SettingsView() }
         .onOpenURL(perform: openShared)
         .task(id: [openProjectID, currentURLString]) {

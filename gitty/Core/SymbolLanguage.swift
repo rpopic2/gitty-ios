@@ -4,9 +4,9 @@ import TreeSitterC
 import TreeSitterCSharp
 import TreeSitterSwift
 
-/// What Symbols mode needs to know about one language. Adding a language means adding its
-/// tree-sitter grammar package, a `symbols-<name>.scm` query in `gitty/Languages/`, and an entry
-/// in `all`.
+/// What Symbols mode and syntax highlighting need to know about one language. Adding a language
+/// means adding its tree-sitter grammar package, a `symbols-<name>.scm` query and its
+/// `highlights-<name>.scm` in `gitty/Languages/`, and an entry in `all`.
 nonisolated struct SymbolLanguage: Sendable {
     let name: String
     let fileExtensions: Set<String>
@@ -21,12 +21,15 @@ nonisolated struct SymbolLanguage: Sendable {
     let prepare: @Sendable (NSString) -> String
     /// The compiled symbols query (`symbols-<name>.scm`, tags.scm conventions).
     let query: Query
+    /// The grammar's own highlights query (`highlights-<name>.scm`), for syntax highlighting.
+    let highlightsQuery: Query
 
     init(
         name: String,
         fileExtensions: Set<String>,
         language: Language,
         queryResource: String,
+        highlightsResource: String,
         bodyNodeTypes: Set<String>,
         containerNodeTypes: Set<String> = [],
         prepare: @escaping @Sendable (NSString) -> String = { $0 as String }
@@ -37,14 +40,19 @@ nonisolated struct SymbolLanguage: Sendable {
         self.bodyNodeTypes = bodyNodeTypes
         self.containerNodeTypes = containerNodeTypes
         self.prepare = prepare
-        // A missing or broken query file is a bug in the app, not something to recover from.
-        guard let url = Bundle.main.url(forResource: queryResource, withExtension: "scm") else {
-            fatalError("\(queryResource).scm is missing from the app bundle")
+        query = Self.load(queryResource, for: language)
+        highlightsQuery = Self.load(highlightsResource, for: language)
+    }
+
+    /// A missing or broken query file is a bug in the app, not something to recover from.
+    private static func load(_ resource: String, for language: Language) -> Query {
+        guard let url = Bundle.main.url(forResource: resource, withExtension: "scm") else {
+            fatalError("\(resource).scm is missing from the app bundle")
         }
         do {
-            query = try Query(language: language, url: url)
+            return try Query(language: language, url: url)
         } catch {
-            fatalError("\(queryResource).scm doesn't compile: \(error)")
+            fatalError("\(resource).scm doesn't compile: \(error)")
         }
     }
 
@@ -53,6 +61,7 @@ nonisolated struct SymbolLanguage: Sendable {
         fileExtensions: ["c", "h"],
         language: Language(tree_sitter_c()),
         queryResource: "symbols-c",
+        highlightsResource: "highlights-c",
         bodyNodeTypes: ["compound_statement", "field_declaration_list", "parameter_list"],
         prepare: CMacroBlanking.blankingTopLevelMacroCalls(in:)
     )
@@ -62,6 +71,7 @@ nonisolated struct SymbolLanguage: Sendable {
         fileExtensions: ["cs", "csx"],
         language: Language(tree_sitter_c_sharp()),
         queryResource: "symbols-c-sharp",
+        highlightsResource: "highlights-c-sharp",
         bodyNodeTypes: ["block", "arrow_expression_clause", "accessor_list",
                         "parameter_list", "bracketed_parameter_list"],
         containerNodeTypes: ["class_declaration", "struct_declaration", "interface_declaration",
@@ -73,6 +83,7 @@ nonisolated struct SymbolLanguage: Sendable {
         fileExtensions: ["swift"],
         language: Language(tree_sitter_swift()),
         queryResource: "symbols-swift",
+        highlightsResource: "highlights-swift",
         bodyNodeTypes: ["function_body", "computed_property", "lambda_literal", "willset_didset_block"],
         // `extension` is a class_declaration in this grammar.
         containerNodeTypes: ["class_declaration", "protocol_declaration"]
