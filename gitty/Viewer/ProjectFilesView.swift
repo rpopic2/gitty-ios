@@ -2,9 +2,9 @@ import SwiftUI
 import UIKit
 
 /// The open project in the Project tab: every file, grouped under a header per directory, code
-/// files first in each. Tap a file to open its code (the Code level). Pull to refresh the list;
-/// Clone downloads the whole project with Git (its latest commit) for offline reading and
-/// history. The filter under the header (`*.cs *.md`, see `FileFilter`) narrows the list and the
+/// files first in each. Tap a file for its details, and Open there for its code (the Code
+/// level). Pull to refresh the list; Clone downloads the whole project with Git (its latest
+/// commit) for offline reading and history. The filter under the header (`*.cs *.md`, see `FileFilter`) narrows the list and the
 /// project's symbols, and the branch row under it switches branch or tag. In recently opened
 /// order (the sort button beside the mode selector) the files are one flat list instead.
 struct ProjectFilesView: View {
@@ -31,6 +31,14 @@ struct ProjectFilesView: View {
     /// Branches and tags, for the branch row.
     @State private var refs: ProjectRefs?
     @State private var isSwitchingRef = false
+    /// The file whose details are showing.
+    @State private var detailFile: DetailFile?
+
+    private struct DetailFile: Identifiable {
+        let url: URL
+        let size: Int?
+        var id: URL { url }
+    }
     @State private var isSignedIn = false
     @State private var isSigningIn = false
     /// The filter as typed. It's applied (and saved) when editing ends.
@@ -84,6 +92,14 @@ struct ProjectFilesView: View {
                     isSigningIn = false
                     Task { await load(refresh: true) }
                 }
+            }
+            .sheet(item: $detailFile) { file in
+                FileInfoView(url: file.url, knownSize: file.size) {
+                    detailFile = nil
+                    onOpen(file.url)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
             .alert("Couldn’t Clone", isPresented: cloneErrorIsPresented, presenting: cloneError) { _ in
                 if cloneNeedsSignIn {
@@ -313,7 +329,8 @@ struct ProjectFilesView: View {
         if let url = project.rawURL(for: entry.path) {
             let isCurrent = url == currentURL
             let isSaved = saved.contains(url)
-            Button { onOpen(url) } label: {
+            // A tap shows the file's details first; Open there opens its code.
+            Button { detailFile = DetailFile(url: url, size: entry.size) } label: {
                 FileEntryRow(entry: entry, isSaved: isSaved,
                              folder: showsFolder ? folder(of: entry, in: project) : nil)
             }

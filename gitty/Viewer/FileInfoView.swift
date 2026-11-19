@@ -10,8 +10,15 @@ struct FileInfoView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
-    init(url: URL) {
-        _model = State(initialValue: FileInfoModel(url: url))
+    /// Open, at the top: from the Project tab, where a tap on a file shows this first.
+    private let onOpen: (@MainActor () -> Void)?
+
+    /// - Parameters:
+    ///   - knownSize: its size from the project's file list, for a file that isn't downloaded.
+    ///   - onOpen: shows an Open button that opens the file's code.
+    init(url: URL, knownSize: Int? = nil, onOpen: (@MainActor () -> Void)? = nil) {
+        _model = State(initialValue: FileInfoModel(url: url, knownSize: knownSize))
+        self.onOpen = onOpen
     }
 
     var body: some View {
@@ -63,6 +70,17 @@ struct FileInfoView: View {
 
     private var fileSection: some View {
         Section {
+            if let onOpen {
+                Button {
+                    onOpen()
+                } label: {
+                    Label("Open", systemImage: "doc.text")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.location?.path ?? model.url.absoluteString)
                     .font(.callout.monospaced())
@@ -212,8 +230,12 @@ final class FileInfoModel {
     /// When a fresh shallow clone has no change of this file yet: fetch more this many times.
     private static let automaticDeepening = 3
 
-    init(url: URL) {
+    /// From the project's file list, until the file is downloaded.
+    private let knownSize: Int?
+
+    init(url: URL, knownSize: Int? = nil) {
         self.url = url
+        self.knownSize = knownSize
     }
 
     func load() async {
@@ -225,6 +247,10 @@ final class FileInfoModel {
                 + (document.data.last == 0x0A || document.data.isEmpty ? 0 : 1)
             sizeSummary = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
                 + " · " + String(localized: "\(lines) lines")
+        } else if let knownSize {
+            // Not downloaded: the size GitHub listed; its lines are counted once it's saved.
+            sizeSummary = ByteCountFormatter.string(fromByteCount: Int64(knownSize), countStyle: .file)
+                + " · " + String(localized: "Not downloaded")
         }
         if let location { clone = await CloneStore.shared.record(forProject: location.project.id) }
         hasLoaded = true
