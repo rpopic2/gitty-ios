@@ -205,14 +205,11 @@ struct StackResultsView<Results: View>: View {
     @ViewBuilder
     private var content: some View {
         if isQueryEmpty {
-            placeholder { EmptyView() }  // waiting for the first letters
-        } else if search.results.isEmpty && search.isPending {
-            placeholder { ProgressView() }
-        } else if search.results.isEmpty {
-            placeholder { ContentUnavailableView.search(text: search.query) }
+            Color(uiColor: .systemGroupedBackground)  // waiting for the first letters
         } else {
-            list(search.results, search.resultsQuery) { isBarHidden = $0 }
-                .id(search.version)
+            SearchResultsContent(search: search) { symbols, query in
+                list(symbols, query) { isBarHidden = $0 }
+            }
         }
     }
 
@@ -265,6 +262,25 @@ struct StackResultsView<Results: View>: View {
             }
         }
         .padding(.horizontal, 24)
+    }
+}
+
+/// A search's results so far, as a list (`list`): a spinner until the first come, and No
+/// Results if none do. Observes the search itself, so only this redraws as results come in.
+/// A fresh list for each set (see `StackSearch.version`).
+struct SearchResultsContent<Results: View>: View {
+    let search: StackSearch
+    @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String) -> Results
+
+    var body: some View {
+        if search.results.isEmpty && search.isPending {
+            placeholder { ProgressView() }
+        } else if search.results.isEmpty {
+            placeholder { ContentUnavailableView.search(text: search.query) }
+        } else {
+            list(search.results, search.resultsQuery)
+                .id(search.version)
+        }
     }
 
     private func placeholder<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {

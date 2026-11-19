@@ -41,6 +41,10 @@ struct CodeScreen: View {
     @State private var stackedResults: [UUID: StackedResults] = [:]
     /// The search of the latest results page shown: the only one that keeps its results.
     @State private var stackSearch: StackSearch?
+    /// Tapping the bar shows Project with a search field, like Safari's start page (`mode` is
+    /// `.project` while it's open): typing searches symbols, the results replacing Project.
+    @State private var browseQuery = ""
+    @State private var browseSearch: StackSearch?
     /// The symbol on screen in each card.
     @State private var cardPlaces = CardPlaces()
     /// The stack's symbols, in a sheet (tap a page's stack icon).
@@ -116,6 +120,10 @@ struct CodeScreen: View {
         }
         .onChange(of: mode) { old, _ in
             model.setBarCollapsed(false)
+            if mode != .project {
+                browseQuery = ""
+                browseSearch = nil
+            }
             // Back from Project, where the filter may have changed: index again if it did.
             if mode.showsSymbols, model.symbolIndex.isReady { model.loadProjectSymbols() }
             // …and where files may have been added to the album.
@@ -133,6 +141,15 @@ struct CodeScreen: View {
             if model.symbolIndex.isReady { model.loadProjectSymbols() }
         }
         .onChange(of: codeTextStyle) { Task { await model.restyle() } }
+        .onChange(of: browseQuery) { _, query in
+            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                browseSearch = nil  // Project again
+            } else if let browseSearch {
+                browseSearch.query = query
+            } else {
+                browseSearch = StackSearch(query: query, source: Self.screenSourceID, model: model)
+            }
+        }
         .navigationDestination(for: CardRoute.self) { route in
             switch route {
             case .card(let id):
@@ -170,15 +187,22 @@ struct CodeScreen: View {
             // Built on first use, then kept (hidden) like the symbols, so switching back is
             // instant: it doesn't read and group the project's files again.
             if hasShownProject {
-                ProjectView(projectID: projectID, currentURL: model.url, isActive: mode == .project,
+                let isShowingProject = mode == .project && browseSearch == nil
+                ProjectView(projectID: projectID, currentURL: model.url, isActive: isShowingProject,
                             sorting: ListSorting(), currentAlbumID: albumID, onOpenAlbum: onOpenAlbum,
                             onShowProject: onShowProject) { url in
                     open(url)
                 }
                 .equatable()  // hidden, its big list mustn't redraw each time this screen does
-                .opacity(mode == .project ? 1 : 0)
-                .allowsHitTesting(mode == .project)
-                .accessibilityHidden(mode != .project)
+                .opacity(isShowingProject ? 1 : 0)
+                .allowsHitTesting(isShowingProject)
+                .accessibilityHidden(!isShowingProject)
+            }
+            // Typing in the bar's field: the results, in place of Project.
+            if mode == .project, let search = browseSearch {
+                SearchResultsContent(search: search) { symbols, query in
+                    resultsList(search, symbols: symbols, query: query, onScrollDown: { _ in })
+                }
             }
         }
         // The source for pages opened at the lines tapped (see `screenSourceID`).
@@ -373,44 +397,40 @@ struct CodeScreen: View {
                                 shownCount: { results in
                                     results.filter { !search.collapsed.isHidden($0, openFile: openFile, scope: scope) }.count
                                 }) { symbols, query, onScrollDown in
-            SymbolsView(
-                symbols: symbols,
-                query: query,
-                isActive: true,
-                ownText: ownText,
-                scrollRequest: nil,
-                collapseRequest: nil,
-                onCenteredSymbolChange: { _ in },
-                isBarCollapsed: { false },
-                barTapCount: 0,
-                openFile: model.url,
-                collapseScope: model.collapseScope,
-                rootFolderName: model.symbolsProjectTitle ?? model.fileName,
-                onOpen: { openStackedCard(at: $0, anchor: nil, from: search) },
-                onOpenAt: { openStackedCard(at: $0, anchor: $1, from: search) },
-                onBarCollapsedChange: onScrollDown,
-                albumContext: albumContext,
-                onShowHistory: {
-                    historyDetent = .large
-                    historyFile = HistoryFile(url: $0)
-                },
-                onDownloadFile: { model.download(file: $0) },
-                downloadingFiles: model.downloadingFiles,
-                onOpenURL: { onOpen($0) },
-                collapsed: search.collapsed
-            )
-            .equatable()
+            resultsList(search, symbols: symbols, query: query, onScrollDown: onScrollDown)
         }
     }
 
-    /// Search in the bar: a results page, the first in the stack (zooming out of the whole
-    /// screen), with its search field focused. The results follow as you type.
-    private func searchFromList() {
-        let search = StackSearch(query: "", source: Self.screenSourceID, startsEditing: true, model: model)
-        stackedCards = [:]
-        stackedResults = [search.id: StackedResults(query: "", source: Self.screenSourceID, depth: 1)]
-        stackSearch = search
-        cardPath = [.results(search.id)]
+    /// A search's results as code blocks, like the Code level's: tap one for its card.
+    private func resultsList(_ search: StackSearch, symbols: [CodeSymbol], query: String,
+                             onScrollDown: @escaping @MainActor (Bool) -> Void) -> some View {
+        SymbolsView(
+            symbols: symbols,
+            query: query,
+            isActive: true,
+            ownText: ownText,
+            scrollRequest: nil,
+            collapseRequest: nil,
+            onCenteredSymbolChange: { _ in },
+            isBarCollapsed: { false },
+            barTapCount: 0,
+            openFile: model.url,
+            collapseScope: model.collapseScope,
+            rootFolderName: model.symbolsProjectTitle ?? model.fileName,
+            onOpen: { openStackedCard(at: $0, anchor: nil, from: search) },
+            onOpenAt: { openStackedCard(at: $0, anchor: $1, from: search) },
+            onBarCollapsedChange: onScrollDown,
+            albumContext: albumContext,
+            onShowHistory: {
+                historyDetent = .large
+                historyFile = HistoryFile(url: $0)
+            },
+            onDownloadFile: { model.download(file: $0) },
+            downloadingFiles: model.downloadingFiles,
+            onOpenURL: { onOpen($0) },
+            collapsed: search.collapsed
+        )
+        .equatable()
     }
 
     // MARK: The stack's symbols
@@ -504,9 +524,15 @@ struct CodeScreen: View {
     /// A result's card, on top of the results, paging through them.
     private func openStackedCard(at symbol: CodeSymbol, anchor: PageAnchor?, from search: StackSearch) {
         pruneStack()
+        // From the bar's search (results in place of Project): the keyboard goes, and the card
+        // zooms out of the screen.
+        let isBrowsing = search === browseSearch
+        if isBrowsing {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
         let id = UUID()
         stackedCards[id] = StackedCard(symbols: search.results, initialID: symbol.id, anchor: anchor,
-                                       zoomSource: AnyHashable(CardRoute.results(search.id)),
+                                       zoomSource: isBrowsing ? Self.screenSourceID : AnyHashable(CardRoute.results(search.id)),
                                        isBase: false, depth: cardPath.count + 1)
         cardPath.append(.card(id))
     }
@@ -584,37 +610,46 @@ struct CodeScreen: View {
                 onCancel: { isEditingAddress = false }
             )
             .id(rejectedAddress)  // a new rejected share restarts the editor with it
+        } else if mode == .project {
+            // Like Safari's address field over its start page: Project shows until you type, then
+            // the symbols found. Return opens an https:// address; Cancel or a swipe down goes back.
+            SymbolSearchEditor(query: $browseQuery, isSearching: browseSearch?.isPending ?? false,
+                               placeholder: String(localized: "Search or Enter Address"),
+                               onClose: { mode = .code }, onSubmit: submitBrowse, onCancel: { mode = .code })
         } else {
             BottomBarStack(
                 title: barTitle,
                 isCollapsed: model.isBarCollapsed,
                 progressFraction: model.progressFraction,
                 isProgressVisible: model.isProgressVisible,
-                mode: $mode,
+                mode: nil,  // Project is behind the bar now (tap it), not a tab
                 onExpand: { model.expandBarFromTap() },
-                onEdit: {
-                    // The symbol levels search symbols; the address is edited from Project (or
-                    // while the file hasn't loaded).
-                    if barSearchesSymbols { searchFromList() } else { isEditingAddress = true }
-                },
+                onEdit: { mode = .project },
                 copyText: barAddress,
                 onPasteAndGo: onPasteAndGo,
                 onOpenInBrowser: openInBrowserAction,
-                // The symbol levels show the active search in the bar; Project edits the address.
-                searchQuery: barSearchesSymbols ? "" : nil,
+                searchQuery: "",  // tapping it searches
                 onCollapseAll: collapseAllAction(true),
                 onExpandAll: collapseAllAction(false),
-                // In an album: its icon before its name (the selector's Project leaves it).
-                titleIcon: mode != .project && model.activeAlbum != nil ? "rectangle.stack" : nil
+                // In an album: its icon before its name.
+                titleIcon: model.activeAlbum != nil ? "rectangle.stack" : nil
             )
         }
     }
 
-    /// In Project mode, the bar names the project and edits its address on github.com (Files,
-    /// which has no address, edits the open file's). Otherwise, the open file.
+    /// The album shown, or the open file's project, or (outside projects) the file.
     private var barTitle: String {
-        guard mode == .project else { return model.activeAlbum?.name ?? model.fileName }
-        return projectID.isEmpty ? String(localized: "Files") : project?.title ?? ""
+        model.activeAlbum?.name ?? model.symbolsProjectTitle ?? model.fileName
+    }
+
+    /// Return in the bar's field: an https:// address opens; anything else just puts the
+    /// keyboard away, leaving the results.
+    private func submitBrowse() {
+        if case .url(let url) = AddressParser.parse(browseQuery) {
+            onOpen(url)
+        } else {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
     }
 
     private var barAddress: String {

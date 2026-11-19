@@ -223,21 +223,43 @@ struct SymbolSearchEditor: View {
     /// What it searches: "Search Symbols", or "Search Files" at the Files level.
     let placeholder: String
     let onClose: @MainActor () -> Void
+    /// Return on the keyboard (`nil`: it closes, like a swipe down).
+    let onSubmit: (@MainActor () -> Void)?
+    /// A Cancel button beside the field, like Safari's (`nil`: none).
+    let onCancel: (@MainActor () -> Void)?
 
     init(query: Binding<String>, isSearching: Bool = false, placeholder: String = String(localized: "Search Symbols"),
-         onClose: @escaping @MainActor () -> Void) {
+         onClose: @escaping @MainActor () -> Void, onSubmit: (@MainActor () -> Void)? = nil,
+         onCancel: (@MainActor () -> Void)? = nil) {
         _query = query
         self.isSearching = isSearching
         self.placeholder = placeholder
         self.onClose = onClose
+        self.onSubmit = onSubmit
+        self.onCancel = onCancel
     }
 
     var body: some View {
+        HStack(spacing: 12) {
+            field
+            if let onCancel {
+                Button("Cancel") { onCancel() }
+            }
+        }
+        .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
+        .padding(.vertical, 8)
+        .modifier(EditorBarBackground())
+        // Swiping down on the search bar closes the search (the filter stays).
+        .modifier(OnSwipeDown { onClose() })
+        .accessibilityAction(.escape) { onClose() }
+    }
+
+    private var field: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            BarTextField(style: .search, text: $query, onSubmit: onClose, placeholder: placeholder)
+            BarTextField(style: .search, text: $query, onSubmit: onSubmit ?? onClose, placeholder: placeholder)
             if isSearching {
                 ProgressView()
                     .controlSize(.small)
@@ -247,12 +269,6 @@ struct SymbolSearchEditor: View {
         .padding(.horizontal, 14)
         .frame(height: FileBarMetrics.fieldHeight)
         .modifier(FieldBackground())
-        .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
-        .padding(.vertical, 8)
-        .modifier(EditorBarBackground())
-        // Swiping down on the search bar closes the search (the filter stays).
-        .modifier(OnSwipeDown { onClose() })
-        .accessibilityAction(.escape) { onClose() }
     }
 }
 
