@@ -47,6 +47,10 @@ struct SymbolsView: View, Equatable {
     /// While searching: a swipe on the cards closes the search field (the filter stays). That
     /// swipe only closes it: the list doesn't scroll and the bar doesn't shrink.
     let onCloseSearch: (@MainActor () -> Void)?
+    /// For the long-press menus' Add to Album (`nil`: the file isn't in a project).
+    let albumContext: AlbumMenuContext?
+    /// Select at the Symbols level: while it's on, tapping a card chooses it.
+    let selection: SymbolSelection
 
     /// The zoom level, shared with the selector under the bar (Project hides this view).
     @Binding var mode: ViewMode
@@ -84,7 +88,9 @@ struct SymbolsView: View, Equatable {
          onOpen: @escaping @MainActor (CodeSymbol) -> Void,
          onOpenFile: @escaping @MainActor (URL) -> Void,
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
-         onCloseSearch: (@MainActor () -> Void)? = nil) {
+         onCloseSearch: (@MainActor () -> Void)? = nil,
+         albumContext: AlbumMenuContext? = nil,
+         selection: SymbolSelection) {
         self.symbols = symbols
         self.query = query
         _mode = mode
@@ -102,6 +108,8 @@ struct SymbolsView: View, Equatable {
         self.onOpenFile = onOpenFile
         self.onBarCollapsedChange = onBarCollapsedChange
         self.onCloseSearch = onCloseSearch
+        self.albumContext = albumContext
+        self.selection = selection
     }
 
     /// What the list shows. The closures aren't compared: they reach the screen's state and
@@ -111,6 +119,7 @@ struct SymbolsView: View, Equatable {
             && lhs.isActive == rhs.isActive && lhs.ownText === rhs.ownText
             && lhs.scrollRequest == rhs.scrollRequest && lhs.barTapCount == rhs.barTapCount
             && lhs.openFile == rhs.openFile && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
+            && lhs.albumContext == rhs.albumContext
     }
 
     var body: some View {
@@ -187,10 +196,18 @@ struct SymbolsView: View, Equatable {
     private var cards: some View {
         LazyVStack(spacing: 12) {
             ForEach(symbols) { symbol in
-                Button { onOpen(symbol) } label: {
+                // While selecting, a tap chooses the card instead of opening it.
+                Button {
+                    if selection.isActive { selection.toggle(symbol.id) } else { onOpen(symbol) }
+                } label: {
                     SymbolCard(symbol: symbol, fileExtension: (symbol.fileURL ?? openFile).pathExtension)
+                        .overlay(alignment: .bottomTrailing) { SelectionMark(selection: selection, id: symbol.id) }
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    CardMenu(item: albumItem(for: symbol), context: albumContext, selection: selection,
+                             id: symbol.id)
+                }
                 // The margin is part of each scroll target, so every target spans the full
                 // width and centering one never scrolls sideways.
                 .padding(.horizontal, 16)
@@ -209,7 +226,8 @@ struct SymbolsView: View, Equatable {
                 Section {
                     // Always there (empty when folded): see `fullCode`.
                     FileDeclarations(symbols: isFolded ? [] : group.symbols,
-                                     fileExtension: group.file.pathExtension) { showCard($0) }
+                                     fileExtension: group.file.pathExtension, file: group.file,
+                                     albumContext: albumContext) { showCard($0) }
                         .id(group.anchorID ?? -1)  // the file as a scroll target (never -1 here)
                 } header: {
                     SymbolFileHeader(
@@ -219,6 +237,9 @@ struct SymbolsView: View, Equatable {
                         onToggle: { toggleFold(group.file) },
                         onOpenFile: { onOpenFile(group.file) }
                     )
+                    .contextMenu {
+                        if let albumContext { AlbumMenuItems(items: [.file(group.file)], context: albumContext) }
+                    }
                 }
             }
         }
@@ -256,10 +277,18 @@ struct SymbolsView: View, Equatable {
                         SymbolTitle(symbol: symbol)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        if let albumContext { AlbumMenuItems(items: [albumItem(for: symbol)], context: albumContext) }
+                    }
                 }
             }
         }
         .scrollTargetLayout()
+    }
+
+    /// What adding this entry to an album adds.
+    private func albumItem(for symbol: CodeSymbol) -> AlbumItem {
+        AlbumItem(symbol, openFile: openFile)
     }
 
     // MARK: Switching
@@ -465,12 +494,18 @@ private struct FileDeclarations: View {
     let symbols: [CodeSymbol]
     /// The file's, for its syntax colors.
     let fileExtension: String
+    /// The file they're in, for Add to Album.
+    let file: URL
+    let albumContext: AlbumMenuContext?
     let onTap: @MainActor (CodeSymbol) -> Void
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(symbols: [CodeSymbol], fileExtension: String, onTap: @escaping @MainActor (CodeSymbol) -> Void) {
+    init(symbols: [CodeSymbol], fileExtension: String, file: URL, albumContext: AlbumMenuContext?,
+         onTap: @escaping @MainActor (CodeSymbol) -> Void) {
         self.symbols = symbols
         self.fileExtension = fileExtension
+        self.file = file
+        self.albumContext = albumContext
         self.onTap = onTap
     }
 
@@ -494,6 +529,11 @@ private struct FileDeclarations: View {
                     .padding(.vertical, 4)
                     .contentShape(Rectangle())
                     .onTapGesture { onTap(symbol) }
+                    .contextMenu {
+                        if let albumContext {
+                            AlbumMenuItems(items: [AlbumItem(symbol, openFile: file)], context: albumContext)
+                        }
+                    }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(symbol.spokenDescription)
                     .accessibilityHint(Text("Shows its card"))
@@ -672,7 +712,7 @@ private final class CodeBlockStore {
         updatePositions()
         guard let position = positions[symbol.id], position + 1 < symbols.count else { return symbol.range }
         let next = symbols[position + 1]
-        guard next.kind != .file, next.fileURL == symbol.fileURL,
+        guard next.kind != .file, next.kind != .lines, next.fileURL == symbol.fileURL,
               next.range.location > symbol.range.location, NSMaxRange(next.range) <= NSMaxRange(symbol.range)
         else { return symbol.range }
         return NSRange(location: symbol.range.location, length: next.range.location - symbol.range.location)
@@ -885,6 +925,22 @@ nonisolated struct SymbolScrollRequest: Equatable, Sendable {
 
     init(_ id: Int) {
         self.id = id
+    }
+}
+
+/// A card's long-press menu: Add to Album, and Select (not while selecting already).
+private struct CardMenu: View {
+    let item: AlbumItem
+    let context: AlbumMenuContext?
+    let selection: SymbolSelection
+    let id: Int
+
+    var body: some View {
+        // Selecting is for albums: only for a project's files.
+        if !selection.isActive, let context {
+            AlbumMenuItems(items: [item], context: context)
+            Button("Select", systemImage: "checkmark.circle") { selection.begin(with: id) }
+        }
     }
 }
 

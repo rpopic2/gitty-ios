@@ -24,6 +24,9 @@ struct CodeScreen: View {
     let projectID: String
     /// Just opened: the list starts at the file's own entry, not where it was left.
     let opensAtFile: Bool
+    /// The album chosen in the sidebar: the levels show only what's in it (when it's of the
+    /// open file's project).
+    let albumID: UUID?
 
     /// The symbol opened in the pager (drives the navigation push).
     @State private var openedSymbolID: Int?
@@ -49,8 +52,11 @@ struct CodeScreen: View {
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
     /// The code font: when it changes, the pages' text is styled again.
     @Environment(\.codeTextStyle) private var codeTextStyle
+    /// Select at the Symbols level (cards chosen for an album).
+    @State private var selection = SymbolSelection()
+    @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
 
-    init(url: URL, mode: Binding<ViewMode>, projectID: String, opensAtFile: Bool = false,
+    init(url: URL, mode: Binding<ViewMode>, projectID: String, opensAtFile: Bool = false, albumID: UUID? = nil,
          isEditingAddress: Binding<Bool>, rejectedAddress: String? = nil,
          onOpen: @escaping @MainActor (URL) -> Void, onPasteAndGo: @escaping @MainActor () -> Void,
          store: DocumentStore = .shared) {
@@ -58,6 +64,7 @@ struct CodeScreen: View {
         _mode = mode
         self.projectID = projectID
         self.opensAtFile = opensAtFile
+        self.albumID = albumID
         _startsAtFile = State(initialValue: opensAtFile)
         _isEditingAddress = isEditingAddress
         self.rejectedAddress = rejectedAddress
@@ -84,12 +91,20 @@ struct CodeScreen: View {
             project = projectID.isEmpty ? nil : await ProjectStore.shared.project(id: projectID)
             projectSorting = ListSortingStore.standard.sorting(for: .project, projectID: projectID)
         }
-        .onChange(of: mode) {
+        .onChange(of: mode) { old, new in
             model.setBarCollapsed(false)
             if mode == .project { isSearchingSymbols = false }
+            if new != .symbols { selection.end() }
             // Back from Project, where the filter may have changed: index again if it did.
             if mode.showsSymbols, model.symbolIndex.isReady { model.loadProjectSymbols() }
+            // …and where files may have been added to the album.
+            if old == .project, mode.showsSymbols { model.refreshAlbumFiles() }
         }
+        .onChange(of: AlbumStore.shared.album(id: albumID), initial: true) { _, album in
+            model.show(album: album)
+        }
+        .onChange(of: model.activeAlbum?.id) { selection.end() }
+        .onChange(of: AlbumStore.shared.downloadCount) { model.refreshAlbumFiles() }
         .onChange(of: mode, initial: true) {
             if mode == .project { hasShownProject = true }
         }
@@ -120,7 +135,8 @@ struct CodeScreen: View {
                     comment(on: NSRange(location: symbol.range.location + range.location, length: range.length),
                             inFile: symbol.fileURL)
                 },
-                firstLine: { model.firstLine(of: $0) }
+                firstLine: { model.firstLine(of: $0) },
+                albumMenu: albumMenuAction
             )
             .navigationTransition(.zoom(sourceID: openedID, in: pagerNamespace))
         }
@@ -202,6 +218,14 @@ struct CodeScreen: View {
                     description: Text("No definitions were found in this file or the project’s downloaded files.")
                 )
             }
+        case .ready where model.activeAlbum != nil && model.albumSymbols.isEmpty:
+            placeholder {
+                ContentUnavailableView(
+                    model.activeAlbum?.name ?? "",
+                    systemImage: "rectangle.stack",
+                    description: Text("Nothing in this album yet. To add a symbol or a file, touch and hold it, then choose Add to Album; on a page, select lines.")
+                )
+            }
         case .ready where shownSymbols.isEmpty && isSearchPending:
             placeholder { ProgressView() }  // nothing found yet
         case .ready where shownSymbols.isEmpty:
@@ -226,14 +250,16 @@ struct CodeScreen: View {
                 },
                 onOpenFile: { openFile($0) },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
-                onCloseSearch: closeSearchAction
+                onCloseSearch: closeSearchAction,
+                albumContext: albumContext,
+                selection: selection
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()
             // A fresh list for each search's results, for the full list after, and for each order
             // (ids are places in the list, so they move; the list finds its symbol by name).
             .id([shownQuery, model.symbolSorting.order.rawValue, model.symbolSorting.isReversed ? "reversed" : "",
-                 hasSymbolQuery && searchesFileNames ? "files" : ""])
+                 hasSymbolQuery && searchesFileNames ? "files" : "", model.activeAlbum?.id.uuidString ?? ""])
         case .unsupportedLanguage:
             placeholder {
                 ContentUnavailableView(
@@ -256,6 +282,32 @@ struct CodeScreen: View {
         if case .ready(let symbols) = model.symbolIndex { symbols } else { [] }
     }
 
+    /// For Add to Album in the menus: the open file's project, and the album shown.
+    private var albumContext: AlbumMenuContext? {
+        model.symbolsProjectID.map { AlbumMenuContext(projectID: $0, shownAlbumID: model.activeAlbum?.id) }
+    }
+
+    /// Add to Album in a page's text menu: the selected lines of the symbol's file.
+    private var albumMenuAction: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)? {
+        guard let projectID = model.symbolsProjectID else { return nil }
+        let naming = albumNaming
+        return { symbol, range in
+            guard let full = model.fullText(of: symbol.fileURL) else { return nil }
+            let text = full.string as NSString
+            let inFile = NSRange(location: symbol.range.location + range.location, length: range.length)
+            guard inFile.length > 0, NSMaxRange(inFile) <= text.length else { return nil }
+            let lines = ReviewText.lines(of: inFile, in: text)
+            let item = AlbumItem.lines(AlbumLines(file: symbol.fileURL ?? model.url, start: lines.start, end: lines.end))
+            return AlbumTextMenu.menu(for: item, projectID: projectID, naming: naming)
+        }
+    }
+
+    /// The selected cards as album items.
+    private func selectedItems(_ ids: Set<Int>) -> [AlbumItem] {
+        guard !ids.isEmpty else { return [] }
+        return shownSymbols.filter { ids.contains($0.id) }.map { AlbumItem($0, openFile: model.url) }
+    }
+
     /// Where the list starts: the file's own entry when it was just opened, otherwise where it
     /// was left last time this file was open.
     private func savedListSymbolID() -> Int? {
@@ -263,7 +315,7 @@ struct CodeScreen: View {
             startsAtFile = false
             return 0  // the open file's entry comes first
         }
-        return ReadingPositionStore.standard.symbolsPosition(for: model.url)?.symbolID(in: indexedSymbols)
+        return ReadingPositionStore.standard.symbolsPosition(for: model.url)?.symbolID(in: model.listSymbols)
     }
 
     /// Saves the card in the middle of the Symbols list, like File saves its place. It changes
@@ -283,8 +335,8 @@ struct CodeScreen: View {
     /// At the Files level, the search is by file name instead: the matching files, each with
     /// all its symbols.
     private var shownSymbols: [CodeSymbol] {
-        guard hasSymbolQuery else { return indexedSymbols }
-        return searchesFileNames ? model.symbols(inFilesNamed: symbolQuery) : model.searchResults
+        guard hasSymbolQuery else { return model.listSymbols }
+        return searchesFileNames ? model.symbols(inFilesNamed: symbolQuery) : model.albumSearchResults()
     }
 
     /// The search `shownSymbols` are for: "" while the full list shows.
@@ -319,7 +371,9 @@ struct CodeScreen: View {
     /// address.
     @ViewBuilder
     private var bottom: some View {
-        if isSearchingSymbols && barSearchesSymbols {
+        if selection.isActive, let albumContext {
+            AlbumSelectionBar(selection: selection, items: { selectedItems($0) }, context: albumContext)
+        } else if isSearchingSymbols && barSearchesSymbols {
             SymbolSearchEditor(query: $symbolQuery, isSearching: isSearchPending,
                                placeholder: searchesFileNames ? String(localized: "Search Files")
                                    : String(localized: "Search Symbols"),
@@ -376,7 +430,7 @@ struct CodeScreen: View {
     /// In Project mode, the bar names the project and edits its address on github.com (Files,
     /// which has no address, edits the open file's). Otherwise, the open file.
     private var barTitle: String {
-        guard mode == .project else { return model.fileName }
+        guard mode == .project else { return model.activeAlbum?.name ?? model.fileName }
         return projectID.isEmpty ? String(localized: "Files") : project?.title ?? ""
     }
 

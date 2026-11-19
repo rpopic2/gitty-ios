@@ -9,6 +9,8 @@ struct BrowserView: View {
     @AppStorage("currentURL") private var currentURLString = ""
     /// The project chosen in the sidebar, shown in Project mode; "" for Files.
     @AppStorage("openProjectID") private var openProjectID = ""
+    /// The album chosen in the sidebar, whose symbols the levels show ("" for none).
+    @AppStorage("openAlbumID") private var openAlbumIDString = ""
     @SceneStorage("viewMode") private var mode: ViewMode = .code
     /// The file just opened (from Project, the bar or a link), which starts at its own entry in
     /// the Code level. The file shown at launch comes back where it was left instead.
@@ -25,6 +27,8 @@ struct BrowserView: View {
     @State private var review = ReviewDraft()
     /// The identifier highlighted on pages, kept across files until it's removed.
     @State private var highlights = HighlightState()
+    /// Naming a new album, from any menu.
+    @State private var albumNaming = AlbumNaming()
     /// The code font and size, chosen in the sidebar.
     @AppStorage(CodeTextStyle.fontKey) private var codeFont: CodeFont = .courier
     @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
@@ -34,12 +38,16 @@ struct BrowserView: View {
         currentURLString.isEmpty ? nil : URL(string: currentURLString)
     }
 
+    private var openAlbumID: UUID? {
+        UUID(uuidString: openAlbumIDString)
+    }
+
     var body: some View {
         SideBarContainer(state: sideBar) {
             NavigationStack {
                 if let url = currentURL {
                     CodeScreen(url: url, mode: modeBinding, projectID: openProjectID,
-                               opensAtFile: url == openedURL,
+                               opensAtFile: url == openedURL, albumID: openAlbumID,
                                isEditingAddress: $isEditingAddress, rejectedAddress: rejectedAddress,
                                onOpen: open, onPasteAndGo: pasteAndGo)
                         .id(url)  // a new URL gets a fresh screen and model
@@ -53,8 +61,11 @@ struct BrowserView: View {
         } sideBar: {
             SideBarView(
                 selectedID: openProjectID,
+                selectedAlbumID: openAlbumID,
                 onSelect: showProject,
+                onSelectAlbum: showAlbum,
                 onDelete: { id in if id == openProjectID { openProjectID = "" } },
+                onDeleteAlbum: { id in if id == openAlbumID { openAlbumIDString = "" } },
                 onSettings: {
                     sideBar.close()
                     isShowingSettings = true
@@ -64,6 +75,8 @@ struct BrowserView: View {
         .environment(sideBar)
         .environment(review)
         .environment(highlights)
+        .environment(albumNaming)
+        .modifier(AlbumNamingAlert(naming: albumNaming, onCreated: { showAlbum($0.id) }))
         .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize), theme: syntaxTheme))
         .sheet(isPresented: $isShowingSettings) { SettingsView() }
         .onOpenURL(perform: openShared)
@@ -124,6 +137,7 @@ struct BrowserView: View {
         }
         RecentFilesStore.standard.add(url)
         Task { await OpenHistory.shared.recordOpen(url) }  // for recently opened order
+        leaveAlbumIfOutside(url)
         openedURL = url
         projectStartURL = nil
         mode = level
@@ -140,10 +154,45 @@ struct BrowserView: View {
 
     /// Makes a project (or Files, for "") the open one and shows it in the Project tab.
     private func showProject(_ id: String) {
+        openAlbumIDString = ""
         openProjectID = id
         mode = .project
         isEditingAddress = false
         sideBar.close()
+    }
+}
+
+extension BrowserView {
+    /// Shows an album: its project becomes the open one, and the Symbols level shows what's
+    /// in it (from one of the project's files, if the open file is in another project).
+    private func showAlbum(_ id: UUID) {
+        guard let album = AlbumStore.shared.album(id: id) else { return }
+        openAlbumIDString = id.uuidString
+        openProjectID = album.projectID
+        isEditingAddress = false
+        sideBar.close()
+        let current = currentURL
+        Task {
+            if let start = await ProjectStartFile.find(projectID: album.projectID, current: current) {
+                openFile(start, at: .symbols)
+            } else if current != nil {
+                mode = .symbols
+            } else {
+                mode = .project  // nothing of the project to open yet
+            }
+        }
+    }
+
+    /// Opening a file of another project leaves the album.
+    private func leaveAlbumIfOutside(_ url: URL) {
+        guard let album = AlbumStore.shared.album(id: openAlbumID) else { return }
+        Task {
+            let projects = await ProjectStore.shared.projects()
+            if ProjectSymbolIndex.project(containing: url, in: projects)?.id != album.projectID,
+               openAlbumID == album.id {
+                openAlbumIDString = ""
+            }
+        }
     }
 }
 

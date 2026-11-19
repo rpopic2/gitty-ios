@@ -280,7 +280,7 @@ private struct OnSwipeDown: ViewModifier {
 }
 
 /// The field's shape, matching the bar: a glass capsule on iOS 26+, a rounded field on iOS 18.
-private struct FieldBackground: ViewModifier {
+struct FieldBackground: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content.glassEffect(.regular.interactive(), in: Capsule())
@@ -294,7 +294,7 @@ private struct FieldBackground: ViewModifier {
 }
 
 /// iOS 18 draws the toolbar material behind the bar. iOS 26's glass field floats on its own.
-private struct EditorBarBackground: ViewModifier {
+struct EditorBarBackground: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content

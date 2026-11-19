@@ -8,6 +8,8 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
         case method, property, field, enumMember
         /// A whole file: its entry in the list comes before its symbols.
         case file
+        /// Some lines of a file, kept in an album (see `AlbumContents`).
+        case lines
 
         var title: String {
             switch self {
@@ -20,6 +22,7 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
             case .field: "Field"
             case .enumMember: "Enum Case"
             case .file: "File"
+            case .lines: "Lines"
             }
         }
 
@@ -34,6 +37,7 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
             case .field: "f.square"
             case .enumMember: "e.square"
             case .file: "doc.text"
+            case .lines: "text.alignleft"
             }
         }
     }
@@ -51,19 +55,34 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
     let preview: String
     /// The file it's in, when that isn't the open file (Symbols shows the whole project).
     var fileURL: URL? = nil
+    /// Lines' last line (`lines` only).
+    var endLine: Int? = nil
 
-    /// "Line 12", or "File" for a file's own entry.
+    /// "Line 12", "Lines 12–30", or "File" for a file's own entry.
     var lineLabel: String {
-        kind == .file ? String(localized: "File") : String(localized: "Line \(line)")
+        switch kind {
+        case .file: String(localized: "File")
+        case .lines: Self.linesLabel(line, endLine ?? line)
+        default: String(localized: "Line \(line)")
+        }
     }
 
     /// For VoiceOver: "Function draw, line 12", or "File main.c".
     var spokenDescription: String {
-        kind == .file ? "\(kind.title) \(name)" : "\(kind.title) \(name), line \(line)"
+        switch kind {
+        case .file: "\(kind.title) \(name)"
+        case .lines: "\(lineLabel): \(name)"
+        default: "\(kind.title) \(name), line \(line)"
+        }
+    }
+
+    static func linesLabel(_ start: Int, _ end: Int) -> String {
+        start == end ? String(localized: "Line \(start)") : String(localized: "Lines \(start)–\(end)")
     }
 
     /// The same symbol at another place in a combined list, from `file`.
     func moved(to id: Int, file: URL?) -> CodeSymbol {
-        CodeSymbol(id: id, name: name, kind: kind, range: range, line: line, preview: preview, fileURL: file)
+        CodeSymbol(id: id, name: name, kind: kind, range: range, line: line, preview: preview, fileURL: file,
+                   endLine: endLine)
     }
 }

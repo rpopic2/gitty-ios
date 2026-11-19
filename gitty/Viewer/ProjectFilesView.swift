@@ -334,6 +334,11 @@ struct ProjectFilesView: View {
                 FileEntryRow(entry: entry, isSaved: isSaved,
                              folder: showsFolder ? folder(of: entry, in: project) : nil)
             }
+            // The whole file, downloaded first if it isn't, so its symbols can be listed.
+            .contextMenu {
+                AlbumMenuItems(items: [.file(url)], context: AlbumMenuContext(projectID: project.id, shownAlbumID: nil),
+                               download: isSaved ? nil : url)
+            }
             .swipeActions {
                 if isSaved && clone == nil {  // a cloned file goes with the clone
                     // Not `.destructive`: the row stays, only its saved copy goes.

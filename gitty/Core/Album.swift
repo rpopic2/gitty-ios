@@ -1,0 +1,303 @@
+import Foundation
+import Observation
+
+/// Like an album in Photos: the symbols, whole files and lines of one project you want to see
+/// together. Choosing it in the sidebar makes Files, Symbols and Code show only what's in it,
+/// in the project's order.
+nonisolated struct Album: Codable, Identifiable, Hashable, Sendable {
+    var id: UUID
+    var name: String
+    /// The project it belongs to (`ProjectInfo.id`).
+    var projectID: String
+    var items: [AlbumItem]
+    var createdAt: Date
+
+    init(id: UUID = UUID(), name: String, projectID: String, items: [AlbumItem] = [], createdAt: Date = .now) {
+        self.id = id
+        self.name = name
+        self.projectID = projectID
+        self.items = items
+        self.createdAt = createdAt
+    }
+
+    /// Whether `item` is in the album itself (not just through its whole file).
+    func contains(_ item: AlbumItem) -> Bool {
+        items.contains { $0.isSame(as: item) }
+    }
+
+    /// Whether the whole file is in the album.
+    func containsFile(_ file: URL) -> Bool {
+        items.contains { if case .file(let url) = $0 { url == file } else { false } }
+    }
+}
+
+/// Something in an album.
+nonisolated enum AlbumItem: Codable, Hashable, Sendable {
+    /// A whole file: its entry and all its symbols, whatever they become as it changes.
+    case file(URL)
+    /// One symbol, found again by its file, kind and name (see `AlbumSymbol`).
+    case symbol(AlbumSymbol)
+    /// Some lines of a file, a selection on a page.
+    case lines(AlbumLines)
+
+    var file: URL {
+        switch self {
+        case .file(let url): url
+        case .symbol(let symbol): symbol.file
+        case .lines(let lines): lines.file
+        }
+    }
+
+    /// The same thing: a symbol is the same one wherever it has moved to in its file.
+    func isSame(as other: AlbumItem) -> Bool {
+        switch (self, other) {
+        case (.file(let lhs), .file(let rhs)): lhs == rhs
+        case (.symbol(let lhs), .symbol(let rhs)): lhs.file == rhs.file && lhs.kind == rhs.kind && lhs.name == rhs.name
+        case (.lines(let lhs), .lines(let rhs)): lhs == rhs
+        default: false
+        }
+    }
+
+    /// The item for an entry in the list: a file's entry is the whole file, lines are lines,
+    /// anything else that symbol.
+    /// - Parameter openFile: the file that symbols without a `fileURL` are in.
+    init(_ symbol: CodeSymbol, openFile: URL) {
+        let file = symbol.fileURL ?? openFile
+        switch symbol.kind {
+        case .file:
+            self = .file(file)
+        case .lines:
+            self = .lines(AlbumLines(file: file, start: symbol.line, end: symbol.endLine ?? symbol.line))
+        default:
+            self = .symbol(AlbumSymbol(file: file, name: symbol.name, kind: symbol.kind.rawValue,
+                                       location: symbol.range.location))
+        }
+    }
+}
+
+/// A symbol in an album. Files change, so it's kept by name: it's the symbol of that kind and
+/// name in its file, the one nearest where it was when several share the name (overloads).
+nonisolated struct AlbumSymbol: Codable, Hashable, Sendable {
+    let file: URL
+    let name: String
+    /// `CodeSymbol.Kind`'s raw value.
+    let kind: String
+    /// Where it started in its file (UTF-16) when it was added.
+    let location: Int
+}
+
+/// Lines of a file in an album, 1-based, both included.
+nonisolated struct AlbumLines: Codable, Hashable, Sendable {
+    let file: URL
+    let start: Int
+    let end: Int
+}
+
+// MARK: - What an album shows
+
+nonisolated enum AlbumContents {
+    /// The album's entries in the list `symbols` (the open file's entry and symbols, then the
+    /// project's other files', each file's in file order; see `CodeDocumentModel`):
+    /// - a whole file's entry and all its symbols;
+    /// - each symbol in it that's still there, matched by kind and name;
+    /// - its lines, from `texts` (the files' text; a file that's missing there leaves its lines
+    ///   out until it's loaded), as entries of their own, ids from `symbols.count` up.
+    ///
+    /// Everything stays in the list's order: files as in the list, and in a file, by where it
+    /// starts. Symbols keep their ids (places in the full list), so a place saved in the album is
+    /// one in the full list too.
+    /// - Parameter openFile: the file that symbols without a `fileURL` are in.
+    static func symbols(of album: Album, in symbols: [CodeSymbol], openFile: URL,
+                        texts: [URL: NSString]) -> [CodeSymbol] {
+        guard !album.items.isEmpty else { return [] }
+        var wholeFiles: Set<URL> = []
+        var symbolItems: [URL: [AlbumSymbol]] = [:]
+        var lineItems: [URL: [AlbumLines]] = [:]
+        for item in album.items {
+            switch item {
+            case .file(let url): wholeFiles.insert(url)
+            case .symbol(let symbol): symbolItems[symbol.file, default: []].append(symbol)
+            case .lines(let lines): lineItems[lines.file, default: []].append(lines)
+            }
+        }
+
+        var result: [CodeSymbol] = []
+        var nextID = symbols.count
+        var start = 0
+        while start < symbols.count {
+            // One file's run of the list: its entry, then its symbols.
+            let fileURL = symbols[start].fileURL
+            var end = start + 1
+            while end < symbols.count, symbols[end].kind != .file, symbols[end].fileURL == fileURL { end += 1 }
+            let file = fileURL ?? openFile
+            let run = symbols[start..<end]
+            start = end
+
+            if wholeFiles.contains(file) {
+                result.append(contentsOf: run)
+                continue
+            }
+            var picked: [CodeSymbol] = []
+            var used: Set<Int> = []
+            for wanted in symbolItems[file] ?? [] {
+                let match = run
+                    .filter { $0.kind.rawValue == wanted.kind && $0.name == wanted.name && !used.contains($0.id) }
+                    .min { abs($0.range.location - wanted.location) < abs($1.range.location - wanted.location) }
+                if let match {
+                    used.insert(match.id)
+                    picked.append(match)
+                }
+            }
+            if let wanted = lineItems[file], let text = texts[file] {
+                let starts = lineStarts(of: text)
+                for lines in wanted {
+                    guard let entry = entry(for: lines, in: text, lineStarts: starts, id: nextID,
+                                            fileURL: fileURL) else { continue }
+                    nextID += 1
+                    picked.append(entry)
+                }
+            }
+            // In file order; at the same place, the longer first (a function before lines in it).
+            picked.sort {
+                $0.range.location != $1.range.location ? $0.range.location < $1.range.location
+                    : $0.range.length > $1.range.length
+            }
+            result.append(contentsOf: picked)
+        }
+        return result
+    }
+
+    /// The files whose text `symbols(of:in:openFile:texts:)` needs: those with lines in the album.
+    static func filesWithLines(in album: Album) -> Set<URL> {
+        Set(album.items.compactMap { if case .lines(let lines) = $0 { lines.file } else { nil } })
+    }
+
+    /// An entry for some lines: from the start of the first to the end of the last (without
+    /// its line break), named after its first line that isn't blank. `nil` when the file is
+    /// shorter now than where the lines start.
+    static func entry(for lines: AlbumLines, in text: NSString, lineStarts starts: [Int], id: Int,
+                      fileURL: URL?) -> CodeSymbol? {
+        let first = max(1, lines.start)
+        guard first <= starts.count else { return nil }
+        let last = min(max(first, lines.end), starts.count)
+        let location = starts[first - 1]
+        var endLocation = last < starts.count ? starts[last] : text.length
+        if endLocation > location, text.character(at: endLocation - 1) == 0x0A { endLocation -= 1 }
+        if endLocation > location, text.character(at: endLocation - 1) == 0x0D { endLocation -= 1 }
+        let range = NSRange(location: location, length: endLocation - location)
+        let code = text.substring(with: range)
+        let rows = code.split(separator: "\n", omittingEmptySubsequences: false)
+        let title = rows.lazy.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
+        let preview = rows.prefix(SymbolIndexer.previewLineCount).joined(separator: "\n")
+            .replacingOccurrences(of: "\t", with: "    ")
+        return CodeSymbol(id: id, name: title ?? String(localized: "Blank Lines"), kind: .lines, range: range,
+                          line: first, preview: preview, fileURL: fileURL, endLine: last)
+    }
+
+    /// Where each line starts (UTF-16), the first at 0.
+    static func lineStarts(of text: NSString) -> [Int] {
+        var starts = [0]
+        var index = 0
+        while index < text.length {
+            let found = text.range(of: "\n", options: .literal, range: NSRange(location: index, length: text.length - index))
+            guard found.location != NSNotFound else { break }
+            index = NSMaxRange(found)
+            if index < text.length { starts.append(index) }
+        }
+        return starts
+    }
+}
+
+// MARK: - Store
+
+/// The albums, saved in `UserDefaults` (a few bytes per item). Observed: the sidebar, menus and
+/// the screen showing an album follow its changes.
+@MainActor @Observable
+final class AlbumStore {
+    static let shared = AlbumStore(defaults: .standard)
+
+    private(set) var albums: [Album] = []
+    /// Goes up when a file added to an album has been downloaded: the list showing the album
+    /// can index it now.
+    private(set) var downloadCount = 0
+    @ObservationIgnored private let defaults: UserDefaults
+    private static let key = "albums"
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: Self.key),
+           let saved = try? JSONDecoder().decode([Album].self, from: data) {
+            albums = saved
+        }
+    }
+
+    func album(id: UUID?) -> Album? {
+        guard let id else { return nil }
+        return albums.first { $0.id == id }
+    }
+
+    /// A project's albums, oldest first (like Photos' order of creation).
+    func albums(inProject projectID: String) -> [Album] {
+        albums.filter { $0.projectID == projectID }
+    }
+
+    /// A new album, with `items` in it.
+    @discardableResult
+    func create(named name: String, projectID: String, items: [AlbumItem] = []) -> Album {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var album = Album(name: trimmed.isEmpty ? String(localized: "Untitled Album") : trimmed, projectID: projectID)
+        album.items = Self.adding(items, to: [])
+        albums.append(album)
+        save()
+        return album
+    }
+
+    func fileDownloaded() {
+        downloadCount += 1
+    }
+
+    func rename(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        update(id) { $0.name = trimmed }
+    }
+
+    func delete(_ id: UUID) {
+        albums.removeAll { $0.id == id }
+        save()
+    }
+
+    /// A project was deleted: its albums go with it.
+    func deleteAlbums(inProject projectID: String) {
+        albums.removeAll { $0.projectID == projectID }
+        save()
+    }
+
+    /// Adds what isn't in the album yet, at the end.
+    func add(_ items: [AlbumItem], to id: UUID) {
+        update(id) { $0.items = Self.adding(items, to: $0.items) }
+    }
+
+    func remove(_ items: [AlbumItem], from id: UUID) {
+        update(id) { album in album.items.removeAll { item in items.contains { $0.isSame(as: item) } } }
+    }
+
+    private static func adding(_ items: [AlbumItem], to existing: [AlbumItem]) -> [AlbumItem] {
+        var result = existing
+        for item in items where !result.contains(where: { $0.isSame(as: item) }) {
+            result.append(item)
+        }
+        return result
+    }
+
+    private func update(_ id: UUID, _ change: (inout Album) -> Void) {
+        guard let index = albums.firstIndex(where: { $0.id == id }) else { return }
+        change(&albums[index])
+        save()
+    }
+
+    private func save() {
+        guard let data = try? JSONEncoder().encode(albums) else { return }
+        defaults.set(data, forKey: Self.key)
+    }
+}

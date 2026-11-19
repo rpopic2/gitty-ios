@@ -30,6 +30,8 @@ struct SymbolPager: View {
     let onComment: @MainActor (CodeSymbol, NSRange) -> Void
     /// The line of its file a page's text starts at, for the line-number peek.
     let firstLine: @MainActor (CodeSymbol) -> Int
+    /// Add to Album in a page's text menu, for the selected lines (range in the symbol's text).
+    let albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)?
 
     @State private var scrolledID: Int?
     @State private var isPositioned = false
@@ -57,7 +59,8 @@ struct SymbolPager: View {
          symbolSearchTerm: @escaping @MainActor (String) -> String?,
          onSearchSymbols: @escaping @MainActor (String) -> Void,
          onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void,
-         firstLine: @escaping @MainActor (CodeSymbol) -> Int) {
+         firstLine: @escaping @MainActor (CodeSymbol) -> Int,
+         albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)? = nil) {
         self.symbols = symbols
         self.initialID = initialID
         _currentID = currentID
@@ -70,6 +73,7 @@ struct SymbolPager: View {
         self.onSearchSymbols = onSearchSymbols
         self.onComment = onComment
         self.firstLine = firstLine
+        self.albumMenu = albumMenu
     }
 
     private var visibleID: Int { scrolledID ?? initialID }
@@ -107,6 +111,7 @@ struct SymbolPager: View {
                                     symbolSearchTerm: symbolSearchTerm,
                                     onSearchSymbols: onSearchSymbols,
                                     onComment: { onComment(symbol, $0) },
+                                    albumMenu: pageAlbumMenu(for: symbol),
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension,
                                     highlight: highlights?.current,
                                     onHighlight: { highlights?.current = $0 },
@@ -172,6 +177,11 @@ struct SymbolPager: View {
     private func infoAction(for symbol: CodeSymbol) -> @MainActor () -> Void {
         let url = symbol.fileURL ?? openFile
         return { infoFile = InfoFile(url: url) }
+    }
+
+    private func pageAlbumMenu(for symbol: CodeSymbol) -> (@MainActor (NSRange) -> UIMenu?)? {
+        guard let albumMenu else { return nil }
+        return { albumMenu(symbol, $0) }
     }
 
     /// Pull to refresh, on a file's page only.
@@ -327,6 +337,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var onSearchSymbols: (@MainActor (String) -> Void)? = nil
     /// Comment in the text menu: adds a comment on the selected range to the review.
     var onComment: (@MainActor (NSRange) -> Void)? = nil
+    /// Add to Album in the text menu, for the selected lines (`nil` hides it).
+    var albumMenu: (@MainActor (NSRange) -> UIMenu?)? = nil
     /// Highlight in the text menu: the file's extension, for its tree-sitter grammar…
     var fileExtension = ""
     /// …the identifier highlighted on every page…
@@ -393,6 +405,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.symbolSearchTerm = symbolSearchTerm
         coordinator.onSearchSymbols = onSearchSymbols
         coordinator.onComment = onComment
+        coordinator.albumMenu = albumMenu
         coordinator.fileExtension = fileExtension
         coordinator.highlight = highlight
         coordinator.onHighlight = onHighlight
@@ -453,6 +466,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         var symbolSearchTerm: (@MainActor (String) -> String?)?
         var onSearchSymbols: (@MainActor (String) -> Void)?
         var onComment: (@MainActor (NSRange) -> Void)?
+        var albumMenu: (@MainActor (NSRange) -> UIMenu?)?
         var fileExtension = ""
         /// The highlight wanted on this page.
         var highlight: IdentifierHighlight?
@@ -474,7 +488,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
+            let album: [UIMenuElement] = range.length > 0 ? (albumMenu?(range).map { [$0] } ?? []) : []
             let extra = RawTextStyle.commentItems(for: range, onComment: onComment)
+                + album
                 + RawTextStyle.searchItems(for: range, in: textView,
                                            searchTerm: symbolSearchTerm,
                                            onSearch: onSearchSymbols)

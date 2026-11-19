@@ -47,6 +47,20 @@ final class CodeDocumentModel {
     private(set) var symbolSorting = ListSorting()
     /// Other files' text, for their symbols' pages. Loaded when a page needs it; a few are kept.
     private var otherTexts: [URL: NSAttributedString] = [:]
+    /// The album the list shows instead of the whole project, when it's this project's.
+    var activeAlbum: Album? {
+        guard let album, album.projectID == symbolsProjectID else { return nil }
+        return album
+    }
+    /// The album chosen in the sidebar (see `show(album:)`).
+    private(set) var album: Album?
+    /// `activeAlbum`'s entries in the list (see `AlbumContents`).
+    private(set) var albumSymbols: [CodeSymbol] = []
+    /// The text of the files with lines in the album, for those entries.
+    @ObservationIgnored private var albumTexts: [URL: NSString] = [:]
+    @ObservationIgnored private var loadingAlbumTexts: Set<URL> = []
+    /// Files of the album that weren't in the list, indexed again for once.
+    @ObservationIgnored private var reindexedForAlbum: Set<URL> = []
     /// The download is a web page (raw HTML), so the viewer offers to open it in the browser.
     private(set) var isWebPage = false
     private(set) var isBarCollapsed = false
@@ -117,6 +131,7 @@ final class CodeDocumentModel {
             return false
         }
         await FileTextCache.shared.forget(under: location.record.rawPrefix)
+        albumTexts.removeAll()
         otherTexts.removeAll()
         textOrder.removeAll()
         if let document = await store.cached(url) { await show(document) }
@@ -146,6 +161,7 @@ final class CodeDocumentModel {
         do {
             _ = try await store.fetch(file)
             await FileTextCache.shared.forget(file)
+            albumTexts[file] = nil
             otherTexts[file] = nil
             textOrder.removeAll { $0 == file }
             loadedFilter = nil  // index the project's files again (only the changed one is redone)
@@ -264,7 +280,95 @@ final class CodeDocumentModel {
         }
         symbolIndex = .ready(combined)
         prepareSearch(for: combined)
+        publishAlbum()
+        indexAlbumFilesIfNeeded()
     }
+
+    // MARK: - Album
+
+    /// Shows only `album` in the list (when it's this project's), or the whole list (`nil`).
+    /// Its files that aren't in the list (added from Project, just downloaded) are indexed.
+    func show(album: Album?) {
+        guard album != self.album else { return }
+        self.album = album
+        publishAlbum()
+        indexAlbumFilesIfNeeded()
+    }
+
+    /// Back from Project, where files may have been added to the album (and downloaded): any
+    /// that aren't in the list yet are indexed.
+    func refreshAlbumFiles() {
+        reindexedForAlbum.removeAll()
+        indexAlbumFilesIfNeeded()
+    }
+
+    private func indexAlbumFilesIfNeeded() {
+        guard let album = activeAlbum, case .ready(let all) = symbolIndex, projectSymbolsLoaded else { return }
+        let listed = Set(all.lazy.filter { $0.kind == .file }.map { $0.fileURL ?? self.url })
+        let missing = Set(album.items.map(\.file)).subtracting(listed).subtracting(reindexedForAlbum)
+        guard !missing.isEmpty else { return }
+        reindexedForAlbum.formUnion(missing)
+        loadedFilter = nil  // index the project's files again (the ones indexed before are kept)
+        loadProjectSymbols()
+    }
+
+    /// Works out `albumSymbols`, loading the text of files with lines in the album first.
+    private func publishAlbum() {
+        guard let album = activeAlbum, case .ready(let all) = symbolIndex else {
+            if !albumSymbols.isEmpty { albumSymbols = [] }
+            return
+        }
+        var texts = albumTexts
+        for file in AlbumContents.filesWithLines(in: album) where texts[file] == nil {
+            if file == url, let plainText {
+                texts[file] = plainText
+            } else {
+                loadAlbumText(of: file)
+            }
+        }
+        albumSymbols = AlbumContents.symbols(of: album, in: all, openFile: url, texts: texts)
+    }
+
+    private func loadAlbumText(of file: URL) {
+        guard !loadingAlbumTexts.contains(file) else { return }
+        loadingAlbumTexts.insert(file)
+        Task {
+            let text = await FileTextCache.shared.text(of: file)
+            loadingAlbumTexts.remove(file)
+            guard let text else { return }
+            albumTexts[file] = text as NSString
+            publishAlbum()
+        }
+    }
+
+    /// The list the levels show: the album's entries, or every symbol.
+    var listSymbols: [CodeSymbol] {
+        if activeAlbum != nil { return albumSymbols }
+        if case .ready(let symbols) = symbolIndex { return symbols }
+        return []
+    }
+
+    /// The search's matches in the album (all of them without an album).
+    func albumSearchResults() -> [CodeSymbol] {
+        guard activeAlbum != nil else { return searchResults }
+        let key = AlbumSearchKey(query: resultsQuery, count: searchResults.count, first: searchResults.first?.id,
+                                 albumCount: albumSymbols.count, albumLast: albumSymbols.last?.id)
+        if let albumSearch, albumSearch.key == key { return albumSearch.result }
+        let ids = Set(albumSymbols.map(\.id))
+        let result = searchResults.filter { ids.contains($0.id) }
+        albumSearch = (key, result)
+        return result
+    }
+
+    private struct AlbumSearchKey: Equatable {
+        let query: String
+        let count: Int
+        let first: Int?
+        let albumCount: Int
+        let albumLast: Int?
+    }
+
+    @ObservationIgnored private var albumSearch: (key: AlbumSearchKey, result: [CodeSymbol])?
 
     /// The sort button in Symbols: reorders the project's other files and saves the choice for
     /// the project.
@@ -320,9 +424,10 @@ final class CodeDocumentModel {
     /// The Files level's search, by file name (see `SymbolFileGroup.symbols(inFilesNamed:in:)`),
     /// worked out once per search and list.
     func symbols(inFilesNamed query: String) -> [CodeSymbol] {
-        guard case .ready(let all) = symbolIndex else { return [] }
+        guard symbolIndex.isReady else { return [] }
+        let all = listSymbols
         let key = FileSearchKey(query: query, count: all.count, first: all.first?.id, last: all.last?.id,
-                                sorting: symbolSorting)
+                                sorting: symbolSorting, album: activeAlbum?.id)
         if let fileSearch, fileSearch.key == key { return fileSearch.result }
         let result = SymbolFileGroup.symbols(inFilesNamed: query, in: all)
         fileSearch = (key, result)
@@ -335,6 +440,7 @@ final class CodeDocumentModel {
         let first: Int?
         let last: Int?
         let sorting: ListSorting
+        let album: UUID?
     }
 
     @ObservationIgnored private var fileSearch: (key: FileSearchKey, result: [CodeSymbol])?

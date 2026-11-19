@@ -223,13 +223,17 @@ private struct ScreenEdgePan: UIViewRepresentable {
     }
 }
 
-/// The sidebar: Files, then your projects, the code font, and Settings at the bottom. Choosing
-/// Files or a project shows it in the Project tab.
+/// The sidebar: Files, then your projects and albums, the code font, and Settings at the
+/// bottom. Choosing Files or a project shows it in the Project tab; an album shows its symbols.
 struct SideBarView: View {
     /// The open project's id, or "" for Files.
     let selectedID: String
+    /// The open album, if one is (then it's the one that looks selected).
+    let selectedAlbumID: UUID?
     let onSelect: @MainActor (String) -> Void
+    let onSelectAlbum: @MainActor (UUID) -> Void
     let onDelete: @MainActor (String) -> Void
+    let onDeleteAlbum: @MainActor (UUID) -> Void
     let onSettings: @MainActor () -> Void
 
     @State private var projects: [ProjectInfo] = []
@@ -239,27 +243,33 @@ struct SideBarView: View {
     @AppStorage(CodeTextStyle.themeKey) private var syntaxTheme: SyntaxTheme = .default
     /// Whether it shows: it's built ahead of time, and loads the projects each time it opens.
     @Environment(SideBarState.self) private var state: SideBarState?
+    @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
-    init(selectedID: String, onSelect: @escaping @MainActor (String) -> Void,
-         onDelete: @escaping @MainActor (String) -> Void, onSettings: @escaping @MainActor () -> Void) {
+    init(selectedID: String, selectedAlbumID: UUID?, onSelect: @escaping @MainActor (String) -> Void,
+         onSelectAlbum: @escaping @MainActor (UUID) -> Void,
+         onDelete: @escaping @MainActor (String) -> Void, onDeleteAlbum: @escaping @MainActor (UUID) -> Void,
+         onSettings: @escaping @MainActor () -> Void) {
         self.selectedID = selectedID
+        self.selectedAlbumID = selectedAlbumID
         self.onSelect = onSelect
+        self.onSelectAlbum = onSelectAlbum
         self.onDelete = onDelete
+        self.onDeleteAlbum = onDeleteAlbum
         self.onSettings = onSettings
     }
 
     var body: some View {
         List {
             Section {
-                item(id: "") {
+                item(isSelected: isSelected("")) { onSelect("") } label: {
                     Label("Files", systemImage: "doc.on.doc")
                 }
             }
             Section {
                 ForEach(projects) { project in
-                    item(id: project.id) {
+                    item(isSelected: isSelected(project.id)) { onSelect(project.id) } label: {
                         SideBarProjectRow(project: project)
                     }
                     .swipeActions {
@@ -275,6 +285,7 @@ struct SideBarView: View {
                     Text("To add a project, enter a GitHub repository link in the bar.")
                 }
             }
+            albumsSection
             Section("Code Font") {
                 Picker("Font", selection: $codeFont) {
                     ForEach(CodeFont.allCases, id: \.self) { font in
@@ -313,10 +324,61 @@ struct SideBarView: View {
         }
     }
 
+    /// Files or a project looks selected when it's open and no album is.
+    private func isSelected(_ id: String) -> Bool {
+        selectedAlbumID == nil && id == selectedID
+    }
+
+    /// Albums, like Photos': each project's, under the projects. Making one asks which project
+    /// it's of.
+    @ViewBuilder
+    private var albumsSection: some View {
+        let albums = AlbumStore.shared.albums
+        if !projects.isEmpty || !albums.isEmpty {
+            Section {
+                ForEach(albums) { album in
+                    item(isSelected: album.id == selectedAlbumID) { onSelectAlbum(album.id) } label: {
+                        SideBarAlbumRow(album: album, projectTitle: projects.first { $0.id == album.projectID }?.title)
+                    }
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            AlbumStore.shared.delete(album.id)
+                            onDeleteAlbum(album.id)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        Button { albumNaming?.beginRenaming(album) } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
+                    }
+                }
+                if !projects.isEmpty {
+                    Menu {
+                        Section("Album of") {
+                            ForEach(projects) { project in
+                                Button(project.title) {
+                                    albumNaming?.begin(projectID: project.id, opensAlbum: true)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("New Album", systemImage: "plus")
+                    }
+                }
+            } header: {
+                Text("Albums")
+            } footer: {
+                if albums.isEmpty {
+                    Text("An album keeps the symbols, files and lines of a project you want to see together. To add something to one, touch and hold it, then choose Add to Album.")
+                }
+            }
+        }
+    }
+
     /// A row that's tapped to choose it, gray while it's the open one.
-    private func item<RowLabel: View>(id: String, @ViewBuilder label: () -> RowLabel) -> some View {
-        let isSelected = id == selectedID
-        return Button { onSelect(id) } label: {
+    private func item<RowLabel: View>(isSelected: Bool, action: @escaping @MainActor () -> Void,
+                                      @ViewBuilder label: () -> RowLabel) -> some View {
+        return Button { action() } label: {
             label()
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -341,15 +403,40 @@ struct SideBarView: View {
         .overlay(alignment: .top) { Divider() }
     }
 
-    /// Removes the project from the list, and its clone. Files downloaded one by one stay on
-    /// the device.
+    /// Removes the project from the list, with its clone and albums. Files downloaded one by
+    /// one stay on the device.
     private func delete(_ project: ProjectInfo) {
         projects.removeAll { $0.id == project.id }
         ProjectFilterStore.standard.remove(for: project.id)
+        for album in AlbumStore.shared.albums(inProject: project.id) { onDeleteAlbum(album.id) }
+        AlbumStore.shared.deleteAlbums(inProject: project.id)
         onDelete(project.id)
         Task {
             await CloneStore.shared.delete(projectID: project.id)
             await ProjectStore.shared.remove(id: project.id)
+        }
+    }
+}
+
+/// An album: its name, then its project · how many items.
+private struct SideBarAlbumRow: View {
+    let album: Album
+    let projectTitle: String?
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(album.name)
+                    .lineLimit(1)
+                Text([projectTitle, String(localized: "\(album.items.count) items")].compactMap { $0 }
+                    .joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        } icon: {
+            Image(systemName: "rectangle.stack")
+                .foregroundStyle(.tint)
         }
     }
 }
