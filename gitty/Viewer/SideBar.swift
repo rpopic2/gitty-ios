@@ -234,6 +234,9 @@ struct SideBarView: View {
     let onSettings: @MainActor () -> Void
 
     @State private var projects: [ProjectInfo] = []
+    /// Add Project's alert, and what's typed in it.
+    @State private var isAddingProject = false
+    @State private var newProjectAddress = ""
     /// The code font and its size, for pages and the symbol levels.
     @AppStorage(CodeTextStyle.fontKey) private var codeFont: CodeFont = .courier
     @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
@@ -272,11 +275,17 @@ struct SideBarView: View {
                         }
                     }
                 }
+                Button {
+                    newProjectAddress = ""
+                    isAddingProject = true
+                } label: {
+                    Label("Add Project", systemImage: "plus")
+                }
             } header: {
                 Text("Projects")
             } footer: {
                 if projects.isEmpty {
-                    Text("To add a project, enter a GitHub repository link in the bar.")
+                    Text("A project is a GitHub repository, or a folder of one.")
                 }
             }
             Section("Code Font") {
@@ -324,11 +333,32 @@ struct SideBarView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .alert("Add Project", isPresented: $isAddingProject) {
+            TextField("owner/repository", text: $newProjectAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+            Button("Cancel", role: .cancel) {}
+            Button("Add") { addProject() }
+                .disabled(RepoLink.typed(newProjectAddress) == nil)
+        } message: {
+            Text("Enter a GitHub repository, like apple/swift, or a link to one (or to a folder of one).")
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) { settingsButton }
         .background(Color(uiColor: .systemGroupedBackground))
         .scrollDisabled(!(state?.isOpen ?? true))  // off screen: leaves status-bar taps alone
         .task(id: state?.isOpen ?? true) {  // each time it opens
             if state?.isOpen ?? true { projects = await ProjectStore.shared.projects() }
+        }
+    }
+
+    /// Adds the project typed in Add Project's alert, and opens it.
+    private func addProject() {
+        guard let link = RepoLink.typed(newProjectAddress) else { return }
+        Task {
+            let project = await ProjectStore.shared.add(link)
+            projects = await ProjectStore.shared.projects()
+            onSelect(project.id)
         }
     }
 

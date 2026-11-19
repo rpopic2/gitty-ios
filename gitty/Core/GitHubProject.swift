@@ -30,6 +30,20 @@ nonisolated struct RepoLink: Hashable, Codable, Sendable {
         self.treePath = treePath
     }
 
+    /// What was typed to add a project: `owner/repo`, `github.com/owner/repo`, or a whole link
+    /// (to a folder too, with `/tree/…`). `nil` for anything else.
+    static func typed(_ text: String) -> RepoLink? {
+        var address = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = address.lowercased()
+        if lowered.hasPrefix("http://") {
+            address = "https://" + address.dropFirst("http://".count)
+        } else if !lowered.hasPrefix("https://") {
+            let hasHost = lowered.hasPrefix("github.com/") || lowered.hasPrefix("www.github.com/")
+            address = "https://" + (hasHost ? "" : "github.com/") + address
+        }
+        return URL(string: address).flatMap(RepoLink.init)
+    }
+
     init?(_ url: URL) {
         guard url.scheme?.lowercased() == "https",
               let host = url.host()?.lowercased(), host == "github.com" || host == "www.github.com"

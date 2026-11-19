@@ -3,6 +3,18 @@ import Testing
 @testable import gitty
 
 struct GitHubProjectTests {
+    @Test func aTypedProjectCanBeShortOrALink() {
+        let swift = RepoLink(owner: "apple", repo: "swift")
+        #expect(RepoLink.typed("apple/swift") == swift)
+        #expect(RepoLink.typed("  github.com/apple/swift ") == swift)
+        #expect(RepoLink.typed("https://github.com/apple/swift.git") == swift)
+        #expect(RepoLink.typed("http://www.github.com/apple/swift") == swift)
+        #expect(RepoLink.typed("apple/swift/tree/main/lib")?.treePath == ["main", "lib"])
+        #expect(RepoLink.typed("apple") == nil)
+        #expect(RepoLink.typed("") == nil)
+        #expect(RepoLink.typed("https://example.com/apple/swift") == nil)
+    }
+
     private func link(_ string: String) -> RepoLink? { RepoLink(URL(string: string)!) }
 
     @Test func repositoryAndFolderLinksAreProjects() {
