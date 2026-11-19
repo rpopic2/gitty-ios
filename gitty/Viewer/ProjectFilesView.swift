@@ -638,7 +638,8 @@ struct ProjectFilesView: View {
 private struct FileEntryRow: View {
     let entry: ProjectTree.Entry
     let isSaved: Bool
-    /// In the flat (recently opened) list: the folder it's in, under its name.
+    /// In the flat (recently opened) list: the folder it's in, after its name on the same
+    /// line, so the rows are as compact as the ones under directory headers.
     var folder: String? = nil
 
     var body: some View {
@@ -647,11 +648,12 @@ private struct FileEntryRow: View {
                 .foregroundStyle(ProjectTree.isCode(entry) ? Color.accentColor : Color.secondary)
                 .frame(width: 24)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(entry.name)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .layoutPriority(1)  // the folder gives way first
                 if let folder {
                     Text(folder)
                         .font(.caption)
