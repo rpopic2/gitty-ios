@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The zoom levels, out to in, like Years / Months / Days / All in Photos. Pinching moves
-/// between them; the selector under the bar follows, and jumps to one when tapped.
+/// The levels, out to in, like Years / Months / Days / All in Photos: the selector under the
+/// bar switches between them.
 enum ViewMode: String, CaseIterable, Identifiable {
     /// The open project's files (chosen in the sidebar), or Files.
     case project
@@ -25,24 +25,6 @@ enum ViewMode: String, CaseIterable, Identifiable {
 
     /// The levels that show the symbols (all but Project).
     var showsSymbols: Bool { self != .project }
-
-    var zoomedIn: ViewMode? {
-        switch self {
-        case .project: .files
-        case .files: .symbols
-        case .symbols: .code
-        case .code: nil
-        }
-    }
-
-    var zoomedOut: ViewMode? {
-        switch self {
-        case .project: nil
-        case .files: .project
-        case .symbols: .files
-        case .code: .symbols
-        }
-    }
 }
 
 /// The Photos-style segmented control under the bottom bar.

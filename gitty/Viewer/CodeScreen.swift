@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// The open file and its project, with a Safari-style bar and the Photos-style selector at the
-/// bottom. Pinching zooms through the levels (`ViewMode`): the project's files, then its symbols
+/// bottom, which switches between the levels (`ViewMode`): the project's files, then its symbols
 /// as rows, as cards, and as whole code. A file's own page (tap its entry) is the whole file.
 struct CodeScreen: View {
     @State private var model: CodeDocumentModel
@@ -168,13 +168,6 @@ struct CodeScreen: View {
                 .opacity(mode == .project ? 1 : 0)
                 .allowsHitTesting(mode == .project)
                 .accessibilityHidden(mode != .project)
-                // Pinching out zooms in to the project's symbols.
-                .simultaneousGesture(
-                    MagnifyGesture().onEnded { value in
-                        if value.magnification > 1.25 { withAnimation(.smooth(duration: 0.3)) { mode = .files } }
-                    },
-                    including: mode == .project ? .all : .subviews
-                )
             }
         }
         // The source for pages opened at the lines tapped (see `screenSourceID`).

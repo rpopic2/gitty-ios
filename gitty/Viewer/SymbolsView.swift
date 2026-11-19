@@ -4,11 +4,10 @@ import UIKit
 /// Symbols mode: every top-level definition as a full-width card, like photos in Photos.
 /// Tapping a card zooms into that symbol (see `SymbolPager`).
 ///
-/// Pinching zooms in and out, like Photos, through the levels of `ViewMode` (the selector under
-/// the bar follows):
+/// The levels of `ViewMode`, chosen with the selector under the bar (pinching is for closing a
+/// symbol's card only):
 /// - Files: each file's declarations, one line per symbol like a C header, under a sticky header
 ///   (its name and count; tap to fold it, or show it in Code). Tapping a line goes to its card.
-///   Zooming out from here goes to Project.
 /// - Symbols: the cards.
 /// - Code: every symbol's whole code, edge to edge in the raw-text style, each under a slim
 ///   title that sticks to the top while you read it. Tap one to open its page.
@@ -66,8 +65,6 @@ struct SymbolsView: View, Equatable {
     @State private var groupCache = GroupCache()
     /// The Code level's prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
-    /// This pinch has already switched the layout (one switch per pinch).
-    @State private var pinchHandled = false
     /// Where the other layout should open: the symbol that was in the middle, or a tapped row.
     @State private var switchAnchor: Int?
     /// Not observed: updated every scroll frame without redrawing anything.
@@ -151,15 +148,12 @@ struct SymbolsView: View, Equatable {
             }
         }
         .onChange(of: mode) { _, mode in
-            // Another level (a pinch, or the selector): it opens at the symbol in the middle.
+            // Another level (the selector): it opens at the symbol in the middle.
             guard mode.showsSymbols, mode != zoom else { return }
             switchAnchor = scroll.centeredID
             scroll.isPositioned = false  // until the new level has moved to the anchor
             withAnimation(.smooth(duration: 0.3)) { zoom = mode }
         }
-        // For VoiceOver, which has no pinch.
-        .accessibilityAction(named: "Zoom In") { zoomIn() }
-        .accessibilityAction(named: "Zoom Out") { zoomOut() }
     }
 
     /// What to scroll to for a symbol: itself, except at the Files level, where a whole file is
@@ -176,7 +170,7 @@ struct SymbolsView: View, Equatable {
     }
 
     /// `scrollPosition(id:)` ignores a starting value during the first layout and opens on the
-    /// first item, so move to the start explicitly: after a pinch, the symbol that was in the
+    /// first item, so move to the start explicitly: after switching levels, the symbol that was in the
     /// middle; otherwise the saved place. Search results start at the top, with the best match.
     private func moveToStart(_ reader: ScrollViewProxy) {
         let target = (switchAnchor ?? (query.isEmpty ? initialID() ?? scroll.centeredID : nil)).map(scrollTarget(for:))
@@ -302,23 +296,6 @@ struct SymbolsView: View, Equatable {
 
     // MARK: Switching
 
-    /// Pinching in (fingers together) zooms out a level; pinching out zooms in. Each pinch
-    /// switches once, when it passes the threshold, and the change animates from there.
-    private var pinch: some Gesture {
-        MagnifyGesture()
-            .onChanged { value in
-                guard !pinchHandled else { return }
-                if value.magnification < 0.8 {
-                    pinchHandled = true
-                    zoomOut()
-                } else if value.magnification > 1.25 {
-                    pinchHandled = true
-                    zoomIn()
-                }
-            }
-            .onEnded { _ in pinchHandled = false }
-    }
-
     /// At the Code level: a drag from the left edge peeks at the line numbers.
     private var peekGesture: some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .global)
@@ -329,15 +306,6 @@ struct SymbolsView: View, Equatable {
             .onEnded { value in
                 if value.startLocation.x <= CodePeek.edgeWidth { peek.end() }
             }
-    }
-
-    private func zoomIn() {
-        if let level = zoom.zoomedIn { withAnimation(.smooth(duration: 0.3)) { mode = level } }
-    }
-
-    /// From Files, out to Project.
-    private func zoomOut() {
-        if let level = zoom.zoomedOut { withAnimation(.smooth(duration: 0.3)) { mode = level } }
     }
 
     /// A row tapped in the Files level: in to the cards, at that symbol.
@@ -365,7 +333,7 @@ struct SymbolsView: View, Equatable {
     }
 
     /// The scroll view either layout sits in: its place, the bar collapsing as you scroll, the
-    /// swipe that closes the search, and the pinch.
+    /// swipe that closes the search, and the Code level's peek.
     private func scrollContainer<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         ScrollView {
             content()
@@ -383,7 +351,6 @@ struct SymbolsView: View, Equatable {
             },
             including: closesSearchOnSwipe ? .all : .subviews
         )
-        .simultaneousGesture(pinch, including: isActive ? .all : .subviews)
         .simultaneousGesture(peekGesture, including: isActive && zoom == .code ? .all : .subviews)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
             if zoom == .code, width != codeWidth { codeWidth = width }
