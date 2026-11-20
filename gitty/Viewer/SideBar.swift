@@ -279,7 +279,7 @@ struct SideBarView: View {
         Section {
             ForEach(projects) { project in
                 item(isSelected: isSelected(project.id)) { onSelect(project.id) } label: {
-                    SideBarProjectRow(project: project, isDownloading: GitDownloads.shared.active.contains(project.id))
+                    SideBarProjectRow(project: project)
                 }
                 .swipeActions {
                     Button(role: .destructive) { delete(project) } label: {
@@ -347,31 +347,17 @@ struct SideBarView: View {
             }
             .optionRow()
             // How code looks in the chosen font, size and colors.
-            Text(SyntaxColoring.shared.attributed("int main(void) { return 0; } // hi",
-                                                  fileExtension: "c", theme: syntaxTheme))
-                .font(CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize)).swiftUIFont)
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .accessibilityHidden(true)
+            CodePreviewLine(font: codeFont, size: codeFontSize, theme: syntaxTheme)
                 .optionRow()
         }
     }
 
-    /// TEMPORARY, finding the sidebar's lag: Files and Projects (and loading the projects when
-    /// it opens) are left out while this is false. Set it back to true to restore them.
-    private static let showsProjects = true
-    /// TEMPORARY, finding the sidebar's lag: the Code section is left out while this is false.
-    private static let showsCode = false
 
     var body: some View {
         List {
-            if Self.showsProjects {
-                filesAndProjects
-            }
+            filesAndProjects
             // Options: denser rows than the lists above.
-            if Self.showsCode {
-                codeSection
-            }
+            codeSection
             Section {
                 Picker("Comments", selection: $reviewFormat) {
                     Text("Compact").tag(ReviewFormat.compact)
@@ -403,9 +389,11 @@ struct SideBarView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { settingsButton }
         .background(Color(uiColor: .systemGroupedBackground))
-        .scrollDisabled(!(state?.isOpen ?? true))  // off screen: leaves status-bar taps alone
-        .task(id: state?.isOpen ?? true) {  // each time it opens
-            if Self.showsProjects, state?.isOpen ?? true { projects = await ProjectStore.shared.projects() }
+        .modifier(SideBarScrollLock(state: state))
+        // Read once, and again only when the list is saved (not each time it opens: that was
+        // work during the swipe's first frames).
+        .task(id: ProjectListVersion.shared.value) {
+            projects = await ProjectStore.shared.projects()
         }
     }
 
@@ -496,8 +484,9 @@ struct SideBarView: View {
 /// A project: its name, then owner · branch (and folder).
 private struct SideBarProjectRow: View {
     let project: ProjectInfo
-    /// Cloning or pulling, perhaps while another project shows.
-    let isDownloading: Bool
+    /// Cloning or pulling, perhaps while another project shows. Read here, so only the row
+    /// redraws when it changes, not the whole sidebar.
+    private var isDownloading: Bool { GitDownloads.shared.active.contains(project.id) }
 
     var body: some View {
         Label {
@@ -529,5 +518,31 @@ private extension View {
         font(.subheadline)
             .controlSize(.small)
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 12))
+    }
+}
+
+/// How code looks in the chosen font, size and colors. Its own view, with only those as inputs:
+/// it's colored (parsed) only when one of them changes, not each time the sidebar redraws.
+private struct CodePreviewLine: View {
+    let font: CodeFont
+    let size: Double
+    let theme: SyntaxTheme
+
+    var body: some View {
+        Text(SyntaxColoring.shared.attributed("int main(void) { return 0; } // hi", fileExtension: "c", theme: theme))
+            .font(CodeTextStyle(font: font, size: CGFloat(size)).swiftUIFont)
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Off screen, the sidebar's list doesn't scroll (status-bar taps go to the screen showing). A
+/// modifier of its own, so only it redraws as the sidebar opens and closes.
+private struct SideBarScrollLock: ViewModifier {
+    let state: SideBarState?
+
+    func body(content: Content) -> some View {
+        content.scrollDisabled(!(state?.isOpen ?? true))
     }
 }

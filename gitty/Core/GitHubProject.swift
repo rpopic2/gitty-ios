@@ -459,6 +459,7 @@ actor ProjectStore {
               (try? data.write(to: indexURL, options: .atomic)) != nil
         else { return }
         try? FileManager.default.removeItem(at: oldIndexURL)
+        Task { @MainActor in ProjectListVersion.shared.bump() }
     }
 
     private func update(_ project: ProjectInfo) {
@@ -491,4 +492,14 @@ actor ProjectStore {
         values.isExcludedFromBackup = true  // can be fetched again
         try? directory.setResourceValues(values)
     }
+}
+
+/// Goes up each time the project list is saved (a project added, removed, reordered, or on
+/// another branch), so the sidebar reads the list again only then, not each time it opens.
+@MainActor @Observable
+final class ProjectListVersion {
+    static let shared = ProjectListVersion()
+    private(set) var value = 0
+
+    func bump() { value += 1 }
 }
