@@ -72,25 +72,26 @@ struct SideBarContainer<Content: View, SideBar: View>: View {
     // Small modifiers read it instead (`SideBarSlide`, `SideBarDim`), and SwiftUI redraws
     // just them.
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            content()
-                .overlay { SideBarDim(state: state) }
-                .modifier(SideBarSlide(state: state, isSideBar: false))
-                .accessibilityAction(named: "Show Projects") { state.open() }
-
-            // Built ahead of time, off screen, so the first frame of a swipe doesn't have to
-            // build its list.
-            sideBar()
-                .modifier(SideBarSlide(state: state, isSideBar: true))
-                .accessibilityAction(.escape) { state.close() }
-        }
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.size.width
-        } action: { width in
-            state.width = width
-            if state.isOpen { state.reveal = width }
-        }
-        .background(ScreenEdgePan(state: state))
+        content()
+            .overlay { SideBarDim(state: state) }
+            .modifier(SideBarSlide(state: state, isSideBar: false))
+            .accessibilityAction(named: "Show Projects") { state.open() }
+            // The screen's width, from the content (which the sidebar mustn't size: as wide as
+            // the screen was, it kept everything at the landscape width after turning back).
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { width in
+                state.width = width
+                if state.isOpen { state.reveal = width }
+            }
+            // Over the content, so its width never sizes the screen. Built ahead of time, off
+            // screen, so the first frame of a swipe doesn't have to build its list.
+            .overlay(alignment: .topTrailing) {
+                sideBar()
+                    .modifier(SideBarSlide(state: state, isSideBar: true))
+                    .accessibilityAction(.escape) { state.close() }
+            }
+            .background(ScreenEdgePan(state: state))
     }
 
 }
