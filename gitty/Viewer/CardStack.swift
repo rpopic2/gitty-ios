@@ -208,7 +208,9 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                 KeyboardDocked {
                     SymbolSearchEditor(query: $search.query, isSearching: search.isPending,
                                        placeholder: search.placeholder,
-                                       onClose: { isEditing = false })
+                                       onClose: { isEditing = false },
+                                       // A search begun in the bar goes on being typed here.
+                                       selectsAll: !search.startsEditing)
                 }
                 .ignoresSafeArea(.keyboard)
             }

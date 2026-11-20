@@ -548,6 +548,7 @@ struct CodeScreen: View {
         // Straight in, not zoomed out of the screen: the page's field, on the keyboard, would
         // zoom with it and jump into place after (the keyboard stays up: the bar's field hands
         // it over).
+        KeyboardHandOff.hold()
         var instant = Transaction()
         instant.disablesAnimations = true
         withTransaction(instant) { cardPath = [.results(search.id)] }

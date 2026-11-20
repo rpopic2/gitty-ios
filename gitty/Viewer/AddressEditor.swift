@@ -97,16 +97,20 @@ private struct BarTextField: UIViewRepresentable {
     let onPasteAndGo: (@MainActor (String) -> Void)?
     /// In place of the style's placeholder.
     var placeholder: String? = nil
+    /// Opening, the whole text is selected, so typing replaces it (Safari's address). `false`:
+    /// the caret goes at its end (a search that's being typed, handed over from another field).
+    var selectsAll = true
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
     init(style: Style, text: Binding<String>, onSubmit: @escaping @MainActor () -> Void,
-         onPasteAndGo: (@MainActor (String) -> Void)? = nil, placeholder: String? = nil) {
+         onPasteAndGo: (@MainActor (String) -> Void)? = nil, placeholder: String? = nil, selectsAll: Bool = true) {
         self.style = style
         _text = text
         self.onSubmit = onSubmit
         self.onPasteAndGo = onPasteAndGo
         self.placeholder = placeholder
+        self.selectsAll = selectsAll
     }
 
     func makeCoordinator() -> Coordinator {
@@ -141,9 +145,10 @@ private struct BarTextField: UIViewRepresentable {
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         // Once it's in a window: bring up the keyboard and select the whole text, like Safari, so
         // typing replaces it.
+        let selectsAll = selectsAll
         Task { @MainActor in
             field.becomeFirstResponder()
-            field.selectAll(nil)
+            if selectsAll { field.selectAll(nil) }
         }
         return field
     }
@@ -227,16 +232,19 @@ struct SymbolSearchEditor: View {
     let onSubmit: (@MainActor () -> Void)?
     /// A Cancel button beside the field, like Safari's (`nil`: none).
     let onCancel: (@MainActor () -> Void)?
+    /// Opening, its text is selected (`false`: the caret at its end, for a search being typed).
+    let selectsAll: Bool
 
     init(query: Binding<String>, isSearching: Bool = false, placeholder: String = String(localized: "Search Symbols"),
          onClose: @escaping @MainActor () -> Void, onSubmit: (@MainActor () -> Void)? = nil,
-         onCancel: (@MainActor () -> Void)? = nil) {
+         onCancel: (@MainActor () -> Void)? = nil, selectsAll: Bool = true) {
         _query = query
         self.isSearching = isSearching
         self.placeholder = placeholder
         self.onClose = onClose
         self.onSubmit = onSubmit
         self.onCancel = onCancel
+        self.selectsAll = selectsAll
     }
 
     var body: some View {
@@ -259,7 +267,8 @@ struct SymbolSearchEditor: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            BarTextField(style: .search, text: $query, onSubmit: onSubmit ?? onClose, placeholder: placeholder)
+            BarTextField(style: .search, text: $query, onSubmit: onSubmit ?? onClose, placeholder: placeholder,
+                         selectsAll: selectsAll)
             if isSearching {
                 ProgressView()
                     .controlSize(.small)
@@ -269,6 +278,39 @@ struct SymbolSearchEditor: View {
         .padding(.horizontal, 14)
         .frame(height: FileBarMetrics.fieldHeight)
         .modifier(FieldBackground())
+    }
+}
+
+/// Keeps the keyboard up while a search field gives way to another on a new page (the bar's to
+/// the results page's): the old one leaves the window before the new one is focused, which
+/// dropped the keyboard and brought it back up. A hidden field with the same keyboard holds it
+/// in between; the new field takes it over.
+@MainActor
+enum KeyboardHandOff {
+    private static let holder: UITextField = {
+        let field = UITextField(frame: .zero)
+        field.alpha = 0
+        field.isAccessibilityElement = false
+        field.keyboardType = .asciiCapable  // as `BarTextField`'s search
+        field.returnKeyType = .search
+        field.autocapitalizationType = .none
+        field.autocorrectionType = .no
+        field.spellCheckingType = .no
+        return field
+    }()
+
+    /// Before the old field goes: the holder takes the keyboard (only if a field has it).
+    static func hold() {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+        else { return }
+        if holder.superview !== window { window.addSubview(holder) }
+        holder.becomeFirstResponder()
+        // No field took it over: the keyboard goes, rather than staying up with nothing to type in.
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            if holder.isFirstResponder { holder.resignFirstResponder() }
+        }
     }
 }
 
