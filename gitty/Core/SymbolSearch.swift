@@ -298,10 +298,13 @@ nonisolated enum SymbolSearch {
     static func matchingNames(_ query: String, in names: [String], separator: Character = "/") -> [String] {
         let query = Query(query)
         guard !query.text.isEmpty else { return names }
-        return names.enumerated()
-            .compactMap { index, name in rank(query, Index.Entry(name, separator: separator)).map { (name, $0, index) } }
-            .sorted { $0.1 != $1.1 ? $0.1 < $1.1 : $0.2 < $1.2 }
-            .map(\.0)
+        var ranked: [(name: String, rank: Int, index: Int)] = []
+        for (index, name) in names.enumerated() {
+            guard let rank = rank(query, Index.Entry(name, separator: separator)) else { continue }
+            ranked.append((name: name, rank: rank, index: index))
+        }
+        ranked.sort { a, b in a.rank != b.rank ? a.rank < b.rank : a.index < b.index }
+        return ranked.map { $0.name }
     }
 
     static func isSubsequence(_ query: String, of text: String) -> Bool {
