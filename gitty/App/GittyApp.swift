@@ -4,6 +4,7 @@ import SwiftUI
 struct GittyApp: App {
     init() {
         CodeTextStyle.registerBundledFonts()  // JetBrains Mono, for the code font option
+        _ = NetworkCost.shared  // watching the network from the start, so it's known when asked
     }
 
     var body: some Scene {

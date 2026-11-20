@@ -299,6 +299,21 @@ nonisolated final class GitRepository {
         return Git.string(id)
     }
 
+    /// The size of the files among `entries` (a tree's, by their hashes) this clone doesn't
+    /// have: what fetching them would add, before compression.
+    func missingBytes(of entries: [ProjectTree.Entry]) throws -> Int64 {
+        var odb: OpaquePointer?
+        try Git.check(git_repository_odb(&odb, pointer))
+        defer { git_odb_free(odb) }
+        var bytes: Int64 = 0
+        for entry in entries where entry.kind == .file {
+            var id = git_oid()
+            guard git_oid_fromstr(&id, entry.sha) == 0 else { continue }
+            if git_odb_exists(odb, &id) == 0 { bytes += Int64(entry.size ?? 0) }
+        }
+        return bytes
+    }
+
     /// Writes the checked-out commit's files to the working directory again, replacing what's
     /// there (and putting back any that are missing).
     func checkOutHeadAgain() throws {

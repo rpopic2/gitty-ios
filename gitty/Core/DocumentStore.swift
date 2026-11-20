@@ -142,6 +142,22 @@ actor DocumentStore {
         return (count, bytes)
     }
 
+    /// The space the files downloaded one by one under `prefix` (a project's) take; not a
+    /// clone's files.
+    func downloadedBytes(under prefix: String) -> Int64 {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        var bytes: Int64 = 0
+        for file in files where file.pathExtension == "json" {
+            guard let metadata = try? JSONDecoder().decode(DocumentMetadata.self, from: Data(contentsOf: file)),
+                  metadata.url.absoluteString.hasPrefix(prefix)
+            else { continue }
+            let data = paths(for: metadata.url).data
+            let size = (try? data.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize
+            bytes += Int64(size ?? 0)
+        }
+        return bytes
+    }
+
     /// Deletes every saved copy. Files download again when they're opened.
     func deleteAll() {
         savedList = nil

@@ -115,16 +115,19 @@ nonisolated final class CloneIndex: @unchecked Sendable {
     /// Settings. Goes through every file: call it off the main thread.
     func storageUsage() -> (count: Int, bytes: Int64) {
         let records = allRecords()
+        return (records.count, records.reduce(0) { $0 + bytes(of: $1) })
+    }
+
+    /// The space one clone takes: its files and Git's data. Off the main thread.
+    func bytes(of record: CloneRecord) -> Int64 {
         var bytes: Int64 = 0
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .totalFileAllocatedSizeKey]
-        for record in records {
-            let enumerator = FileManager.default.enumerator(at: folder(of: record), includingPropertiesForKeys: Array(keys))
-            while let file = enumerator?.nextObject() as? URL {
-                guard let values = try? file.resourceValues(forKeys: keys), values.isRegularFile == true else { continue }
-                bytes += Int64(values.totalFileAllocatedSize ?? 0)
-            }
+        let enumerator = FileManager.default.enumerator(at: folder(of: record), includingPropertiesForKeys: Array(keys))
+        while let file = enumerator?.nextObject() as? URL {
+            guard let values = try? file.resourceValues(forKeys: keys), values.isRegularFile == true else { continue }
+            bytes += Int64(values.totalFileAllocatedSize ?? 0)
         }
-        return (records.count, bytes)
+        return bytes
     }
 
     /// Every file in the clones, as saved documents (for the project's symbols, and the saved
@@ -290,7 +293,8 @@ actor CloneStore {
     /// `CloneError.notFetched`.
     /// - Parameter rawPrefix: the project's raw file address at the new ref.
     @discardableResult
-    func switchTo(_ ref: GitRef, projectID: String, rawPrefix: String, pulling: Bool = false) async throws -> ProjectTree {
+    func switchTo(_ ref: GitRef, projectID: String, rawPrefix: String, pulling: Bool = false,
+                  progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws -> ProjectTree {
         guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
         let folder = index.folder(of: record)
         let token = pulling ? await GitHubAuth.shared.token() : nil
@@ -300,7 +304,7 @@ actor CloneStore {
             var fetched = false
             if repository.fetchedCommit(of: ref) == nil {
                 guard pulling else { throw CloneError.notFetched(ref.name) }
-                try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
+                try repository.fetch(ref, depth: depth, token: token, progress: progress, isCancelled: { Task.isCancelled })
                 fetched = true
             }
             let commit = try repository.checkout(ref)
@@ -340,7 +344,7 @@ actor CloneStore {
     /// before) without checking them out, and lists the remote's branches and tags again.
     /// Returns how many commits are new (`newCommits`); Pull checks them out.
     @discardableResult
-    func fetch(projectID: String) async throws -> Int {
+    func fetch(projectID: String, progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws -> Int {
         guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
@@ -349,7 +353,7 @@ actor CloneStore {
         let checkedOut = record.commit
         let (refs, newCommits) = try await serially(projectID) { () throws -> (ProjectRefs?, Int) in
             let repository = try GitRepository(at: folder)
-            try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
+            try repository.fetch(ref, depth: depth, token: token, progress: progress, isCancelled: { Task.isCancelled })
             let refs = try? repository.remoteRefs(token: token)
             let latest = repository.fetchedCommit(of: ref) ?? checkedOut
             return (refs, latest == checkedOut ? 0 : max(1, repository.commitsAhead(latest, of: checkedOut)))
@@ -363,7 +367,7 @@ actor CloneStore {
     /// Pull to refresh on a cloned file: fetches the branch or tag's latest commit (as much
     /// history as before) and checks it out. Returns whether anything changed.
     @discardableResult
-    func pull(projectID: String) async throws -> Bool {
+    func pull(projectID: String, progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws -> Bool {
         guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
@@ -371,7 +375,7 @@ actor CloneStore {
         let depth = record.depth
         let commit = try await serially(projectID) {
             let repository = try GitRepository(at: folder)
-            try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
+            try repository.fetch(ref, depth: depth, token: token, progress: progress, isCancelled: { Task.isCancelled })
             return try repository.checkout(ref)
         }
         record.newCommits = nil
@@ -384,6 +388,18 @@ actor CloneStore {
         index.save(record)
         await documents.clonesChanged()
         return true
+    }
+
+    /// Roughly what fetching `ref`'s latest commit downloads: the size of its files the clone
+    /// doesn't have yet, before Git compresses them. From GitHub's file list for the commit (one
+    /// request); `nil` when that fails or is cut short (a very large repository).
+    func downloadEstimate(of ref: GitRef, projectID: String) async -> Int64? {
+        guard let record = index.record(forProject: projectID),
+              let tree = try? await ProjectStore.shared.remoteTree(for: projectID, ref: ref.name),
+              !tree.truncated
+        else { return nil }
+        let folder = index.folder(of: record)
+        return try? await serially(projectID) { try GitRepository(at: folder).missingBytes(of: tree.entries) }
     }
 
     /// Clones made with only the filtered files checked out (an option since removed) get the

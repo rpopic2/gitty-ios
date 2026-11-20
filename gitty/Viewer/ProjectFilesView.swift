@@ -1,11 +1,10 @@
 import SwiftUI
 import UIKit
 
-/// The open project in the Project tab: its header (Clone downloads the whole project with Git,
-/// its latest commit, for offline reading and history), the filter (`*.cs *.md`, see
-/// `FileFilter`) that narrows the project's files at the Code level, the branch row (switch
-/// branch or tag, and its history), and the project's albums. The files themselves are at the
-/// Code level. Pull to refresh the project's file list.
+/// The open project in the Project tab: its row (with the space it takes on this device), the
+/// filter (`*.cs *.md`, see `FileFilter`) that narrows the project's files at the Code level,
+/// Git (the branch or tag, Clone or Pull, History), its review and its albums. The files
+/// themselves are at the Code level. Pull down to refresh the file list, or fetch a clone.
 struct ProjectFilesView: View {
     let projectID: String
     /// False while the Code level covers it (see `ProjectView`).
@@ -24,8 +23,13 @@ struct ProjectFilesView: View {
     @State private var state: LoadState = .loading
     /// The project's clone, if it's cloned.
     @State private var clone: CloneRecord?
-    /// While cloning: the fraction received.
-    @State private var cloneProgress: FetchProgress?
+    /// A Git download going on (Clone, Pull, pull down, a branch), in the Pull row with Cancel.
+    @State private var download: GitDownload?
+    @State private var downloadTask: Task<Void, Never>?
+    /// Asks before a big download on a mobile network.
+    @State private var downloads = DownloadGuard()
+    /// The space the project takes on this device: its clone, or the files downloaded one by one.
+    @State private var storedBytes: Int64?
     @State private var cloneError: (any Error)?
     @State private var isConfirmingDeleteClone = false
     /// The whole repository's files' size, roughly what Clone downloads (compressed, less).
@@ -49,9 +53,12 @@ struct ProjectFilesView: View {
     }
     /// A branch or tag chosen that the clone hasn't downloaded: asks to pull it.
     @State private var refToPull: RefToPull?
-    /// Pull down (a fetch) or Pull is going on.
-    @State private var isFetching = false
-    @State private var isPulling = false
+
+    private struct GitDownload {
+        let id = UUID()
+        let title: String
+        var progress = FetchProgress.start
+    }
 
     private struct RefToPull: Identifiable {
         let name: String
@@ -135,6 +142,11 @@ struct ProjectFilesView: View {
             } message: {
                 Text("Its files are removed from this device. They download one by one again when you open them.")
             }
+            .downloadConfirmation(downloads)
+            // Back from the Code level: files may have downloaded meanwhile.
+            .onChange(of: isActive) { _, isActive in
+                if isActive { Task { await refreshStorage() } }
+            }
     }
 
     // MARK: Content
@@ -164,7 +176,7 @@ struct ProjectFilesView: View {
         List {
             Section {
                 // Like "all of it" above the albums: a tap shows the whole project at the Code
-                // level, out of an album. Clone and Pull are in their own row under it.
+                // level, out of an album.
                 header(project: project, tree: tree)
                     .contentShape(Rectangle())
                     .onTapGesture { onShowProject() }
@@ -173,17 +185,18 @@ struct ProjectFilesView: View {
                         : Color(uiColor: .secondarySystemGroupedBackground))
                     .accessibilityAddTraits(currentAlbumID == nil ? [.isButton, .isSelected] : .isButton)
                     .accessibilityAction { onShowProject() }
-                cloneRow(project: project)
-                filterRow
-                branchRow(project: project)
-            } footer: {
-                headerFooter(tree: tree)
             }
-            if matchingCount == 0 && !filter.isEmpty {
-                Section {
-                    Text("No files match this filter.")
-                        .foregroundStyle(.secondary)
-                }
+            Section {
+                filterRow
+            } header: {
+                Text("Filter")
+            } footer: {
+                filterFooter(tree: tree)
+            }
+            Section("Git") {
+                branchRow(project: project)
+                pullRow(project: project)
+                historyRow
             }
             // The files are at the Code level (by folder, every file folded); here, the albums.
             reviewSection(project: project)
@@ -200,7 +213,7 @@ struct ProjectFilesView: View {
         .scrollDisabled(!isActive)  // hidden: leaves status-bar taps to the mode on screen
     }
 
-    /// The project's name, its owner, and Clone.
+    /// The project's name, its owner, and the space it takes on this device.
     private func header(project: ProjectInfo, tree: ProjectTree) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "shippingbox")
@@ -211,12 +224,19 @@ struct ProjectFilesView: View {
                 Text(project.title)
                     .font(.headline)
                     .lineLimit(1)
-                Text(clone == nil ? project.link.owner : project.link.owner + " · " + String(localized: "Cloned"))
+                Text(project.link.owner)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
+            if let storedBytes, storedBytes > 0 {
+                Text(storedBytes, format: .byteCount(style: .file))
+                    .font(.footnote)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("\(storedBytes.formatted(.byteCount(style: .file))) on this device")
+            }
         }
     }
 
@@ -251,15 +271,26 @@ struct ProjectFilesView: View {
     }
 
     @ViewBuilder
-    private func headerFooter(tree: ProjectTree) -> some View {
-        let lines = [
-            filter.isEmpty ? nil
-                : "Showing \(matchingCount) of \(fileCount) files.",
-            tree.truncated ? "This repository is very large, so GitHub listed only some of its files." : nil,
-        ].compactMap { $0 }
+    private func filterFooter(tree: ProjectTree) -> some View {
+        let lines = filterNotes(truncated: tree.truncated)
         if !lines.isEmpty {
             Text(lines.joined(separator: " "))
         }
+    }
+
+    private func filterNotes(truncated: Bool) -> [String] {
+        var lines: [String] = []
+        if !filter.isEmpty {
+            if matchingCount == 0 {
+                lines.append(String(localized: "No files match this filter."))
+            } else {
+                lines.append(String(localized: "Showing \(matchingCount) of \(fileCount) files."))
+            }
+        }
+        if truncated {
+            lines.append(String(localized: "This repository is very large, so GitHub listed only some of its files."))
+        }
+        return lines
     }
 
     /// Saves the filter and lists again with it, if it changed.
@@ -428,6 +459,7 @@ struct ProjectFilesView: View {
             fileCount = tree.files(under: project.folder ?? "").count
             matchingCount = await count(project: project, tree: tree) ?? fileCount
             state = .loaded(project, tree)
+            await refreshStorage()
         } catch {
             if case .loaded = state, refresh { return }  // keep the list; the pull just ends
             isSignedIn = await GitHubAuth.shared.isSignedIn
@@ -435,78 +467,67 @@ struct ProjectFilesView: View {
         }
     }
 
-    // MARK: Clone
+    // MARK: Git
 
-    /// Its own row under the project's (which only chooses the project): Clone before it's
-    /// cloned; once it is, where the clone is, Pull (with how many new commits a pull down
-    /// found) and Delete Clone.
+    /// Clone before it's cloned, then Pull (with how many new commits a pull down found); swipe
+    /// it for Delete Clone. While Git downloads, what's come down so far and Cancel.
     @ViewBuilder
-    private func cloneRow(project: ProjectInfo) -> some View {
-        if let cloneProgress {
+    private func pullRow(project: ProjectInfo) -> some View {
+        if let download {
             HStack(spacing: 10) {
                 ProgressView()
-                Text("Cloning…")
+                Text(download.title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer(minLength: 8)
-                // What's downloaded so far (compressed, so less than the files' size).
-                Text(Int64(cloneProgress.receivedBytes), format: .byteCount(style: .file))
-                    .monospacedDigit()
+                Text(Int64(download.progress.receivedBytes), format: .byteCount(style: .file))
                     .font(.footnote)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
+                Button("Cancel") { downloadTask?.cancel() }
+                    .buttonStyle(.borderless)  // only the button, not the whole row
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Cloning")
         } else if let clone {
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Cloned")
-                    Text(clone.ref.name + " · " + String(clone.commit.prefix(7)))
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            Button { pullTapped() } label: {
+                gitLabel("Pull", systemImage: "arrow.triangle.2.circlepath", detail: newCommitsText(clone.newCommits))
+            }
+            .accessibilityHint("Downloads the branch’s latest commit and checks it out")
+            .swipeActions {
+                Button(role: .destructive) { isConfirmingDeleteClone = true } label: {
+                    Label("Delete Clone", systemImage: "trash")
                 }
-                Spacer(minLength: 8)
-                if isPulling || isFetching {
-                    ProgressView()
-                } else if let new = clone.newCommits, new > 0 {
-                    Button("Pull \(new)") { pull() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .accessibilityHint("Checks out the new commits")
-                } else {
-                    Button("Pull") { pull() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .accessibilityHint("Downloads the branch’s latest commit and checks it out")
-                }
-                Menu {
-                    Button("Delete Clone", systemImage: "trash", role: .destructive) { isConfirmingDeleteClone = true }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.title3)
-                }
-                .buttonStyle(.borderless)  // only the button, not the whole row
-                .accessibilityLabel("Clone Options")
             }
         } else {
-            Button { startClone(project) } label: {
-                cloneLabel
+            Button { cloneTapped(project) } label: {
+                gitLabel("Clone", systemImage: "arrow.down.circle",
+                         detail: repositoryBytes > 0
+                            ? String(localized: "up to \(repositoryBytes.formatted(.byteCount(style: .file)))")
+                            : nil)
             }
             .accessibilityHint("Downloads the whole project with Git, its latest commit only, for offline reading and history.")
         }
     }
 
-    private var cloneLabel: some View {
+    /// The branch's commits (cloning, if it isn't).
+    private var historyRow: some View {
+        Button { isShowingHistory = true } label: {
+            gitLabel("History", systemImage: "clock.arrow.circlepath", detail: nil)
+        }
+        .disabled(download != nil)
+        .accessibilityHint("Shows the branch’s commits")
+    }
+
+    /// A Git row: its symbol, its name, and a detail at the end.
+    private func gitLabel(_ title: LocalizedStringKey, systemImage: String, detail: String?) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "arrow.down.circle")
+            Image(systemName: systemImage)
+                .frame(width: 24)
                 .accessibilityHidden(true)
-            Text("Clone")
+            Text(title)
+                .foregroundStyle(.primary)
             Spacer(minLength: 8)
-            if repositoryBytes > 0 {
-                Text(repositoryBytes, format: .byteCount(style: .file))
+            if let detail {
+                Text(detail)
                     .font(.footnote)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -515,37 +536,106 @@ struct ProjectFilesView: View {
         .contentShape(Rectangle())
     }
 
+    private func newCommitsText(_ count: Int?) -> String? {
+        guard let count, count > 0 else { return nil }
+        return count == 1 ? String(localized: "1 new commit") : String(localized: "\(count) new commits")
+    }
+
+    /// Runs a Git download, shown in the Pull row with Cancel. Cancelling isn't an error.
+    @discardableResult
+    private func startDownload(_ title: String,
+                               _ work: @escaping @MainActor (_ progress: @escaping @Sendable (FetchProgress) -> Void) async throws -> Void)
+        -> Task<Void, Never> {
+        downloadTask?.cancel()
+        let shown = GitDownload(title: title)
+        download = shown
+        let (updates, continuation) = AsyncStream.makeStream(of: FetchProgress.self, bufferingPolicy: .bufferingNewest(1))
+        Task {
+            // Not after it's finished (a last update can arrive late).
+            for await update in updates where download?.id == shown.id { download?.progress = update }
+        }
+        let task = Task {
+            do {
+                try await work { continuation.yield($0) }
+            } catch {
+                if !Task.isCancelled {
+                    isSignedIn = await GitHubAuth.shared.isSignedIn
+                    cloneError = error
+                }
+            }
+            continuation.finish()
+            if download?.id == shown.id {
+                download = nil
+                downloadTask = nil
+            }
+            await refreshStorage()
+        }
+        downloadTask = task
+        return task
+    }
+
+    /// The space the project takes on this device, for its row.
+    private func refreshStorage() async {
+        if let record = await CloneStore.shared.record(forProject: projectID) {
+            storedBytes = await Task.detached(priority: .utility) { CloneIndex.shared.bytes(of: record) }.value
+        } else if case .loaded(let project, _) = state, let prefix = project.rawURL(for: "")?.absoluteString {
+            storedBytes = await DocumentStore.shared.downloadedBytes(under: prefix)
+        }
+    }
+
+    /// Clone, asking first on a mobile network when it's big.
+    private func cloneTapped(_ project: ProjectInfo) {
+        let bytes = repositoryBytes
+        Task {
+            await downloads.run(estimate: { bytes > 0 ? bytes : nil }) { startClone(project) }
+        }
+    }
+
+    /// Clones the project (the latest commit). Its files then come from the clone, and the ones
+    /// downloaded one by one are deleted.
+    private func startClone(_ project: ProjectInfo) {
+        startDownload(String(localized: "Cloning…")) { progress in
+            try await CloneStore.shared.clone(project, progress: progress)
+            clone = await CloneStore.shared.record(forProject: projectID)
+            await loadRefs()  // the clone's, from now on
+        }
+    }
+
     /// Pull down on a cloned project: Git fetches the branch's latest commits (nothing changes
     /// on screen) and the remote's branches; Pull then shows how many are new.
     private func fetchClone() async {
-        isFetching = true
-        defer { isFetching = false }
-        do {
-            try await CloneStore.shared.fetch(projectID: projectID)
-            clone = await CloneStore.shared.record(forProject: projectID)
-            await loadRefs()
-        } catch {
-            isSignedIn = await GitHubAuth.shared.isSignedIn
-            cloneError = error
+        guard let ref = clone?.ref else { return }
+        await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID) }) {
+            startDownload(String(localized: "Fetching…")) { progress in
+                try await CloneStore.shared.fetch(projectID: projectID, progress: progress)
+                clone = await CloneStore.shared.record(forProject: projectID)
+                await loadRefs()
+            }
+        }
+    }
+
+    /// Pull, asking first on a mobile network when it's big (commits a pull down found are
+    /// downloaded already).
+    private func pullTapped() {
+        guard let ref = clone?.ref else { return }
+        let isFetched = (clone?.newCommits ?? 0) > 0
+        Task {
+            await downloads.run(estimate: {
+                if isFetched { return 0 }
+                return await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID)
+            }) { pull() }
         }
     }
 
     /// Pull: the branch's latest commit, checked out; the file list from the clone.
     private func pull() {
         guard case .loaded(let project, _) = state, let ref = clone?.ref else { return }
-        isPulling = true
-        Task {
-            defer { isPulling = false }
-            do {
-                try await CloneStore.shared.pull(projectID: projectID)
-                clone = await CloneStore.shared.record(forProject: projectID)
-                if let tree = try? await CloneStore.shared.tree(projectID: projectID) {
-                    let (moved, tree) = try await ProjectStore.shared.setRef(ref.name, for: project.id, tree: tree)
-                    show(moved, tree)
-                }
-            } catch {
-                isSignedIn = await GitHubAuth.shared.isSignedIn
-                cloneError = error
+        startDownload(String(localized: "Pulling…")) { progress in
+            try await CloneStore.shared.pull(projectID: projectID, progress: progress)
+            clone = await CloneStore.shared.record(forProject: projectID)
+            if let tree = try? await CloneStore.shared.tree(projectID: projectID) {
+                let (moved, tree) = try await ProjectStore.shared.setRef(ref.name, for: project.id, tree: tree)
+                show(moved, tree)
             }
         }
     }
@@ -558,35 +648,12 @@ struct ProjectFilesView: View {
         Task { matchingCount = await count(project: project, tree: tree) ?? fileCount }
     }
 
-    /// Clones the project (the latest commit). Its files then come from the clone, and the ones
-    /// downloaded one by one are deleted.
-    private func startClone(_ project: ProjectInfo) {
-        cloneProgress = .start
-        let (updates, continuation) = AsyncStream.makeStream(of: FetchProgress.self, bufferingPolicy: .bufferingNewest(1))
-        Task {
-            // Not after it's finished (a last update can arrive late).
-            for await update in updates where cloneProgress != nil { cloneProgress = update }
-        }
-        Task {
-            do {
-                try await CloneStore.shared.clone(project) { continuation.yield($0) }
-                continuation.finish()
-                clone = await CloneStore.shared.record(forProject: projectID)
-                await loadRefs()  // the clone's, from now on
-            } catch {
-                continuation.finish()
-                isSignedIn = await GitHubAuth.shared.isSignedIn
-                cloneError = error
-            }
-            cloneProgress = nil
-        }
-    }
-
     private func deleteClone() {
         Task {
             await CloneStore.shared.delete(projectID: projectID)
             clone = nil
             await loadRefs()  // GitHub's again
+            await refreshStorage()
         }
     }
 
@@ -602,21 +669,9 @@ struct ProjectFilesView: View {
     // MARK: Branch
 
     /// The branch or tag the project shows. Choosing another lists its files (and switches the
-    /// clone, if there is one). The button at its end shows the branch's history.
+    /// clone, if there is one).
     private func branchRow(project: ProjectInfo) -> some View {
-        HStack(spacing: 12) {
-            branchMenu(project: project)
-            Button {
-                isShowingHistory = true
-            } label: {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.title3)
-            }
-            .buttonStyle(.borderless)  // only the button, not the whole row
-            .disabled(cloneProgress != nil)
-            .accessibilityLabel("History")
-            .accessibilityHint("Shows the branch’s commits")
-        }
+        branchMenu(project: project)
     }
 
     /// The branch row: tap it for the picker (searchable, recent first).
@@ -627,7 +682,7 @@ struct ProjectFilesView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.triangle.branch")
-                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
                     .accessibilityHidden(true)
                 Text(verbatim: project.ref ?? "")
                     .font(.body.monospaced())
@@ -646,8 +701,7 @@ struct ProjectFilesView: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.borderless)  // only this, not the history button beside it
-        .disabled(isSwitchingRef || cloneProgress != nil)
+        .disabled(isSwitchingRef || download != nil)
         .accessibilityLabel("Branch")
         .accessibilityValue(Text(verbatim: project.ref ?? ""))
         .sheet(isPresented: $isPickingRef, onDismiss: {
@@ -723,28 +777,28 @@ struct ProjectFilesView: View {
         }
     }
 
-    /// Pull on a branch or tag the clone hasn't downloaded: its latest commit, checked out.
+    /// Pull on a branch or tag the clone hasn't downloaded: its latest commit, checked out
+    /// (asking first on a mobile network when it's big).
     private func pullRef(_ ref: RefToPull) {
         guard case .loaded(let project, _) = state else { return }
-        isSwitchingRef = true
+        let gitRef: GitRef = ref.isTag ? .tag(ref.name) : .branch(ref.name)
         Task {
-            defer { isSwitchingRef = false }
-            do {
-                try await switchClone(to: ref.name, isTag: ref.isTag, from: project, pulling: true)
-                fetchedRefs.insert(ref.name)
-            } catch {
-                isSignedIn = await GitHubAuth.shared.isSignedIn
-                cloneError = error
+            await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: gitRef, projectID: projectID) }) {
+                startDownload(String(localized: "Pulling \(ref.name)…")) { progress in
+                    try await switchClone(to: ref.name, isTag: ref.isTag, from: project, pulling: true, progress: progress)
+                    fetchedRefs.insert(ref.name)
+                }
             }
         }
     }
 
-    private func switchClone(to name: String, isTag: Bool, from project: ProjectInfo, pulling: Bool) async throws {
+    private func switchClone(to name: String, isTag: Bool, from project: ProjectInfo, pulling: Bool,
+                             progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws {
         var moved = project
         moved.ref = name
         guard let prefix = moved.rawURL(for: "")?.absoluteString else { return }
         let tree = try await CloneStore.shared.switchTo(isTag ? .tag(name) : .branch(name), projectID: projectID,
-                                                        rawPrefix: prefix, pulling: pulling)
+                                                        rawPrefix: prefix, pulling: pulling, progress: progress)
         clone = await CloneStore.shared.record(forProject: projectID)
         let (shown, shownTree) = try await ProjectStore.shared.setRef(name, for: projectID, tree: tree)
         show(shown, shownTree)

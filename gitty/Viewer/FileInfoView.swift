@@ -7,6 +7,9 @@ struct FileInfoView: View {
     @State private var model: FileInfoModel
     /// The commit whose diff is open, full screen.
     @State private var diffPage: CommitPage?
+    /// Asks before a big download on a mobile network.
+    @State private var downloads = DownloadGuard()
+    @State private var cloneTask: Task<Void, Never>?
     /// The diff zooms out of its commit's row, and closes like a symbol's card.
     @Namespace private var diffNamespace
     @Environment(\.dismiss) private var dismiss
@@ -60,6 +63,7 @@ struct FileInfoView: View {
                 }
             }
         }
+        .downloadConfirmation(downloads)
         .task { await model.load() }
         .fullScreenCover(item: $diffPage) { page in
             CommitDiffView(projectID: page.projectID, commit: page.commit, startPath: page.path)
@@ -108,12 +112,19 @@ struct FileInfoView: View {
                     Text(Int64(progress.receivedBytes), format: .byteCount(style: .file))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
+                    Button("Cancel") { cloneTask?.cancel() }
+                        .buttonStyle(.borderless)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Cloning")
             } else {
                 Button {
-                    Task { await model.clone() }
+                    let projectID = location.project.id
+                    Task {
+                        await downloads.run(estimate: { await DownloadGuard.cloneEstimate(projectID: projectID) }) {
+                            cloneTask = Task { await model.clone() }
+                        }
+                    }
                 } label: {
                     Label("Clone to See History", systemImage: "arrow.down.circle")
                 }
@@ -286,7 +297,7 @@ final class FileInfoModel {
             clone = await CloneStore.shared.record(forProject: project.id)
         } catch {
             continuation.finish()
-            errorMessage = error.localizedDescription
+            if !Task.isCancelled { errorMessage = error.localizedDescription }  // Cancel isn't an error
         }
         listener.cancel()
         cloneProgress = nil

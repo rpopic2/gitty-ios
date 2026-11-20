@@ -364,6 +364,14 @@ actor ProjectStore {
         return try JSONDecoder().decode(Repository.self, from: data).default_branch
     }
 
+    /// The repository's file list at a branch or tag's latest commit, from GitHub, not saved:
+    /// for telling what a Git fetch would download.
+    func remoteTree(for id: String, ref: String) async throws -> ProjectTree {
+        guard let project = project(id: id) else { throw ProjectError.unknownProject }
+        guard let tree = try await fetchTree(project.link, ref: ref, etag: nil) else { throw ProjectError.notFound }
+        return tree
+    }
+
     /// `nil` when the server says it hasn't changed (HTTP 304).
     private func fetchTree(_ link: RepoLink, ref: String, etag: String?) async throws -> ProjectTree? {
         nonisolated struct Response: Decodable {

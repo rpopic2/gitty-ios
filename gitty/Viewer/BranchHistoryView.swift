@@ -6,6 +6,9 @@ struct BranchHistoryView: View {
     @State private var model: BranchHistoryModel
     /// A commit held: compared with the checkout.
     @State private var comparedCommit: GitCommit?
+    /// Asks before a big download on a mobile network.
+    @State private var downloads = DownloadGuard()
+    @State private var cloneTask: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
 
     init(projectID: String) {
@@ -35,8 +38,15 @@ struct BranchHistoryView: View {
             .navigationDestination(item: $comparedCommit) { commit in
                 CompareView(projectID: model.projectID, base: .commit(commit.id), head: .checkedOut)
             }
-            .refreshable { await model.pull() }
+            .refreshable {
+                guard let ref = model.clone?.ref else { return }
+                let projectID = model.projectID
+                await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID) }) {
+                    Task { await model.pull() }
+                }
+            }
         }
+        .downloadConfirmation(downloads)
         .task { await model.load() }
     }
 
@@ -48,12 +58,19 @@ struct BranchHistoryView: View {
                     Text(Int64(progress.receivedBytes), format: .byteCount(style: .file))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
+                    Button("Cancel") { cloneTask?.cancel() }
+                        .buttonStyle(.borderless)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Cloning")
             } else {
                 Button {
-                    Task { await model.cloneProject() }
+                    let projectID = model.projectID
+                    Task {
+                        await downloads.run(estimate: { await DownloadGuard.cloneEstimate(projectID: projectID) }) {
+                            cloneTask = Task { await model.cloneProject() }
+                        }
+                    }
                 } label: {
                     Label("Clone to See History", systemImage: "arrow.down.circle")
                 }
@@ -158,7 +175,7 @@ final class BranchHistoryModel {
             clone = await CloneStore.shared.record(forProject: projectID)
         } catch {
             continuation.finish()
-            errorMessage = error.localizedDescription
+            if !Task.isCancelled { errorMessage = error.localizedDescription }  // Cancel isn't an error
         }
         listener.cancel()
         cloneProgress = nil
