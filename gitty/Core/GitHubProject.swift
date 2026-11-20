@@ -220,9 +220,18 @@ actor ProjectStore {
 
     // MARK: Projects
 
-    /// Newest first.
+    /// In the sidebar's order: each new one first, then as they were dragged.
     func projects() -> [ProjectInfo] {
-        loadIndex().sorted { $0.addedAt > $1.addedAt }
+        loadIndex()
+    }
+
+    /// Puts the projects in this order (the sidebar's, after a drag). Any not in `ids` (added
+    /// meanwhile) stay first.
+    func setOrder(_ ids: [String]) {
+        let index = loadIndex()
+        let byID = Dictionary(index.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let listed = Set(ids)
+        saveIndex(index.filter { !listed.contains($0.id) } + ids.compactMap { byID[$0] })
     }
 
     func project(id: String) -> ProjectInfo? {
@@ -235,7 +244,7 @@ actor ProjectStore {
         var index = loadIndex()
         if let existing = index.first(where: { $0.id == link.id }) { return existing }
         let project = ProjectInfo(link: link, ref: nil, folder: nil, addedAt: .now)
-        index.append(project)
+        index.insert(project, at: 0)
         saveIndex(index)
         return project
     }
@@ -416,7 +425,10 @@ actor ProjectStore {
 
     // MARK: Disk
 
-    private var indexURL: URL { directory.appending(path: "projects.json") }
+    /// The projects in the sidebar's order.
+    private var indexURL: URL { directory.appending(path: "project-list.json") }
+    /// From before projects could be reordered: oldest first (shown newest first).
+    private var oldIndexURL: URL { directory.appending(path: "projects.json") }
 
     private func treeURL(for id: String) -> URL {
         let digest = SHA256.hash(data: Data(id.utf8))
@@ -424,13 +436,21 @@ actor ProjectStore {
     }
 
     private func loadIndex() -> [ProjectInfo] {
-        guard let data = try? Data(contentsOf: indexURL) else { return [] }
-        return (try? JSONDecoder().decode([ProjectInfo].self, from: data)) ?? []
+        if let data = try? Data(contentsOf: indexURL) {
+            return (try? JSONDecoder().decode([ProjectInfo].self, from: data)) ?? []
+        }
+        guard let data = try? Data(contentsOf: oldIndexURL),
+              let old = try? JSONDecoder().decode([ProjectInfo].self, from: data)
+        else { return [] }
+        return old.sorted { $0.addedAt > $1.addedAt }
     }
 
     private func saveIndex(_ index: [ProjectInfo]) {
         ensureDirectory()
-        if let data = try? JSONEncoder().encode(index) { try? data.write(to: indexURL, options: .atomic) }
+        guard let data = try? JSONEncoder().encode(index),
+              (try? data.write(to: indexURL, options: .atomic)) != nil
+        else { return }
+        try? FileManager.default.removeItem(at: oldIndexURL)
     }
 
     private func update(_ project: ProjectInfo) {

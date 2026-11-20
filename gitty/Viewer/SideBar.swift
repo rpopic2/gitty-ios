@@ -285,6 +285,13 @@ struct SideBarView: View {
                             Label("Delete", systemImage: "trash")
                         }
                     }
+                    .accessibilityAction(named: "Move Up") { move(project, by: -1) }
+                    .accessibilityAction(named: "Move Down") { move(project, by: 1) }
+                }
+                // Hold a project and drag it.
+                .onMove { from, to in
+                    projects.move(fromOffsets: from, toOffset: to)
+                    saveOrder()
                 }
                 Button {
                     newProjectAddress = ""
@@ -367,6 +374,20 @@ struct SideBarView: View {
         .task(id: state?.isOpen ?? true) {  // each time it opens
             if state?.isOpen ?? true { projects = await ProjectStore.shared.projects() }
         }
+    }
+
+    /// VoiceOver's Move Up and Move Down.
+    private func move(_ project: ProjectInfo, by step: Int) {
+        guard let from = projects.firstIndex(of: project) else { return }
+        let to = from + step
+        guard projects.indices.contains(to) else { return }
+        projects.swapAt(from, to)
+        saveOrder()
+    }
+
+    private func saveOrder() {
+        let ids = projects.map(\.id)
+        Task { await ProjectStore.shared.setOrder(ids) }
     }
 
     /// Adds the project typed in Add Project's alert, and opens it.
