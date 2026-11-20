@@ -241,7 +241,7 @@ struct ProjectFilesView: View {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(filter.isEmpty ? Color.secondary : Color.accentColor)
                 .accessibilityHidden(true)
-            TextField("Filter, like *.cs *.md", text: $filterText)
+            TextField("Filter files", text: $filterText)
                 .font(.body.monospaced())
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
