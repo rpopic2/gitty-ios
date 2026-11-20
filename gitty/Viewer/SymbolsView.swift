@@ -6,7 +6,7 @@ import UIKit
 /// top while you read its code, edge to edge in the raw-text style under it. Tap a title to
 /// collapse or expand it (a file's folds all its symbols); Collapse All (the bar's menu, a
 /// file title's menu, or pinching in) leaves just the titles, like a C header, and Expand All
-/// (or pinching out) brings the code back, keeping your place. Tap the code to open its page,
+/// brings the code back, keeping your place. Tap the code to open its page,
 /// full screen (see `SymbolPager`).
 ///
 /// Equatable, so the bar collapsing or expanding (which redraws the screen around it, several
@@ -81,8 +81,6 @@ struct SymbolsView: View, Equatable {
     @State private var blames = BlameStore()
     /// The list follows the fingers while pinching, like Photos' grid (`PinchScale`).
     @State private var pinchZoom = PinchZoom()
-    /// This pinch has already collapsed or expanded everything (once per pinch).
-    @State private var pinchHandled = false
     /// What's collapsed: the Code level's (shared, saved), or a results page's own.
     let collapsed: CollapsedCodeStore
     /// The list's width, which the code wraps in.
@@ -419,19 +417,22 @@ struct SymbolsView: View, Equatable {
         onShowCommit(found.projectID, found.hunk.commitID)
     }
 
-    /// Pinching zooms out and in through four steps, one per pinch (when it passes the
-    /// threshold): the code; every symbol collapsed to its title (an outline); every file folded
-    /// to its title (grouped by folder); every folder folded to its header. Pinching in (fingers
-    /// together) goes out a step, pinching out back in.
+    /// Pinching in (fingers together) zooms out a step, one per pinch, when the fingers lift past
+    /// the threshold: from the code, to every symbol collapsed to its title (an outline), every
+    /// file folded to its title (grouped by folder), every folder folded to its header. There's
+    /// no pinching back in: unfolding everything at once hung a project as big as Linux, so
+    /// folders and files unfold from their long-press menus and titles.
     private func pinch(_ reader: ScrollViewProxy) -> some Gesture {
         MagnifyGesture()
             .onChanged { value in
-                guard !pinchHandled else { return }
-                pinchZoom.follow(value.magnification, anchor: value.startAnchor)
-                let scope = collapseScope
+                // Spreading doesn't unfold (that could unfold a huge project at once): the list
+                // follows only fingers coming together.
+                pinchZoom.follow(min(value.magnification, 1), anchor: value.startAnchor)
+            }
+            .onEnded { value in
+                // One level, when the fingers lift past the threshold.
                 if value.magnification < 0.8 {
-                    pinchHandled = true
-                    pinchZoom.settle()
+                    let scope = collapseScope
                     if !collapsed.areAllCollapsed(scope: scope) {
                         setAllCollapsed(true, reader)
                     } else if !collapsed.areAllFilesFolded(scope: scope) {
@@ -439,21 +440,8 @@ struct SymbolsView: View, Equatable {
                     } else {
                         withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(true, scope: scope) }
                     }
-                } else if value.magnification > 1.25 {
-                    pinchHandled = true
-                    pinchZoom.settle()
-                    if collapsed.areAllFoldersFolded(scope: scope) {
-                        withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(false, scope: scope) }
-                    } else if collapsed.areAllFilesFolded(scope: scope) {
-                        setAllFilesFolded(false, reader)
-                    } else {
-                        setAllCollapsed(false, reader)
-                    }
                 }
-            }
-            .onEnded { _ in
-                pinchHandled = false
-                pinchZoom.settle()  // let go before the next step: back as it was
+                pinchZoom.settle()  // back as it was
             }
     }
 

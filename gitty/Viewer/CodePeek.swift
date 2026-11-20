@@ -142,7 +142,8 @@ final class PinchZoom {
     private(set) var scale: CGFloat = 1
     private(set) var anchor: UnitPoint = .center
 
-    /// A step happens at 0.8 or 1.25 (see `SymbolsView.pinch`): the list is at 0.9 or 1.12 then.
+    /// A step happens when the fingers lift under 0.8 (see `SymbolsView.pinch`): the list is at
+    /// 0.9 then.
     func follow(_ magnification: CGFloat, anchor: UnitPoint) {
         self.anchor = anchor
         scale = min(max(1 + (magnification - 1) * 0.5, 0.85), 1.15)
