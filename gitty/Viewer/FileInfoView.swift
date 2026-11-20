@@ -14,13 +14,18 @@ struct FileInfoView: View {
 
     /// Open, in place of Done: from the Project tab, where a tap on a file shows this first.
     private let onOpen: (@MainActor () -> Void)?
+    /// Open Whole File: the file's card, stacked, at the symbol this was opened from.
+    private let onOpenWholeFile: (@MainActor () -> Void)?
 
     /// - Parameters:
     ///   - knownSize: its size from the project's file list, for a file that isn't downloaded.
     ///   - onOpen: shows an Open button that opens the file's code.
-    init(url: URL, knownSize: Int? = nil, onOpen: (@MainActor () -> Void)? = nil) {
+    ///   - onOpenWholeFile: shows Open Whole File (from a symbol: its file, stacked).
+    init(url: URL, knownSize: Int? = nil, onOpen: (@MainActor () -> Void)? = nil,
+         onOpenWholeFile: (@MainActor () -> Void)? = nil) {
         _model = State(initialValue: FileInfoModel(url: url, knownSize: knownSize))
         self.onOpen = onOpen
+        self.onOpenWholeFile = onOpenWholeFile
     }
 
     var body: some View {
@@ -77,6 +82,14 @@ struct FileInfoView: View {
                 }
             }
             .padding(.vertical, 2)
+            if let onOpenWholeFile {
+                Button {
+                    dismiss()
+                    onOpenWholeFile()
+                } label: {
+                    Label("Open Whole File", systemImage: "doc.text")
+                }
+            }
             if let webURL = model.location?.webURL {
                 Button {
                     openURL(webURL)

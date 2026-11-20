@@ -52,7 +52,8 @@ struct SymbolsView: View, Equatable {
     /// For the long-press menus' Add to Album (`nil`: the file isn't in a project).
     let albumContext: AlbumMenuContext?
     /// The long-press menu's Show History: a file's info and history.
-    let onShowHistory: (@MainActor (URL) -> Void)?
+    /// Show History: a file's, and the symbol it was asked from (`nil` for a file's title).
+    let onShowHistory: (@MainActor (URL, CodeSymbol?) -> Void)?
     /// A not-downloaded file's title was tapped: download it (its symbols then show).
     let onDownloadFile: (@MainActor (URL) -> Void)?
     /// Files downloading now (their titles show it).
@@ -102,7 +103,7 @@ struct SymbolsView: View, Equatable {
          onBarCollapsedChange: @escaping @MainActor (Bool) -> Void,
          onCloseSearch: (@MainActor () -> Void)? = nil,
          albumContext: AlbumMenuContext? = nil,
-         onShowHistory: (@MainActor (URL) -> Void)? = nil,
+         onShowHistory: (@MainActor (URL, CodeSymbol?) -> Void)? = nil,
          onDownloadFile: (@MainActor (URL) -> Void)? = nil,
          downloadingFiles: Set<URL> = [],
          onOpenURL: (@MainActor (URL) -> Void)? = nil,
@@ -390,7 +391,7 @@ struct SymbolsView: View, Equatable {
     private var cloneForBlame: (@MainActor () -> Void)? {
         guard let onShowHistory else { return nil }
         let file = openFile
-        return { onShowHistory(file) }
+        return { onShowHistory(file, nil) }
     }
 
     /// A tap in the blame (left of the code, while it stays open): that line's commit.
@@ -1151,7 +1152,8 @@ private struct CodeMenu: ViewModifier {
     let openFile: URL
     let albumContext: AlbumMenuContext?
     let onOpen: @MainActor (CodeSymbol) -> Void
-    let onShowHistory: (@MainActor (URL) -> Void)?
+    /// Show History: a file's, and the symbol it was asked from (`nil` for a file's title).
+    let onShowHistory: (@MainActor (URL, CodeSymbol?) -> Void)?
     let onSetFileCollapsed: @MainActor (Bool) -> Void
 
     func body(content: Content) -> some View {
@@ -1159,7 +1161,9 @@ private struct CodeMenu: ViewModifier {
         content.contextMenu {
             Button("Open", systemImage: "arrow.up.left.and.arrow.down.right") { onOpen(symbol) }
             if albumContext != nil, let onShowHistory {
-                Button("Show History", systemImage: "clock.arrow.circlepath") { onShowHistory(file) }
+                Button("Show History", systemImage: "clock.arrow.circlepath") {
+                    onShowHistory(file, symbol.kind == .file ? nil : symbol)
+                }
             }
             if let albumContext {
                 AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext,

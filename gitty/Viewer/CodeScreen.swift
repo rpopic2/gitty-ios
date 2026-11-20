@@ -76,6 +76,8 @@ struct CodeScreen: View {
 
     private struct HistoryFile: Identifiable {
         let url: URL
+        /// The symbol it was asked from (`nil`: a file's title), for Open Whole File.
+        var symbol: CodeSymbol? = nil
         var id: URL { url }
     }
     /// The list hasn't started yet: when `opensAtFile`, it starts at the file's own entry.
@@ -189,7 +191,7 @@ struct CodeScreen: View {
         }
         .sheet(item: $historyFile) { file in
             // All the way up, for the history: it can be pulled down to half.
-            FileInfoView(url: file.url)
+            FileInfoView(url: file.url, onOpenWholeFile: file.symbol.map { symbol in { openWholeFile(from: symbol) } })
                 .presentationDetents([.medium, .large], selection: $historyDetent)
                 .presentationDragIndicator(.visible)
         }
@@ -294,9 +296,9 @@ struct CodeScreen: View {
                 onOpenAt: { openPager(at: $0, anchor: $1) },
                 onBarCollapsedChange: { model.setBarCollapsed($0) },
                 albumContext: albumContext,
-                onShowHistory: {
+                onShowHistory: { url, symbol in
                     historyDetent = .large
-                    historyFile = HistoryFile(url: $0)
+                    historyFile = HistoryFile(url: url, symbol: symbol)
                 },
                 onDownloadFile: { model.download(file: $0) },
                 downloadingFiles: model.downloadingFiles,
@@ -356,6 +358,7 @@ struct CodeScreen: View {
             symbolSearchTerm: { symbolSearchTerm(forSelection: $0) },
             onSearchSymbols: { searchInStack(for: $0, from: route) },
             onFindOccurrences: { findOccurrences(of: $0, from: route) },
+            onOpenWholeFile: { openWholeFile(from: $0) },
             pageAnchors: card.pageAnchors,
             // The page shows the symbol's own text, which starts where the symbol does.
             onComment: { symbol, range in
@@ -439,9 +442,9 @@ struct CodeScreen: View {
             onOpenAt: { openStackedCard(at: $0, anchor: $1, from: search) },
             onBarCollapsedChange: bar.setHidden,
             albumContext: albumContext,
-            onShowHistory: {
+            onShowHistory: { url, symbol in
                 historyDetent = .large
-                historyFile = HistoryFile(url: $0)
+                historyFile = HistoryFile(url: url, symbol: symbol)
             },
             onDownloadFile: { model.download(file: $0) },
             downloadingFiles: model.downloadingFiles,
@@ -546,6 +549,21 @@ struct CodeScreen: View {
         return ["https://", "http://"].contains { $0.hasPrefix(lower) || lower.hasPrefix($0) }
     }
 
+    /// Open Whole File (a symbol's details): its file's card on top of the stack (the first, from
+    /// the Code level), opened at the symbol.
+    private func openWholeFile(from symbol: CodeSymbol) {
+        let file = symbol.fileURL ?? model.url
+        guard let entry = indexedSymbols.first(where: { $0.kind == .file && ($0.fileURL ?? model.url) == file })
+        else { return }
+        pruneStack()
+        let id = UUID()
+        stackedCards[id] = StackedCard(symbols: [entry], initialID: entry.id,
+                                       anchor: PageAnchor(line: max(0, symbol.line - 1), screenY: 160),
+                                       zoomSource: cardPath.last.map { AnyHashable($0) } ?? Self.screenSourceID,
+                                       depth: cardPath.count + 1)
+        cardPath.append(.card(id))
+    }
+
     /// Search on a card: its results go on top of it. Older results pages stay where they are,
     /// keeping only their query.
     private func searchInStack(for query: String, from card: CardRoute) {
@@ -625,9 +643,9 @@ struct CodeScreen: View {
                 onOpenAt: { openOccurrence($0, anchor: $1, in: search, route: route) },
                 onBarCollapsedChange: bar.setHidden,
                 albumContext: albumContext,
-                onShowHistory: {
+                onShowHistory: { url, symbol in
                     historyDetent = .large
-                    historyFile = HistoryFile(url: $0)
+                    historyFile = HistoryFile(url: url, symbol: symbol)
                 },
                 downloadingFiles: model.downloadingFiles,
                 collapsed: search.collapsed

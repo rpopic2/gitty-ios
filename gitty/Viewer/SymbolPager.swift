@@ -32,6 +32,8 @@ struct SymbolPager: View {
     /// Occurrences in a page's text menu: where the selection is used, on a page stacked over
     /// this one.
     let onFindOccurrences: (@MainActor (OccurrenceTerm) -> Void)?
+    /// Open Whole File in a page's details: the symbol's file, stacked, at the symbol.
+    let onOpenWholeFile: (@MainActor (CodeSymbol) -> Void)?
     /// Where pages other than the first open (a symbol's id: the line, and where it goes on
     /// screen), like `initialAnchor` for the first: an occurrence's line.
     let pageAnchors: [Int: PageAnchor]
@@ -73,6 +75,7 @@ struct SymbolPager: View {
          symbolSearchTerm: @escaping @MainActor (String) -> String?,
          onSearchSymbols: @escaping @MainActor (String) -> Void,
          onFindOccurrences: (@MainActor (OccurrenceTerm) -> Void)? = nil,
+         onOpenWholeFile: (@MainActor (CodeSymbol) -> Void)? = nil,
          pageAnchors: [Int: PageAnchor] = [:],
          onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void,
          firstLine: @escaping @MainActor (CodeSymbol) -> Int,
@@ -90,6 +93,7 @@ struct SymbolPager: View {
         self.symbolSearchTerm = symbolSearchTerm
         self.onSearchSymbols = onSearchSymbols
         self.onFindOccurrences = onFindOccurrences
+        self.onOpenWholeFile = onOpenWholeFile
         self.pageAnchors = pageAnchors
         self.onComment = onComment
         self.firstLine = firstLine
@@ -195,7 +199,9 @@ struct SymbolPager: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(item: $infoFile) { file in
-            FileInfoView(url: file.url)
+            FileInfoView(url: file.url, onOpenWholeFile: file.symbol.flatMap { symbol in
+                onOpenWholeFile.map { open in { open(symbol) } }
+            })
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -213,7 +219,8 @@ struct SymbolPager: View {
     /// Tapping a page's caption: the info panel of its file.
     private func infoAction(for symbol: CodeSymbol) -> @MainActor () -> Void {
         let url = symbol.fileURL ?? openFile
-        return { infoFile = InfoFile(url: url) }
+        let from = symbol.kind == .file ? nil : symbol
+        return { infoFile = InfoFile(url: url, symbol: from) }
     }
 
     private func pageAlbumMenu(for symbol: CodeSymbol) -> (@MainActor (NSRange) -> UIMenu?)? {
@@ -288,6 +295,8 @@ final class PageTextView: UIView {
 /// A file whose info panel is open.
 private struct InfoFile: Identifiable {
     let url: URL
+    /// The symbol it was opened from (`nil`: a file's own page), for Open Whole File.
+    let symbol: CodeSymbol?
     var id: URL { url }
 }
 
@@ -517,14 +526,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.textChanged()
         coordinator.updateHighlight(in: textView)
         textView.contentOffset.y = -contentInset.top
-        if let positionURL, let position = keep ?? positionStore.position(for: positionURL) {
-            // Once the page has its size, so the lines are where they'll be.
-            Task { @MainActor [weak textView] in
-                guard let textView else { return }
-                textView.layoutIfNeeded()
-                coordinator.restore(position, in: textView)
-            }
-        } else if let startAnchor, !coordinator.didApplyStart, text.length > 0 {
+        // A place to open at (the first text only) goes before a file page's saved one: Open
+        // Whole File opens the file at the symbol it came from.
+        if keep == nil, let startAnchor, !coordinator.didApplyStart, text.length > 0 {
             coordinator.didApplyStart = true
             Task { @MainActor [weak textView] in
                 // Once the page has its width, so the lines wrap where they'll stay.
@@ -532,6 +536,13 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 guard let textView else { return }
                 textView.layoutIfNeeded()
                 coordinator.scroll(to: startAnchor, in: textView)
+            }
+        } else if let positionURL, let position = keep ?? positionStore.position(for: positionURL) {
+            // Once the page has its size, so the lines are where they'll be.
+            Task { @MainActor [weak textView] in
+                guard let textView else { return }
+                textView.layoutIfNeeded()
+                coordinator.restore(position, in: textView)
             }
         }
     }
