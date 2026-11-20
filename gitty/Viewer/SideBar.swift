@@ -321,9 +321,47 @@ struct SideBarView: View {
         }
     }
 
+    /// The code's font, size and colors, with a preview.
+    private var codeSection: some View {
+        Section("Code") {
+            HStack(spacing: 8) {
+                Picker("Font", selection: $codeFont) {
+                    ForEach(CodeFont.allCases, id: \.self) { font in
+                        Text(font.title).tag(font)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                Spacer(minLength: 4)
+                Text("\(Int(codeFontSize)) pt")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Stepper("Size", value: $codeFontSize, in: CodeTextStyle.sizes, step: 1)
+                    .labelsHidden()
+            }
+            .optionRow()
+            Picker("Colors", selection: $syntaxTheme) {
+                ForEach(SyntaxTheme.allCases, id: \.self) { theme in
+                    Text(theme.title).tag(theme)
+                }
+            }
+            .optionRow()
+            // How code looks in the chosen font, size and colors.
+            Text(SyntaxColoring.shared.attributed("int main(void) { return 0; } // hi",
+                                                  fileExtension: "c", theme: syntaxTheme))
+                .font(CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize)).swiftUIFont)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .accessibilityHidden(true)
+                .optionRow()
+        }
+    }
+
     /// TEMPORARY, finding the sidebar's lag: Files and Projects (and loading the projects when
     /// it opens) are left out while this is false. Set it back to true to restore them.
     private static let showsProjects = false
+    /// TEMPORARY, finding the sidebar's lag: the Code section is left out while this is false.
+    private static let showsCode = false
 
     var body: some View {
         List {
@@ -331,37 +369,8 @@ struct SideBarView: View {
                 filesAndProjects
             }
             // Options: denser rows than the lists above.
-            Section("Code") {
-                HStack(spacing: 8) {
-                    Picker("Font", selection: $codeFont) {
-                        ForEach(CodeFont.allCases, id: \.self) { font in
-                            Text(font.title).tag(font)
-                        }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
-                    Spacer(minLength: 4)
-                    Text("\(Int(codeFontSize)) pt")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                    Stepper("Size", value: $codeFontSize, in: CodeTextStyle.sizes, step: 1)
-                        .labelsHidden()
-                }
-                .optionRow()
-                Picker("Colors", selection: $syntaxTheme) {
-                    ForEach(SyntaxTheme.allCases, id: \.self) { theme in
-                        Text(theme.title).tag(theme)
-                    }
-                }
-                .optionRow()
-                // How code looks in the chosen font, size and colors.
-                Text(SyntaxColoring.shared.attributed("int main(void) { return 0; } // hi",
-                                                      fileExtension: "c", theme: syntaxTheme))
-                    .font(CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize)).swiftUIFont)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                    .accessibilityHidden(true)
-                    .optionRow()
+            if Self.showsCode {
+                codeSection
             }
             Section {
                 Picker("Comments", selection: $reviewFormat) {
