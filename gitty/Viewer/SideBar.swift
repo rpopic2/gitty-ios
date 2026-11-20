@@ -359,7 +359,7 @@ struct SideBarView: View {
 
     /// TEMPORARY, finding the sidebar's lag: Files and Projects (and loading the projects when
     /// it opens) are left out while this is false. Set it back to true to restore them.
-    private static let showsProjects = false
+    private static let showsProjects = true
     /// TEMPORARY, finding the sidebar's lag: the Code section is left out while this is false.
     private static let showsCode = false
 
