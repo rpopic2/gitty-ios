@@ -268,55 +268,67 @@ struct SideBarView: View {
         self.onSettings = onSettings
     }
 
-    var body: some View {
-        List {
-            Section {
-                item(isSelected: isSelected("")) { onSelect("") } label: {
-                    Label("Files", systemImage: "doc.on.doc")
+    /// Files, then your projects (hold one to drag it) and Add Project.
+    @ViewBuilder
+    private var filesAndProjects: some View {
+        Section {
+            item(isSelected: isSelected("")) { onSelect("") } label: {
+                Label("Files", systemImage: "doc.on.doc")
+            }
+        }
+        Section {
+            ForEach(projects) { project in
+                item(isSelected: isSelected(project.id)) { onSelect(project.id) } label: {
+                    SideBarProjectRow(project: project, isDownloading: GitDownloads.shared.active.contains(project.id))
+                }
+                .swipeActions {
+                    Button(role: .destructive) { delete(project) } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+                .accessibilityAction(named: "Move Up") { move(project, by: -1) }
+                .accessibilityAction(named: "Move Down") { move(project, by: 1) }
+            }
+            // Hold a project and drag it.
+            .onMove { from, to in
+                projects.move(fromOffsets: from, toOffset: to)
+                saveOrder()
+            }
+            Button {
+                newProjectAddress = ""
+                isAddingProject = true
+            } label: {
+                Label {
+                    // As tall as a project's row (name, then owner · branch), centered.
+                    ZStack(alignment: .leading) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: " ")
+                            Text(verbatim: " ").font(.caption)
+                        }
+                        .hidden()
+                        Text("Add Project")
+                    }
+                } icon: {
+                    Image(systemName: "plus")
                 }
             }
-            Section {
-                ForEach(projects) { project in
-                    item(isSelected: isSelected(project.id)) { onSelect(project.id) } label: {
-                        SideBarProjectRow(project: project, isDownloading: GitDownloads.shared.active.contains(project.id))
-                    }
-                    .swipeActions {
-                        Button(role: .destructive) { delete(project) } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                    .accessibilityAction(named: "Move Up") { move(project, by: -1) }
-                    .accessibilityAction(named: "Move Down") { move(project, by: 1) }
-                }
-                // Hold a project and drag it.
-                .onMove { from, to in
-                    projects.move(fromOffsets: from, toOffset: to)
-                    saveOrder()
-                }
-                Button {
-                    newProjectAddress = ""
-                    isAddingProject = true
-                } label: {
-                    Label {
-                        // As tall as a project's row (name, then owner · branch), centered.
-                        ZStack(alignment: .leading) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(verbatim: " ")
-                                Text(verbatim: " ").font(.caption)
-                            }
-                            .hidden()
-                            Text("Add Project")
-                        }
-                    } icon: {
-                        Image(systemName: "plus")
-                    }
-                }
-            } header: {
-                Text("Projects")
-            } footer: {
-                if projects.isEmpty {
-                    Text("A project is a GitHub repository, or a folder of one.")
-                }
+        } header: {
+            Text("Projects")
+        } footer: {
+            if projects.isEmpty {
+                Text("A project is a GitHub repository, or a folder of one.")
+            }
+        }
+    }
+
+    /// TEMPORARY, finding the sidebar's lag: Files and Projects (and loading the projects when
+    /// it opens) are left out while this is false. Set it back to true to restore them.
+    private static let showsProjects = false
+
+    var body: some View {
+        List {
+            if Self.showsProjects {
+                filesAndProjects
             }
             // Options: denser rows than the lists above.
             Section("Code") {
@@ -384,7 +396,7 @@ struct SideBarView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .scrollDisabled(!(state?.isOpen ?? true))  // off screen: leaves status-bar taps alone
         .task(id: state?.isOpen ?? true) {  // each time it opens
-            if state?.isOpen ?? true { projects = await ProjectStore.shared.projects() }
+            if Self.showsProjects, state?.isOpen ?? true { projects = await ProjectStore.shared.projects() }
         }
     }
 
