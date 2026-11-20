@@ -300,8 +300,8 @@ nonisolated enum SymbolSearch {
         guard !query.text.isEmpty else { return names }
         var ranked: [(name: String, rank: Int, index: Int)] = []
         for (index, name) in names.enumerated() {
-            guard let rank = rank(query, Index.Entry(name, separator: separator)) else { continue }
-            ranked.append((name: name, rank: rank, index: index))
+            guard let score = rank(query, Index.Entry(name, separator: separator)) else { continue }
+            ranked.append((name: name, rank: score, index: index))
         }
         ranked.sort { a, b in a.rank != b.rank ? a.rank < b.rank : a.index < b.index }
         return ranked.map { $0.name }
