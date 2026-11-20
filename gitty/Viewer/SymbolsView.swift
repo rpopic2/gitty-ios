@@ -382,7 +382,7 @@ struct SymbolsView: View, Equatable {
                    })
     }
 
-    /// - Parameter indent: steps in, in line with its folder's header inside a group.
+    /// - Parameter indent: steps in, one step in from its folder's header inside a group.
     private func header(for symbol: CodeSymbol, indent: Int = 0) -> some View {
         CodeHeader(symbol: symbol, collapsed: collapsed, blocks: codeBlocks, peek: peek, openFile: openFile,
                    scope: collapseScope, indent: indent,
@@ -790,7 +790,7 @@ private struct FolderRows {
     struct Item: Identifiable {
         enum Content {
             case header(Header)
-            /// `indent`: its folder's (inside a group), for its title.
+            /// `indent`: one step in from its folder's header (inside a group), for its title.
             case symbol(CodeSymbol, indent: Int)
         }
 
@@ -813,15 +813,17 @@ private struct FolderRows {
             let hash = UInt(bitPattern: header.key.hashValue) >> 1
             items.append(Item(id: -1 - Int(hash), content: .header(header)))
         }
-        func add(_ group: FolderGroup, label: String, indent: Int) {
+        /// `fileIndent`: its files', one step in from its header inside a group (0 outside).
+        func add(_ group: FolderGroup, label: String, indent: Int, fileIndent: Int? = nil) {
             add(.folder(group, label: label, indent: indent))
             guard !isFolded(group) else { return }
+            let fileIndent = fileIndent ?? indent + 1
             for symbol in group.symbols where isShown(symbol) {
-                items.append(Item(id: symbol.id, content: .symbol(symbol, indent: indent)))
+                items.append(Item(id: symbol.id, content: .symbol(symbol, indent: fileIndent)))
             }
         }
         guard let tree, tree.root.isGroup else {
-            for group in groups { add(group, label: group.path, indent: 0) }
+            for group in groups { add(group, label: group.path, indent: 0, fileIndent: 0) }
             return
         }
         func relative(_ path: String, to base: String) -> String {
