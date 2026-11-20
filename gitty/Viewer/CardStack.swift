@@ -137,7 +137,7 @@ struct StackResultsView<Results: View>: View {
     /// the count is what's there.
     let shownCount: @MainActor ([CodeSymbol]) -> Int
     /// The list, for the results so far and their query.
-    @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String, _ onScrollDown: @escaping @MainActor (Bool) -> Void) -> Results
+    @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String, _ bar: ResultsBar) -> Results
 
     @State private var isEditing: Bool
     /// Scrolling down hides the capsule; scrolling up shows it.
@@ -151,7 +151,7 @@ struct StackResultsView<Results: View>: View {
     init(search: StackSearch, stackDepth: Int, stackActions: StackActions?,
          shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
          @ViewBuilder list: @escaping (_ symbols: [CodeSymbol], _ query: String,
-                                       _ onScrollDown: @escaping @MainActor (Bool) -> Void) -> Results) {
+                                       _ bar: ResultsBar) -> Results) {
         self.search = search
         self.stackDepth = stackDepth
         self.stackActions = stackActions
@@ -210,7 +210,7 @@ struct StackResultsView<Results: View>: View {
             Color(uiColor: .systemGroupedBackground)  // waiting for the first letters
         } else {
             SearchResultsContent(search: search) { symbols, query in
-                list(symbols, query) { isBarHidden = $0 }
+                list(symbols, query, ResultsBar(isHidden: { isBarHidden }, setHidden: { isBarHidden = $0 }))
             }
         }
     }
@@ -265,6 +265,16 @@ struct StackResultsView<Results: View>: View {
         }
         .padding(.horizontal, 24)
     }
+}
+
+/// The capsule under a results list, for the list's scrolling: scrolling down hides it, up shows
+/// it. The list asks whether it's hidden now, so it knows to show it again.
+struct ResultsBar {
+    let isHidden: @MainActor () -> Bool
+    let setHidden: @MainActor (Bool) -> Void
+
+    /// For results with nothing to hide.
+    static let none = ResultsBar(isHidden: { false }, setHidden: { _ in })
 }
 
 /// A search's results so far, as a list (`list`): a spinner until the first come, and No

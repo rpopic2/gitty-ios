@@ -227,7 +227,7 @@ struct CodeScreen: View {
             // Typing in the bar's field: the results, in place of Project.
             if mode == .project, let search = browseSearch {
                 SearchResultsContent(search: search) { symbols, query in
-                    resultsList(search, symbols: symbols, query: query, onScrollDown: { _ in })
+                    resultsList(search, symbols: symbols, query: query, bar: .none)
                 }
             }
         }
@@ -423,14 +423,14 @@ struct CodeScreen: View {
                                 stackActions: stackActions,
                                 shownCount: { results in
                                     results.filter { !search.collapsed.isHidden($0, openFile: openFile, scope: scope) }.count
-                                }) { symbols, query, onScrollDown in
-            resultsList(search, symbols: symbols, query: query, onScrollDown: onScrollDown)
+                                }) { symbols, query, bar in
+            resultsList(search, symbols: symbols, query: query, bar: bar)
         }
     }
 
     /// A search's results as code blocks, like the Code level's: tap one for its card.
     private func resultsList(_ search: StackSearch, symbols: [CodeSymbol], query: String,
-                             onScrollDown: @escaping @MainActor (Bool) -> Void) -> some View {
+                             bar: ResultsBar) -> some View {
         SymbolsView(
             symbols: symbols,
             query: query,
@@ -439,14 +439,16 @@ struct CodeScreen: View {
             scrollRequest: nil,
             collapseRequest: nil,
             onCenteredSymbolChange: { _ in },
-            isBarCollapsed: { false },
+            // Whether the capsule is hidden now: without it, the list thought it never was, so
+            // scrolling up never brought it back.
+            isBarCollapsed: bar.isHidden,
             barTapCount: 0,
             openFile: model.url,
             collapseScope: model.collapseScope,
             rootFolderName: model.symbolsProjectTitle ?? model.fileName,
             onOpen: { openStackedCard(at: $0, anchor: nil, from: search) },
             onOpenAt: { openStackedCard(at: $0, anchor: $1, from: search) },
-            onBarCollapsedChange: onScrollDown,
+            onBarCollapsedChange: bar.setHidden,
             albumContext: albumContext,
             onShowHistory: {
                 historyDetent = .large
