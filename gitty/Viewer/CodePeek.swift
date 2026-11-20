@@ -18,6 +18,8 @@ final class CodePeek {
     private(set) var isLocked = false
     /// Room for the numbers.
     static let width: CGFloat = 56
+    /// Between a number and its line.
+    static let numberGap: CGFloat = 14
     /// Room for the blame, left of the numbers.
     static let blameWidth: CGFloat = 132
     static var fullWidth: CGFloat { width + blameWidth }

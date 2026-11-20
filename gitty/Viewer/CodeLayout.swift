@@ -385,6 +385,6 @@ final class CodeLineNumbersView: UIView {
 
     override func draw(_ rect: CGRect) {
         guard let layout, let context = UIGraphicsGetCurrentContext() else { return }
-        layout.drawNumbers(in: context, right: bounds.width - 8, firstFileLine: firstFileLine)
+        layout.drawNumbers(in: context, right: bounds.width - CodePeek.numberGap, firstFileLine: firstFileLine)
     }
 }

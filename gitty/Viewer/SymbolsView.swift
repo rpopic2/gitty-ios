@@ -543,9 +543,14 @@ private struct CodeHeader: View {
                         FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed,
                                   isDownloaded: symbol.isDownloaded, isDownloading: isDownloading)
                     } else {
+                        // Collapsed, the title has its line's number. Otherwise the code draws it,
+                        // above its first line, so it scrolls away with the code instead of staying
+                        // with the title pinned at the top (over the code's numbers).
                         SymbolTitle(symbol: symbol, isCollapsed: isCollapsed, canCollapse: canCollapse(isCollapsed),
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension)
-                            .overlay(alignment: .leading) { PeekLineNumber(peek: peek, line: symbol.line) }
+                            .overlay(alignment: .leading) {
+                                if isCollapsed { PeekLineNumber(peek: peek, line: symbol.line) }
+                            }
                     }
                 }
                 .buttonStyle(.plain)
@@ -763,8 +768,8 @@ private struct PeekLineNumber: View {
                 .foregroundStyle(Color(uiColor: .secondaryLabel))
                 .lineLimit(1)
                 .frame(width: width, alignment: .trailing)
-                // The code's numbers end 8 points left of the code, which starts at the inset.
-                .offset(x: RawTextStyle.insets.left - 8 - width)
+                // Where the code's numbers end: a little left of the code, which starts at the inset.
+                .offset(x: RawTextStyle.insets.left - CodePeek.numberGap - width)
                 .accessibilityHidden(true)
         }
     }
@@ -774,6 +779,9 @@ private struct PeekLineNumber: View {
 /// symbol's declaration, in the code font and colors, like a line of a C header (its code under
 /// it starts after that line), or a file's name, before its symbols.
 private struct SymbolTitle: View {
+    /// A symbol's title's height with its declaration on one line.
+    static let minHeight: CGFloat = 28
+
     let symbol: CodeSymbol
     let isCollapsed: Bool
     /// There's code under it: a one-line symbol has no chevron (there's nothing to collapse).
@@ -808,7 +816,7 @@ private struct SymbolTitle: View {
         .padding(.leading, RawTextStyle.insets.left)
         .padding(.trailing, 12)
         .padding(.vertical, 4)
-        .frame(minHeight: symbol.kind == .file ? 36 : 28)
+        .frame(minHeight: symbol.kind == .file ? 36 : Self.minHeight)
         .background(.bar)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -1233,6 +1241,12 @@ private struct SymbolCodeText: View {
             // Laid out again for another width, font, colors or appearance.
             .task(id: layoutKey) {
                 if let layoutKey { block.prepare(for: layoutKey, isVisible: true) }
+            }
+            // The title's number, just above the first line: it scrolls with the code (the title
+            // stays pinned at the top), level with the title in its row.
+            .overlay(alignment: .topLeading) {
+                PeekLineNumber(peek: peek, line: block.symbol.line)
+                    .alignmentGuide(.top) { $0[.bottom] + SymbolTitle.minHeight / 2 - $0.height / 2 }
             }
             // The blame, the first time it shows for this file.
             .task(id: peek.isBlameShown) {
