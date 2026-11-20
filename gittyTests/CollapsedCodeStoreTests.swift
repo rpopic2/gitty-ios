@@ -19,6 +19,26 @@ struct CollapsedCodeStoreTests {
         return (CollapsedCodeStore(defaults: defaults), defaults)
     }
 
+    @Test func aNewProjectStartsWithItsFoldersFoldedOnce() throws {
+        let (store, defaults) = try store()
+        store.startFolded(scope: scope)
+        #expect(store.areAllFilesFolded(scope: scope))
+        #expect(store.areAllFoldersFolded(scope: scope))
+        // Unfolded since: shown again, it stays as it was left.
+        store.setAllFoldersFolded(false, scope: scope)
+        let reopened = CollapsedCodeStore(defaults: defaults)
+        reopened.startFolded(scope: scope)
+        #expect(!reopened.areAllFoldersFolded(scope: scope))
+    }
+
+    @Test func aProjectWithFoldsFromBeforeKeepsThem() throws {
+        let (store, _) = try store()
+        store.setAllCollapsed(true, scope: scope)  // Collapse All, before scopes were kept
+        store.startFolded(scope: scope)
+        #expect(!store.areAllFoldersFolded(scope: scope))
+        #expect(store.areAllCollapsed(scope: scope))
+    }
+
     @Test func aSymbolStaysCollapsedWhereverItMovesAndIsSaved() throws {
         let (store, defaults) = try store()
         store.toggle(symbol("main"), openFile: open, scope: scope)

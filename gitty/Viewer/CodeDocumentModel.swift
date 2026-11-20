@@ -77,7 +77,33 @@ final class CodeDocumentModel {
     /// The open file's own entry in the list, before its symbols.
     @ObservationIgnored private var ownFileEntry: CodeSymbol?
     @ObservationIgnored private var otherFiles: [ProjectSymbolIndex.FileSymbols] = []
+    /// Each of `otherFiles`' place, by its URL.
+    @ObservationIgnored private var otherFilePlaces: [URL: Int] = [:]
+    /// Files found not to be text while indexing: left out of the list.
+    @ObservationIgnored private var notTextFiles: Set<URL> = []
     @ObservationIgnored private var isLoadingProjectSymbols = false
+    /// The project's files whose symbols aren't known yet, in path order (`nextPending` goes
+    /// through them), and those asked for first (their titles came on screen).
+    @ObservationIgnored private var pendingFiles: [URL] = []
+    @ObservationIgnored private var pendingSet: Set<URL> = []
+    @ObservationIgnored private var nextPending = 0
+    @ObservationIgnored private var priorityFiles: [URL] = []
+    @ObservationIgnored private var indexingTask: Task<Void, Never>?
+    @ObservationIgnored private var indexingProject: ProjectInfo?
+    @ObservationIgnored private var lastSearchPrepare = ContinuousClock.now - .seconds(60)
+    /// Symbols kept for the whole project at most, read in the background: past it, only the
+    /// files that show are read (a project as big as Linux has millions).
+    static let backgroundSymbolLimit = 400_000
+
+    /// How far reading the project's symbols has got, while it goes on (or has stopped at
+    /// `backgroundSymbolLimit`): for search, which finds only what's been read.
+    struct IndexingProgress: Equatable {
+        let done: Int
+        let total: Int
+        /// Stopped at the limit: the rest are read as they show.
+        let isPaused: Bool
+    }
+    private(set) var indexingProgress: IndexingProgress?
     /// The symbols' names, prepared for searching (built in the background for each new list).
     @ObservationIgnored private var searchIndex: SymbolSearch.Index?
     @ObservationIgnored private var indexTask: Task<Void, Never>?
@@ -248,23 +274,123 @@ final class CodeDocumentModel {
                 return
             }
             if let project {
-                let saved = await ProjectSymbolIndex.shared.symbols(in: project, excluding: url, matching: filter)
+                // Every file at once, its symbols if they're known: the rest are read after.
+                CollapsedCodeStore.shared.startFolded(scope: collapseScope)
+                let listing = await ProjectSymbolIndex.shared.listing(in: project, excluding: url, matching: filter)
                 let listed = (try? await ProjectStore.shared.tree(for: project.id))?.1
                 let own = url
                 otherFiles = await Task.detached(priority: .userInitiated) {
-                    Self.merging(saved, notDownloadedFrom: listed, of: project, matching: filter, excluding: own)
+                    Self.merging(listing.files, notDownloadedFrom: listed, of: project, matching: filter, excluding: own)
                 }.value
+                otherFilePlaces = Dictionary(otherFiles.enumerated().map { ($1.url, $0) }, uniquingKeysWith: { first, _ in first })
+                notTextFiles = []
+                pendingFiles = otherFiles.filter { !$0.file.isIndexed || listing.stale.contains($0.url) }.map(\.url)
+                pendingSet = Set(pendingFiles)
+                nextPending = 0
+                priorityFiles = []
+                indexingProject = project
+            } else {
+                indexingProject = nil
+                pendingFiles = []
+                pendingSet = []
             }
             loadedFilter = filter
             isLoadingProjectSymbols = false
             projectSymbolsLoaded = true
             publishSymbols()
+            startIndexing()
             if reloadsProjectSymbols {
                 reloadsProjectSymbols = false
                 loadedFilter = nil
                 loadProjectSymbols()
             }
         }
+    }
+
+    /// A file's title came on screen before its symbols were known: read it next.
+    func needsSymbols(of file: URL) {
+        guard pendingSet.contains(file), !priorityFiles.contains(file) else { return }
+        priorityFiles.append(file)
+        if indexingTask == nil { startIndexing() }
+    }
+
+    /// Reads the files whose symbols aren't known, a batch at a time: those on screen first,
+    /// then the rest in path order (up to `backgroundSymbolLimit`). The list is published
+    /// again now and then, not for every batch (each time builds the whole list).
+    private func startIndexing() {
+        indexingTask?.cancel()
+        indexingTask = nil
+        guard let project = indexingProject, !pendingSet.isEmpty else {
+            indexingProgress = nil
+            return
+        }
+        indexingTask = Task {
+            var lastPublish = ContinuousClock.now
+            var symbolCount = otherFiles.reduce(0) { $0 + $1.symbols.count }
+            var paused = false
+            while !Task.isCancelled {
+                let isPriority = !priorityFiles.isEmpty
+                let batch: [URL]
+                if isPriority {
+                    batch = Array(priorityFiles.prefix(24))
+                    priorityFiles.removeFirst(batch.count)
+                } else if symbolCount < Self.backgroundSymbolLimit {
+                    batch = takePending(48)
+                } else {
+                    paused = true
+                    break
+                }
+                guard !batch.isEmpty else { break }
+                let results = await ProjectSymbolIndex.shared.index(batch, in: project)
+                guard !Task.isCancelled else {
+                    await ProjectSymbolIndex.shared.saveIndex()
+                    return
+                }
+                for result in results {
+                    switch result {
+                    case .indexed(let file):
+                        guard let place = otherFilePlaces[file.url] else { continue }
+                        otherFiles[place] = file
+                        symbolCount += file.symbols.count
+                        pendingSet.remove(file.url)
+                    case .notText(let file):
+                        notTextFiles.insert(file)
+                        pendingSet.remove(file)
+                    }
+                }
+                for file in batch { pendingSet.remove(file) }  // gone, or unreadable
+                updateIndexingProgress(paused: false)
+                // Files on screen soon after they show; the rest every second and a half.
+                let interval: Duration = isPriority ? .milliseconds(300) : .milliseconds(1500)
+                if ContinuousClock.now - lastPublish > interval {
+                    publishSymbols()
+                    lastPublish = .now
+                }
+            }
+            await ProjectSymbolIndex.shared.saveIndex()
+            guard !Task.isCancelled else { return }
+            indexingTask = nil
+            publishSymbols()
+            updateIndexingProgress(paused: paused)
+        }
+    }
+
+    /// The next files in path order whose symbols still aren't known.
+    private func takePending(_ count: Int) -> [URL] {
+        var batch: [URL] = []
+        while batch.count < count, nextPending < pendingFiles.count {
+            let file = pendingFiles[nextPending]
+            nextPending += 1
+            if pendingSet.contains(file) { batch.append(file) }
+        }
+        return batch
+    }
+
+    private func updateIndexingProgress(paused: Bool) {
+        let total = otherFiles.count - notTextFiles.count
+        let progress = pendingSet.isEmpty ? nil
+            : IndexingProgress(done: max(0, total - pendingSet.count), total: total, isPaused: paused)
+        if progress != indexingProgress { indexingProgress = progress }
     }
 
     /// Asked for while loading: load again after.
@@ -278,7 +404,7 @@ final class CodeDocumentModel {
         guard let tree else { return saved }
         let known = Set(saved.map(\.url)).union([own])
         let missing = tree.files(under: project.folder ?? "", matching: filter).compactMap { entry -> ProjectSymbolIndex.FileSymbols? in
-            guard !isNeverText(entry.path), let url = project.rawURL(for: entry.path), !known.contains(url) else { return nil }
+            guard !ProjectSymbolIndex.isNeverText(entry.path), let url = project.rawURL(for: entry.path), !known.contains(url) else { return nil }
             let name = (entry.path as NSString).lastPathComponent
             let title = CodeSymbol(id: 0, name: name, kind: .file, range: NSRange(location: 0, length: 0), line: 1,
                                    preview: "", fileURL: url, isDownloaded: false)
@@ -288,15 +414,6 @@ final class CodeDocumentModel {
         return (saved + missing).sorted {
             $0.url.absoluteString.localizedStandardCompare($1.url.absoluteString) == .orderedAscending
         }
-    }
-
-    /// Files that are never text, by their extension (images, archives, fonts, media…).
-    nonisolated static func isNeverText(_ path: String) -> Bool {
-        let neverText: Set<String> = ["png", "jpg", "jpeg", "gif", "bmp", "ico", "icns", "webp", "tif", "tiff", "heic",
-                                      "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "jar", "a", "o", "so",
-                                      "dylib", "dll", "exe", "bin", "class", "woff", "woff2", "ttf", "otf", "mp3",
-                                      "mp4", "mov", "wav", "m4a", "aac", "psd", "sketch", "car", "pbxuser"]
-        return neverText.contains((path as NSString).pathExtension.lowercased())
     }
 
     /// Files being downloaded from their title at the Code level.
@@ -339,6 +456,7 @@ final class CodeDocumentModel {
         }
         for (index, file) in otherFiles.enumerated() {
             if index == ownPlace { appendOwn() }
+            if !notTextFiles.isEmpty, notTextFiles.contains(file.url) { continue }
             combined.append(file.file.moved(to: combined.count, file: file.url))
             for symbol in file.symbols {
                 combined.append(symbol.moved(to: combined.count, file: file.url))
@@ -346,7 +464,12 @@ final class CodeDocumentModel {
         }
         if ownPlace == otherFiles.count { appendOwn() }
         symbolIndex = .ready(combined)
-        prepareSearch(for: combined)
+        // Building the search index takes a while for a big project: while its files are
+        // being read, not for every new list.
+        if indexingTask == nil || ContinuousClock.now - lastSearchPrepare > .seconds(6) {
+            lastSearchPrepare = .now
+            prepareSearch(for: combined)
+        }
         publishAlbum()
         indexAlbumFilesIfNeeded()
     }
@@ -438,8 +561,10 @@ final class CodeDocumentModel {
     /// The text of one symbol, styled like the file. `nil` while another file's text is loading.
     /// A file's own entry gets the file's text object itself, the same one until it's refreshed.
     func text(of symbol: CodeSymbol) -> NSAttributedString? {
-        guard let full = fullText(of: symbol.fileURL), NSMaxRange(symbol.range) <= full.length else { return nil }
-        if symbol.range == NSRange(location: 0, length: full.length) { return full }
+        guard let full = fullText(of: symbol.fileURL) else { return nil }
+        // A file's entry is the whole file (one not indexed yet doesn't know its length).
+        if symbol.kind == .file || symbol.range == NSRange(location: 0, length: full.length) { return full }
+        guard NSMaxRange(symbol.range) <= full.length else { return nil }
         return full.attributedSubstring(from: symbol.range)
     }
 

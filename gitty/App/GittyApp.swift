@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct GittyApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+
     init() {
         CodeTextStyle.registerBundledFonts()  // JetBrains Mono, for the code font option
         _ = NetworkCost.shared  // watching the network from the start, so it's known when asked
@@ -11,6 +13,10 @@ struct GittyApp: App {
         WindowGroup {
             BrowserView()  // has its own NavigationStack (project folders, symbol pages)
                 .task { await CloneStore.shared.restoreAllFiles() }  // clones of filtered files only, from before
+                // What's been read of a project's symbols, before the app may be closed.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .background { Task { await ProjectSymbolIndex.shared.saveIndex() } }
+                }
         }
     }
 }

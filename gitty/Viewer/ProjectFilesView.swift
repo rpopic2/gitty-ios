@@ -505,12 +505,17 @@ struct ProjectFilesView: View {
     }
 
     /// The space the project takes on this device, for its row.
+    /// The clone or the files downloaded one by one, and the saved symbol index.
     private func refreshStorage() async {
-        if let record = await CloneStore.shared.record(forProject: projectID) {
-            storedBytes = await Task.detached(priority: .utility) { CloneIndex.shared.bytes(of: record) }.value
-        } else if case .loaded(let project, _) = state, let prefix = project.rawURL(for: "")?.absoluteString {
-            storedBytes = await DocumentStore.shared.downloadedBytes(under: prefix)
+        let projectID = projectID
+        let record = await CloneStore.shared.record(forProject: projectID)
+        var bytes = await Task.detached(priority: .utility) {
+            (record.map { CloneIndex.shared.bytes(of: $0) } ?? 0) + ProjectSymbolIndex.savedBytes(projectID: projectID)
+        }.value
+        if record == nil, case .loaded(let project, _) = state, let prefix = project.rawURL(for: "")?.absoluteString {
+            bytes += await DocumentStore.shared.downloadedBytes(under: prefix)
         }
+        storedBytes = bytes
     }
 
     /// Clone, asking first on a mobile network when it's big.

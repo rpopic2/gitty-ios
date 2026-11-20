@@ -60,6 +60,9 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
     /// A file's entry for a file of the project that isn't downloaded (from its file list): just
     /// a title, which downloads it.
     var isDownloaded = true
+    /// A file's entry whose symbols aren't known yet (being read in the background, or when it
+    /// shows): just its title for now.
+    var isIndexed = true
 
     /// "Line 12", "Lines 12–30", or "File" for a file's own entry.
     var lineLabel: String {
@@ -86,6 +89,6 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
     /// The same symbol at another place in a combined list, from `file`.
     func moved(to id: Int, file: URL?) -> CodeSymbol {
         CodeSymbol(id: id, name: name, kind: kind, range: range, line: line, preview: preview, fileURL: file,
-                   endLine: endLine, isDownloaded: isDownloaded)
+                   endLine: endLine, isDownloaded: isDownloaded, isIndexed: isIndexed)
     }
 }

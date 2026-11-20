@@ -105,7 +105,15 @@ final class StackSearch: ResultsPageSearch {
 
     var symbolName: String { "magnifyingglass" }
     var placeholder: String { String(localized: "Search Files and Symbols") }
-    var note: String? { nil }
+    /// While the project's symbols are still being read, the search finds only those read.
+    var note: String? {
+        guard let progress = model.indexingProgress else { return nil }
+        let left = (progress.total - progress.done).formatted()
+        if progress.isPaused {
+            return String(localized: "Symbols of \(left) files aren’t read yet (the project is very big): they’re read as their files show.")
+        }
+        return String(localized: "Still reading symbols: \(progress.done.formatted()) of \(progress.total.formatted()) files.")
+    }
 
     private func start() {
         task?.cancel()

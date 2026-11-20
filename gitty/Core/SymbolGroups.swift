@@ -115,6 +115,8 @@ final class CollapsedCodeStore {
     private(set) var folders: Set<String>
     /// Scopes whose folders are folded by default (pinching in once more on the folders).
     private(set) var foldedFolderScopes: Set<String>
+    /// Projects' scopes the Code level has shown (see `startFolded`).
+    @ObservationIgnored private var seenScopes: Set<String>
     /// `nil`: not saved (`temporary()`).
     @ObservationIgnored private let defaults: UserDefaults?
 
@@ -125,6 +127,7 @@ final class CollapsedCodeStore {
         static let foldedScopes = "collapsedCode.foldedScopes"
         static let folders = "collapsedCode.folders"
         static let foldedFolderScopes = "collapsedCode.foldedFolderScopes"
+        static let seenScopes = "collapsedCode.seenScopes"
         /// Before Collapse All: symbols and `file#` keys together.
         static let old = "collapsedCode"
     }
@@ -138,6 +141,7 @@ final class CollapsedCodeStore {
             foldedScopes = []
             folders = []
             foldedFolderScopes = []
+            seenScopes = []
             return
         }
         var flipped = Set(defaults.stringArray(forKey: Key.flipped) ?? [])
@@ -154,6 +158,24 @@ final class CollapsedCodeStore {
         foldedScopes = Set(defaults.stringArray(forKey: Key.foldedScopes) ?? [])
         folders = Set(defaults.stringArray(forKey: Key.folders) ?? [])
         foldedFolderScopes = Set(defaults.stringArray(forKey: Key.foldedFolderScopes) ?? [])
+        seenScopes = Set(defaults.stringArray(forKey: Key.seenScopes) ?? [])
+    }
+
+    /// A project the Code level hasn't shown before starts with every folder folded: just the
+    /// folders' headers, whatever its size (a big one has thousands of files). One already
+    /// shown, before this was kept, keeps what it has when anything of it was folded.
+    func startFolded(scope: String) {
+        guard let defaults, !seenScopes.contains(scope) else { return }
+        seenScopes.insert(scope)
+        let hasFolds = collapsedScopes.contains(scope) || foldedScopes.contains(scope)
+            || foldedFolderScopes.contains(scope) || folders.contains { $0.hasPrefix("folder#" + scope) }
+        if !hasFolds {
+            foldedScopes.insert(scope)
+            foldedFolderScopes.insert(scope)
+            save()
+        } else {
+            defaults.set(seenScopes.sorted(), forKey: Key.seenScopes)
+        }
     }
 
     func isFolderFolded(_ path: String, scope: String) -> Bool {
@@ -276,5 +298,6 @@ final class CollapsedCodeStore {
         defaults.set(foldedScopes.sorted(), forKey: Key.foldedScopes)
         defaults.set(folders.sorted(), forKey: Key.folders)
         defaults.set(foldedFolderScopes.sorted(), forKey: Key.foldedFolderScopes)
+        defaults.set(seenScopes.sorted(), forKey: Key.seenScopes)
     }
 }

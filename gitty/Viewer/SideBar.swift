@@ -467,6 +467,7 @@ struct SideBarView: View {
         Task {
             await CloneStore.shared.delete(projectID: project.id)
             await ProjectStore.shared.remove(id: project.id)
+            ProjectSymbolIndex.deleteSaved(projectID: project.id)
         }
     }
 }

@@ -58,6 +58,8 @@ struct SymbolsView: View, Equatable {
     let onDownloadFile: (@MainActor (URL) -> Void)?
     /// Files downloading now (their titles show it).
     let downloadingFiles: Set<URL>
+    /// A file's title came on screen before its symbols were known: read them now.
+    let onNeedsSymbols: (@MainActor (URL) -> Void)?
     /// Open on a not-downloaded file's title: open the file (which downloads it).
     let onOpenURL: (@MainActor (URL) -> Void)?
     /// A blame's commit was tapped (its project and hash): show it.
@@ -106,6 +108,7 @@ struct SymbolsView: View, Equatable {
          onShowHistory: (@MainActor (URL, CodeSymbol?) -> Void)? = nil,
          onDownloadFile: (@MainActor (URL) -> Void)? = nil,
          downloadingFiles: Set<URL> = [],
+         onNeedsSymbols: (@MainActor (URL) -> Void)? = nil,
          onOpenURL: (@MainActor (URL) -> Void)? = nil,
          collapsed: CollapsedCodeStore = .shared,
          onShowCommit: (@MainActor (String, String) -> Void)? = nil) {
@@ -132,6 +135,7 @@ struct SymbolsView: View, Equatable {
         self.onShowHistory = onShowHistory
         self.onDownloadFile = onDownloadFile
         self.downloadingFiles = downloadingFiles
+        self.onNeedsSymbols = onNeedsSymbols
         self.onOpenURL = onOpenURL
     }
 
@@ -344,6 +348,7 @@ struct SymbolsView: View, Equatable {
                    symbolCount: symbol.kind == .file ? fileCounts.count(of: symbol, in: symbols) : 0,
                    isDownloading: symbol.fileURL.map(downloadingFiles.contains) ?? false,
                    onDownload: onDownloadFile,
+                   onNeedsSymbols: onNeedsSymbols,
                    contextMenu: contextMenu(for: symbol))
     }
 
@@ -528,6 +533,8 @@ private struct CodeHeader: View {
     let isDownloading: Bool
     /// A not-downloaded file's title was tapped.
     let onDownload: (@MainActor (URL) -> Void)?
+    /// A file's title showed before its symbols were known.
+    let onNeedsSymbols: (@MainActor (URL) -> Void)?
     /// Touch and hold (the same menu as the code's).
     let contextMenu: CodeMenu
 
@@ -542,7 +549,11 @@ private struct CodeHeader: View {
                 } label: {
                     if symbol.kind == .file {
                         FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed,
-                                  isDownloaded: symbol.isDownloaded, isDownloading: isDownloading)
+                                  isDownloaded: symbol.isDownloaded, isDownloading: isDownloading,
+                                  isIndexed: symbol.isIndexed)
+                            .onAppear {
+                                if !symbol.isIndexed, let url = symbol.fileURL { onNeedsSymbols?(url) }
+                            }
                     } else {
                         // Collapsed, the title has its line's number. Otherwise the code draws it,
                         // above its first line, so it scrolls away with the code instead of staying
@@ -599,6 +610,8 @@ private struct FileTitle: View {
     /// Not downloaded: grayed, with a download mark (a tap downloads it), no chevron or count.
     var isDownloaded = true
     var isDownloading = false
+    /// Its symbols aren't known yet (being read): no count until they are.
+    var isIndexed = true
 
     var body: some View {
         HStack(spacing: 8) {
@@ -612,14 +625,14 @@ private struct FileTitle: View {
                 .foregroundStyle(isDownloaded ? .primary : .secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if isDownloaded {
+            if isDownloaded, isIndexed {
                 Text("· \(count)")
                     .font(.subheadline)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            if isDownloading {
+            if isDownloading || !isIndexed {
                 ProgressView()
             } else if !isDownloaded {
                 Image(systemName: "arrow.down.circle")

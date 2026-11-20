@@ -302,6 +302,7 @@ struct CodeScreen: View {
                 },
                 onDownloadFile: { model.download(file: $0) },
                 downloadingFiles: model.downloadingFiles,
+                onNeedsSymbols: { model.needsSymbols(of: $0) },
                 onOpenURL: { onOpen($0) },
                 onShowCommit: { showBlameCommit(projectID: $0, id: $1) }
             )
@@ -448,6 +449,7 @@ struct CodeScreen: View {
             },
             onDownloadFile: { model.download(file: $0) },
             downloadingFiles: model.downloadingFiles,
+            onNeedsSymbols: { model.needsSymbols(of: $0) },
             onOpenURL: { onOpen($0) },
             collapsed: search.collapsed,
             onShowCommit: { showBlameCommit(projectID: $0, id: $1) }
@@ -512,6 +514,7 @@ struct CodeScreen: View {
                 onOpenAt: { symbol, _ in jump(symbol) },
                 onBarCollapsedChange: { _ in },
                 downloadingFiles: model.downloadingFiles,
+                onNeedsSymbols: { model.needsSymbols(of: $0) },
                 collapsed: stackSheetFolds
             )
         }
@@ -648,6 +651,7 @@ struct CodeScreen: View {
                     historyFile = HistoryFile(url: url, symbol: symbol)
                 },
                 downloadingFiles: model.downloadingFiles,
+                onNeedsSymbols: { model.needsSymbols(of: $0) },
                 collapsed: search.collapsed
             )
             .equatable()
