@@ -73,9 +73,6 @@ struct ProjectFilesView: View {
     @State private var filter = FileFilter.none
     @FocusState private var isEditingFilter: Bool
     @State private var hasLoadedFilter = false
-    /// The project's files before filtering, and those the filter keeps.
-    @State private var fileCount = 0
-    @State private var matchingCount = 0
     @Environment(\.openURL) private var openURL
 
     private enum LoadState {
@@ -186,12 +183,8 @@ struct ProjectFilesView: View {
                     .accessibilityAddTraits(currentAlbumID == nil ? [.isButton, .isSelected] : .isButton)
                     .accessibilityAction { onShowProject() }
             }
-            Section {
+            Section("Filter") {
                 filterRow
-            } header: {
-                Text("Filter")
-            } footer: {
-                filterFooter(tree: tree)
             }
             Section("Git") {
                 branchRow(project: project)
@@ -270,55 +263,12 @@ struct ProjectFilesView: View {
         }
     }
 
-    @ViewBuilder
-    private func filterFooter(tree: ProjectTree) -> some View {
-        let lines = filterNotes(truncated: tree.truncated)
-        if !lines.isEmpty {
-            Text(lines.joined(separator: " "))
-        }
-    }
-
-    private func filterNotes(truncated: Bool) -> [String] {
-        var lines: [String] = []
-        if !filter.isEmpty {
-            if matchingCount == 0 {
-                lines.append(String(localized: "No files match this filter."))
-            } else {
-                lines.append(String(localized: "Showing \(matchingCount) of \(fileCount) files."))
-            }
-        }
-        if truncated {
-            lines.append(String(localized: "This repository is very large, so GitHub listed only some of its files."))
-        }
-        return lines
-    }
-
-    /// Saves the filter and lists again with it, if it changed.
+    /// Saves the filter (the Code level follows it).
     private func applyFilter() {
         ProjectFilterStore.standard.save(filterText, for: projectID)
         let new = FileFilter(filterText.trimmingCharacters(in: .whitespaces))
         guard new != filter else { return }
         filter = new
-        guard case .loaded = state else { return }
-        Task { await recount() }
-    }
-
-    /// Counts the files the filter keeps again, for the footer.
-    private func recount() async {
-        guard case .loaded(let project, let tree) = state else { return }
-        guard let count = await count(project: project, tree: tree) else { return }  // a newer count follows
-        matchingCount = count
-    }
-
-    /// How many files the current filter keeps, away from the main thread (a big repository has
-    /// many paths); `nil` if the filter changed meanwhile.
-    private func count(project: ProjectInfo, tree: ProjectTree) async -> Int? {
-        let filter = filter, folder = project.folder ?? ""
-        let count = await Task.detached(priority: .userInitiated) {
-            tree.files(under: folder, matching: filter).count
-        }.value
-        guard filter == self.filter else { return nil }
-        return count
     }
 
     // MARK: Review
@@ -456,8 +406,6 @@ struct ProjectFilesView: View {
                 filter = FileFilter(filterText)
                 hasLoadedFilter = true
             }
-            fileCount = tree.files(under: project.folder ?? "").count
-            matchingCount = await count(project: project, tree: tree) ?? fileCount
             state = .loaded(project, tree)
             await refreshStorage()
         } catch {
@@ -645,10 +593,8 @@ struct ProjectFilesView: View {
 
     /// The project at its (new) branch, with its file list.
     private func show(_ project: ProjectInfo, _ tree: ProjectTree) {
-        fileCount = tree.files(under: project.folder ?? "").count
         repositoryBytes = Self.bytes(of: tree)
         state = .loaded(project, tree)
-        Task { matchingCount = await count(project: project, tree: tree) ?? fileCount }
     }
 
     private func deleteClone() {
