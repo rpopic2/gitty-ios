@@ -171,8 +171,14 @@ nonisolated final class GitRepository {
             let context = Unmanaged<FetchContext>.fromOpaque(payload).takeUnretainedValue()
             if context.isCancelled() { return -1 }  // stops the fetch
             if let stats = stats?.pointee, stats.total_objects > 0 {
-                context.report(FetchProgress(fraction: Double(stats.received_objects) / Double(stats.total_objects),
-                                             receivedBytes: Int(stats.received_bytes)))
+                let bytes = Int(stats.received_bytes)
+                if stats.received_objects == stats.total_objects, stats.total_deltas > 0 {
+                    context.report(FetchProgress(fraction: Double(stats.indexed_deltas) / Double(stats.total_deltas),
+                                                 receivedBytes: bytes, phase: .resolving))
+                } else {
+                    context.report(FetchProgress(fraction: Double(stats.received_objects) / Double(stats.total_objects),
+                                                 receivedBytes: bytes))
+                }
             }
             return 0
         }
@@ -285,15 +291,27 @@ nonisolated final class GitRepository {
 
     /// Puts `ref`'s files (once fetched) in the working directory, replacing what's there, and
     /// points HEAD at its commit. Returns the commit's hash.
+    /// - Parameter progress: the share of files written, now and then.
     @discardableResult
-    func checkout(_ ref: GitRef) throws -> String {
+    func checkout(_ ref: GitRef, progress: (@Sendable (Double) -> Void)? = nil) throws -> String {
         var object: OpaquePointer?
         try Git.check(git_revparse_single(&object, pointer, ref.localReference + "^{commit}"))
         defer { git_object_free(object) }
         var options = git_checkout_options()
         git_checkout_options_init(&options, UInt32(GIT_CHECKOUT_OPTIONS_VERSION))
         options.checkout_strategy = UInt32(truncatingIfNeeded: GIT_CHECKOUT_FORCE.rawValue)
-        try Git.check(git_checkout_tree(pointer, object, &options))
+        let context = CheckoutContext(progress: progress ?? { _ in })
+        if progress != nil {
+            options.progress_payload = Unmanaged.passUnretained(context).toOpaque()
+            options.progress_cb = { _, completed, total, payload in
+                guard let payload, total > 0 else { return }
+                Unmanaged<CheckoutContext>.fromOpaque(payload).takeUnretainedValue()
+                    .report(Double(completed) / Double(total))
+            }
+        }
+        try withExtendedLifetime(context) {
+            try Git.check(git_checkout_tree(pointer, object, &options))
+        }
         let id = git_object_id(object)
         try Git.check(git_repository_set_head_detached(pointer, id))
         return Git.string(id)
@@ -625,12 +643,39 @@ nonisolated private final class TreeCollector {
     var items: [(path: String, kind: ProjectTree.Entry.Kind, id: git_oid)] = []
 }
 
-/// How far a fetch has got: the share of objects received, and the bytes downloaded so far.
+/// How far a fetch has got: the share of objects received, and the bytes downloaded so far;
+/// then, with nothing left to download, rebuilding the files Git sent as changes to others
+/// (resolving deltas) and writing them out (checking out), which take a while too.
 nonisolated struct FetchProgress: Equatable, Sendable {
+    enum Phase: Equatable, Sendable {
+        case receiving
+        case resolving
+        case checkingOut
+    }
+
     var fraction: Double
     var receivedBytes: Int
+    var phase: Phase = .receiving
 
     static let start = FetchProgress(fraction: 0, receivedBytes: 0)
+}
+
+/// What the checkout's progress callback needs, passed to it as its payload.
+nonisolated private final class CheckoutContext {
+    let progress: @Sendable (Double) -> Void
+    private var lastReported: ContinuousClock.Instant?
+
+    init(progress: @escaping @Sendable (Double) -> Void) {
+        self.progress = progress
+    }
+
+    /// Ten times a second, and the end.
+    func report(_ fraction: Double) {
+        let now = ContinuousClock.now
+        if let lastReported, now - lastReported < .milliseconds(100), fraction < 1 { return }
+        lastReported = now
+        progress(fraction)
+    }
 }
 
 /// What the fetch callbacks need, passed to them as their payload.
@@ -648,13 +693,18 @@ nonisolated private final class FetchContext {
         self.isCancelled = isCancelled
     }
 
-    /// Ten times a second (and the end), not for every object.
+    /// Ten times a second (and as each phase starts and ends), not for every object.
     func report(_ progress: FetchProgress) {
         let now = ContinuousClock.now
-        if let lastReported, now - lastReported < .milliseconds(100), progress.fraction < 1 { return }
+        let isNew = progress.phase != lastPhase || (progress.fraction >= 1 && lastFraction < 1)
+        if let lastReported, now - lastReported < .milliseconds(100), !isNew { return }
         lastReported = now
+        lastPhase = progress.phase
+        lastFraction = progress.fraction
         self.progress(progress)
     }
+    private var lastPhase = FetchProgress.Phase.receiving
+    private var lastFraction = 0.0
 }
 
 nonisolated enum Git {

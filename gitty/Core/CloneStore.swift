@@ -265,7 +265,7 @@ actor CloneStore {
                 }
                 try repository.fetch(ref, depth: depth, token: token, progress: progress,
                                      isCancelled: { Task.isCancelled })
-                return (ref, refs, try repository.checkout(ref))
+                return (ref, refs, try repository.checkout(ref, progress: Self.checkingOut(progress)))
             } catch {
                 try? FileManager.default.removeItem(at: folder)
                 throw error
@@ -307,7 +307,7 @@ actor CloneStore {
                 try repository.fetch(ref, depth: depth, token: token, progress: progress, isCancelled: { Task.isCancelled })
                 fetched = true
             }
-            let commit = try repository.checkout(ref)
+            let commit = try repository.checkout(ref, progress: fetched ? Self.checkingOut(progress) : nil)
             return (commit, try repository.tree(of: ref), fetched)
         }
         record.ref = ref
@@ -376,7 +376,7 @@ actor CloneStore {
         let commit = try await serially(projectID) {
             let repository = try GitRepository(at: folder)
             try repository.fetch(ref, depth: depth, token: token, progress: progress, isCancelled: { Task.isCancelled })
-            return try repository.checkout(ref)
+            return try repository.checkout(ref, progress: Self.checkingOut(progress))
         }
         record.newCommits = nil
         guard commit != record.commit else {
@@ -388,6 +388,11 @@ actor CloneStore {
         index.save(record)
         await documents.clonesChanged()
         return true
+    }
+
+    /// A checkout's progress, reported as a download's last phase.
+    private static func checkingOut(_ progress: @escaping @Sendable (FetchProgress) -> Void) -> @Sendable (Double) -> Void {
+        { fraction in progress(FetchProgress(fraction: fraction, receivedBytes: 0, phase: .checkingOut)) }
     }
 
     /// Roughly what fetching `ref`'s latest commit downloads: the size of its files the clone

@@ -34,8 +34,15 @@ final class DownloadGuard {
     }
 
     /// What's downloaded so far: "3.2 MB", or "3.2 MB / ~48 MB" with an estimate (the files'
-    /// size, so the download usually ends below it).
+    /// size, so the download usually ends below it). After the download, the phase and how far
+    /// it's got: "Unpacking 40%", "Writing files 80%".
     static func progressText(_ progress: FetchProgress, estimate: Int64?) -> String {
+        let percent = progress.fraction.formatted(.percent.precision(.fractionLength(0)))
+        switch progress.phase {
+        case .resolving: return String(localized: "Unpacking \(percent)")
+        case .checkingOut: return String(localized: "Writing files \(percent)")
+        case .receiving: break
+        }
         let received = Int64(progress.receivedBytes).formatted(.byteCount(style: .file))
         guard let estimate, estimate > 0 else { return received }
         return received + " / ~" + estimate.formatted(.byteCount(style: .file))
