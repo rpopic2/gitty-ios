@@ -299,11 +299,12 @@ struct SymbolsView: View, Equatable {
                 switch item.content {
                 case .header(let folder):
                     folderRowHeader(folder)
-                case .symbol(let symbol):
+                case .symbol(let symbol, let indent):
                     Section {
                         code(for: symbol)
                     } header: {
-                        header(for: symbol)
+                        // In line with its folder's header (inside a group); the code stays edge to edge.
+                        header(for: symbol, indent: indent)
                     }
                 }
             }
@@ -381,9 +382,10 @@ struct SymbolsView: View, Equatable {
                    })
     }
 
-    private func header(for symbol: CodeSymbol) -> some View {
+    /// - Parameter indent: steps in, in line with its folder's header inside a group.
+    private func header(for symbol: CodeSymbol, indent: Int = 0) -> some View {
         CodeHeader(symbol: symbol, collapsed: collapsed, blocks: codeBlocks, peek: peek, openFile: openFile,
-                   scope: collapseScope,
+                   scope: collapseScope, indent: indent,
                    symbolCount: symbol.kind == .file ? fileCounts.count(of: symbol, in: symbols) : 0,
                    isDownloading: symbol.fileURL.map(downloadingFiles.contains) ?? false,
                    onDownload: onDownloadFile,
@@ -556,6 +558,8 @@ private struct CodeHeader: View {
     let peek: CodePeek
     let openFile: URL
     let scope: String
+    /// Steps in (inside a group), for the title.
+    let indent: Int
     /// A file's: how many symbols it has.
     let symbolCount: Int
     /// A not-downloaded file's: it's downloading.
@@ -579,7 +583,7 @@ private struct CodeHeader: View {
                     if symbol.kind == .file {
                         FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed,
                                   isDownloaded: symbol.isDownloaded, isDownloading: isDownloading,
-                                  isIndexed: symbol.isIndexed)
+                                  isIndexed: symbol.isIndexed, indent: indent)
                             .onAppear {
                                 if !symbol.isIndexed, let url = symbol.fileURL { onNeedsSymbols?(url) }
                             }
@@ -588,7 +592,7 @@ private struct CodeHeader: View {
                         // above its first line, so it scrolls away with the code instead of staying
                         // with the title pinned at the top (over the code's numbers).
                         SymbolTitle(symbol: symbol, isCollapsed: isCollapsed, canCollapse: canCollapse(isCollapsed),
-                                    fileExtension: (symbol.fileURL ?? openFile).pathExtension)
+                                    fileExtension: (symbol.fileURL ?? openFile).pathExtension, indent: indent)
                             .overlay(alignment: .leading) {
                                 if isCollapsed { PeekLineNumber(peek: peek, line: symbol.line) }
                             }
@@ -641,6 +645,8 @@ private struct FileTitle: View {
     var isDownloading = false
     /// Its symbols aren't known yet (being read): no count until they are.
     var isIndexed = true
+    /// Steps in, in line with its folder's header (inside a group).
+    var indent = 0
 
     var body: some View {
         HStack(spacing: 8) {
@@ -668,7 +674,8 @@ private struct FileTitle: View {
                     .foregroundStyle(.tint)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.leading, 16 + CGFloat(indent) * 16)
+        .padding(.trailing, 16)
         .frame(minHeight: 44)
         .background(.bar)
         .contentShape(Rectangle())
@@ -783,7 +790,8 @@ private struct FolderRows {
     struct Item: Identifiable {
         enum Content {
             case header(Header)
-            case symbol(CodeSymbol)
+            /// `indent`: its folder's (inside a group), for its title.
+            case symbol(CodeSymbol, indent: Int)
         }
 
         /// A symbol's is its id (its place in the list, which the list's position goes by); a
@@ -808,7 +816,9 @@ private struct FolderRows {
         func add(_ group: FolderGroup, label: String, indent: Int) {
             add(.folder(group, label: label, indent: indent))
             guard !isFolded(group) else { return }
-            for symbol in group.symbols where isShown(symbol) { items.append(Item(id: symbol.id, content: .symbol(symbol))) }
+            for symbol in group.symbols where isShown(symbol) {
+                items.append(Item(id: symbol.id, content: .symbol(symbol, indent: indent)))
+            }
         }
         guard let tree, tree.root.isGroup else {
             for group in groups { add(group, label: group.path, indent: 0) }
@@ -932,6 +942,8 @@ private struct SymbolTitle: View {
     let canCollapse: Bool
     /// The symbol's file's, for its colors.
     let fileExtension: String
+    /// Steps in, in line with its folder's header (inside a group).
+    var indent = 0
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     var body: some View {
@@ -957,7 +969,7 @@ private struct SymbolTitle: View {
                 Color.clear.frame(width: 10, height: 1)  // the icons stay lined up
             }
         }
-        .padding(.leading, RawTextStyle.insets.left)
+        .padding(.leading, RawTextStyle.insets.left + CGFloat(indent) * 16)
         .padding(.trailing, 12)
         .padding(.vertical, 4)
         .frame(minHeight: symbol.kind == .file ? 36 : Self.minHeight)
