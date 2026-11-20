@@ -1,17 +1,45 @@
 import SwiftUI
 import UIKit
 
-/// The review being written: one plain text, like an email draft. Comment adds to the end of it.
-/// It's kept across launches until it's shared or deleted.
-@Observable
-final class ReviewDraft {
-    var text: String {
-        didSet { defaults.set(text, forKey: Self.textKey) }
-    }
+/// A project's review: the one being written, and the last one shared.
+nonisolated struct ProjectReview: Codable, Equatable, Sendable {
+    var text = ""
     /// How many comments were added, for the docked bar.
-    private(set) var commentCount: Int {
-        didSet { defaults.set(commentCount, forKey: Self.countKey) }
+    var commentCount = 0
+    /// Closed with the composer's X: not docked above the bar, but still in the project view.
+    var isPutAway = false
+    var shared: SharedReview?
+
+    var hasDraft: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+}
+
+/// A review as it was shared, kept in its project's view to read or share again.
+nonisolated struct SharedReview: Codable, Equatable, Sendable, Identifiable {
+    var id: Date { date }
+    let text: String
+    let commentCount: Int
+    let date: Date
+}
+
+/// The reviews being written, one per project ("" for files outside projects), like email
+/// drafts: Comment adds to the end of its project's. The composer and the dock show one
+/// (`projectID`: the last commented on, or opened from its project). Kept across launches.
+@MainActor @Observable
+final class ReviewDraft {
+    /// The review in the composer and the dock.
+    private(set) var projectID: String {
+        didSet { defaults.set(projectID, forKey: Self.projectKey) }
     }
+    private var reviews: [String: ProjectReview] {
+        didSet { save() }
+    }
+
+    var text: String {
+        get { reviews[projectID]?.text ?? "" }
+        set { reviews[projectID, default: ProjectReview()].text = newValue }
+    }
+    var commentCount: Int { reviews[projectID]?.commentCount ?? 0 }
+
     /// The composer sheet is up. Swiping it down sets the draft aside (docked above the bar).
     var isComposing = false
     /// It's up over a sheet (a file's info, commenting on a diff), which presents it itself:
@@ -38,36 +66,60 @@ final class ReviewDraft {
     private(set) var cursorRequest = UUID()
 
     @ObservationIgnored private let defaults: UserDefaults
-    private static let textKey = "reviewDraft"
-    private static let countKey = "reviewCommentCount"
+    private static let reviewsKey = "projectReviews"
+    private static let projectKey = "reviewProject"
+    /// Before reviews were per project: one draft.
+    private static let oldTextKey = "reviewDraft"
+    private static let oldCountKey = "reviewCommentCount"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        text = defaults.string(forKey: Self.textKey) ?? ""
-        commentCount = defaults.integer(forKey: Self.countKey)
+        var reviews = defaults.data(forKey: Self.reviewsKey)
+            .flatMap { try? JSONDecoder().decode([String: ProjectReview].self, from: $0) } ?? [:]
+        if let old = defaults.string(forKey: Self.oldTextKey) {
+            if !old.isEmpty {
+                reviews["", default: ProjectReview()].text = old
+                reviews["", default: ProjectReview()].commentCount = defaults.integer(forKey: Self.oldCountKey)
+            }
+            defaults.removeObject(forKey: Self.oldTextKey)
+            defaults.removeObject(forKey: Self.oldCountKey)
+        }
+        self.reviews = reviews
+        projectID = defaults.string(forKey: Self.projectKey) ?? ""
     }
 
-    var hasDraft: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    var hasDraft: Bool { reviews[projectID]?.hasDraft ?? false }
+
+    /// A project's review, for its view.
+    func review(for projectID: String) -> ProjectReview {
+        reviews[projectID] ?? ProjectReview()
     }
 
-    /// Adds a comment on `selection` at the end and opens the composer, cursor ready.
+    /// Adds a comment on `selection` at the end of its project's review and opens the
+    /// composer, cursor ready.
     /// - Parameter repository: its first comment on the repository adds its heading.
-    func add(_ selection: ReviewSelection, format: ReviewFormat, repository: ReviewRepository? = nil) {
+    func add(_ selection: ReviewSelection, format: ReviewFormat, repository: ReviewRepository? = nil,
+             projectID: String) {
         add(block: ReviewText.block(for: selection, format: format), format: format, repository: repository,
-            overSheet: false)
+            projectID: projectID, overSheet: false)
     }
 
     /// A comment on lines of a diff, from the file info sheet.
-    func add(_ selection: ReviewDiffSelection, format: ReviewFormat, repository: ReviewRepository?) {
+    func add(_ selection: ReviewDiffSelection, format: ReviewFormat, repository: ReviewRepository?,
+             projectID: String) {
         add(block: ReviewText.block(for: selection, format: format), format: format, repository: repository,
-            overSheet: true)
+            projectID: projectID, overSheet: true)
     }
 
-    private func add(block: String, format: ReviewFormat, repository: ReviewRepository?, overSheet: Bool) {
-        if !hasDraft { commentCount = 0 }
-        text = ReviewText.appending(block, to: text, format: format, repository: repository)
-        commentCount += 1
+    private func add(block: String, format: ReviewFormat, repository: ReviewRepository?, projectID: String,
+                     overSheet: Bool) {
+        self.projectID = projectID
+        var review = reviews[projectID] ?? ProjectReview()
+        if !review.hasDraft { review.commentCount = 0 }
+        review.text = ReviewText.appending(block, to: review.text, format: format, repository: repository)
+        review.commentCount += 1
+        review.isPutAway = false
+        reviews[projectID] = review
         cursorRequest = UUID()
         composesOverSheet = overSheet
         isComposing = true
@@ -82,25 +134,69 @@ final class ReviewDraft {
         isComposing = true
     }
 
-    /// The draft is set aside: its dock shows.
-    var isDocked: Bool { hasDraft && !isComposing }
+    /// A project's review, from its view: it's the one in the composer and the dock now.
+    func open(projectID: String) {
+        self.projectID = projectID
+        reviews[projectID, default: ProjectReview()].isPutAway = false
+        resume()
+    }
 
-    /// After sharing, or Delete Review.
-    func clear() {
-        text = ""
-        commentCount = 0
+    /// The draft is set aside: its dock shows (unless it was closed with the X).
+    var isDocked: Bool { hasDraft && !isComposing && !(reviews[projectID]?.isPutAway ?? false) }
+
+    /// The composer's X: it closes, and the dock goes; the review stays in its project's view.
+    func putAway() {
+        reviews[projectID, default: ProjectReview()].isPutAway = true
         isComposing = false
         composesOverSheet = false
     }
+
+    /// Shared: it becomes the project's last shared review, and the next comment starts a new one.
+    func didShare() {
+        var review = reviews[projectID] ?? ProjectReview()
+        review.shared = SharedReview(text: review.text, commentCount: review.commentCount, date: .now)
+        review.text = ""
+        review.commentCount = 0
+        review.isPutAway = false
+        reviews[projectID] = review
+        isComposing = false
+        composesOverSheet = false
+    }
+
+    /// Deletes a project's review in progress (from its view).
+    func delete(projectID: String) {
+        reviews[projectID]?.text = ""
+        reviews[projectID]?.commentCount = 0
+        if projectID == self.projectID {
+            isComposing = false
+            composesOverSheet = false
+        }
+        clean(projectID)
+    }
+
+    /// Deletes a project's last shared review.
+    func deleteShared(projectID: String) {
+        reviews[projectID]?.shared = nil
+        clean(projectID)
+    }
+
+    /// A project with nothing left goes from the saved reviews.
+    private func clean(_ projectID: String) {
+        if let review = reviews[projectID], !review.hasDraft, review.shared == nil { reviews[projectID] = nil }
+    }
+
+    private func save() {
+        if let data = try? JSONEncoder().encode(reviews) { defaults.set(data, forKey: Self.reviewsKey) }
+    }
 }
 
-/// The review, as a sheet like Mail's compose window: write freely, Share when done (which
-/// clears it), or swipe down to set it aside and pick it up again from the bar.
+/// The review, as a sheet like Mail's compose window: write freely, Share when done (it's kept
+/// in its project's view as the last shared review, and the next comment starts a new one),
+/// swipe down to set it aside and pick it up again from the bar, or X to put it away in its
+/// project's view.
 struct ReviewComposer: View {
     let draft: ReviewDraft
 
-    @Environment(\.dismiss) private var dismiss
-    @State private var isConfirmingClose = false
 
     var body: some View {
         @Bindable var draft = draft
@@ -110,13 +206,10 @@ struct ReviewComposer: View {
                 .navigationTitle("Review")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    // Closes it, and the dock goes: the review stays in its project's view, where
+                    // it can be opened again or deleted.
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Close", systemImage: "xmark") { isConfirmingClose = true }
-                            .confirmationDialog("Close the review?", isPresented: $isConfirmingClose,
-                                                titleVisibility: .hidden) {
-                                Button("Delete Review", role: .destructive) { draft.clear() }
-                                Button("Save Review") { dismiss() }
-                            }
+                        Button("Close", systemImage: "xmark") { draft.putAway() }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Share", systemImage: "square.and.arrow.up") { share() }
@@ -130,7 +223,7 @@ struct ReviewComposer: View {
     private func share() {
         let draft = draft
         TextSharer.share(draft.text) { completed in
-            if completed { draft.clear() }
+            if completed { draft.didShare() }
         }
     }
 }
@@ -270,5 +363,38 @@ enum TextSharer {
             top = presented
         }
         return top
+    }
+}
+
+/// A project's last shared review: read it, copy it or share it again.
+struct SharedReviewView: View {
+    let review: SharedReview
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(review.text)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
+            .navigationTitle("Last Shared Review")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Share", systemImage: "square.and.arrow.up") {
+                        TextSharer.share(review.text) { _ in }
+                    }
+                }
+                ToolbarItem(placement: .secondaryAction) {
+                    Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = review.text }
+                }
+            }
+        }
     }
 }

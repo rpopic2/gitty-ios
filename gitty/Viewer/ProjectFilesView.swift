@@ -17,6 +17,9 @@ struct ProjectFilesView: View {
     /// The project's row: the whole project (out of an album), at the Code level.
     let onShowProject: @MainActor () -> Void
     @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
+    /// The project's review, in progress and last shared.
+    @Environment(ReviewDraft.self) private var review: ReviewDraft?
+    @State private var shownSharedReview: SharedReview?
 
     @State private var state: LoadState = .loading
     /// The project's clone, if it's cloned.
@@ -79,6 +82,11 @@ struct ProjectFilesView: View {
                 Task { clone = await CloneStore.shared.record(forProject: projectID) }
             }) {
                 BranchHistoryView(projectID: projectID)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $shownSharedReview) { shared in
+                SharedReviewView(review: shared)
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
@@ -145,6 +153,7 @@ struct ProjectFilesView: View {
                 }
             }
             // The files are at the Code level (by folder, every file folded); here, the albums.
+            reviewSection(project: project)
             albumsSection(project: project)
         }
         .listStyle(.insetGrouped)
@@ -251,6 +260,64 @@ struct ProjectFilesView: View {
         }.value
         guard filter == self.filter else { return nil }
         return count
+    }
+
+    // MARK: Review
+
+    /// The project's review: the one in progress (tap to write, swipe to delete) and the last
+    /// one shared (tap to read, copy or share again). Closing the composer with its X keeps it
+    /// here.
+    @ViewBuilder
+    private func reviewSection(project: ProjectInfo) -> some View {
+        if let review {
+            let state = review.review(for: project.id)
+            if state.hasDraft || state.shared != nil {
+                Section("Review") {
+                    if state.hasDraft {
+                        Button { review.open(projectID: project.id) } label: {
+                            reviewRow(title: String(localized: "In Progress"), systemImage: "text.bubble",
+                                      detail: Self.comments(state.commentCount))
+                        }
+                        .swipeActions {
+                            Button(role: .destructive) { review.delete(projectID: project.id) } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                    if let shared = state.shared {
+                        Button { shownSharedReview = shared } label: {
+                            reviewRow(title: String(localized: "Last Shared"), systemImage: "checkmark.bubble",
+                                      detail: Self.comments(shared.commentCount)
+                                          + " · " + shared.date.formatted(date: .abbreviated, time: .shortened))
+                        }
+                        .swipeActions {
+                            Button(role: .destructive) { review.deleteShared(projectID: project.id) } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static func comments(_ count: Int) -> String {
+        count == 1 ? String(localized: "1 comment") : String(localized: "\(count) comments")
+    }
+
+    private func reviewRow(title: String, systemImage: String, detail: String) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .foregroundStyle(.primary)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(.tint)
+        }
     }
 
     // MARK: Albums

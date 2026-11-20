@@ -55,22 +55,55 @@ struct ReviewDraftTests {
 
     @Test func addingOpensTheComposerAndKeepsTheDraft() {
         let (draft, defaults) = makeDraft()
-        draft.add(selection, format: .compact)
+        draft.add(selection, format: .compact, projectID: "o/r")
         draft.text += "Rename this."
-        draft.add(selection, format: .compact)
+        draft.add(selection, format: .compact, projectID: "o/r")
         #expect(draft.isComposing)
         #expect(draft.commentCount == 2)
         #expect(draft.text == "a.c:1: Rename this.\na.c:1: ")
         #expect(ReviewDraft(defaults: defaults).text == draft.text)  // survives a relaunch
     }
 
-    @Test func clearingEndsTheReview() {
+    @Test func eachProjectHasItsOwn() {
+        let (draft, _) = makeDraft()
+        draft.add(selection, format: .compact, projectID: "o/a")
+        draft.add(selection, format: .compact, projectID: "o/b")
+        #expect(draft.projectID == "o/b" && draft.commentCount == 1)
+        #expect(draft.review(for: "o/a").commentCount == 1)
+        draft.open(projectID: "o/a")
+        #expect(draft.projectID == "o/a" && draft.isComposing)
+    }
+
+    @Test func theXPutsItAwayButKeepsIt() {
+        let (draft, _) = makeDraft()
+        draft.add(selection, format: .compact, projectID: "o/r")
+        draft.putAway()
+        #expect(!draft.isComposing && !draft.isDocked)
+        #expect(draft.review(for: "o/r").hasDraft)
+        draft.add(selection, format: .compact, projectID: "o/r")  // a new comment brings it back
+        draft.isComposing = false
+        #expect(draft.isDocked)
+    }
+
+    @Test func sharingKeepsItAsTheLastShared() {
         let (draft, defaults) = makeDraft()
-        draft.add(selection, format: .compact)
-        draft.clear()
-        #expect(!draft.hasDraft)
-        #expect(!draft.isComposing)
-        #expect(ReviewDraft(defaults: defaults).commentCount == 0)
+        draft.add(selection, format: .compact, projectID: "o/r")
+        let text = draft.text
+        draft.didShare()
+        #expect(!draft.hasDraft && !draft.isComposing)
+        #expect(ReviewDraft(defaults: defaults).review(for: "o/r").shared?.text == text)
+        draft.deleteShared(projectID: "o/r")
+        #expect(draft.review(for: "o/r") == ProjectReview())
+    }
+
+    @Test func theOldSingleDraftMovesToFiles() {
+        let suite = "ReviewDraftTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.set("old.c:1: hi", forKey: "reviewDraft")
+        defaults.set(1, forKey: "reviewCommentCount")
+        let draft = ReviewDraft(defaults: defaults)
+        #expect(draft.review(for: "").text == "old.c:1: hi")
+        #expect(defaults.string(forKey: "reviewDraft") == nil)
     }
 }
 

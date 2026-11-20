@@ -848,10 +848,12 @@ struct CodeScreen: View {
                 startLine: lines.start, endLine: lines.end, code: code,
                 language: ReviewText.language(for: url), commit: commit
             )
-            let repository = ProjectSymbolIndex.project(containing: url, in: projects).map { project in
+            let project = ProjectSymbolIndex.project(containing: url, in: projects)
+            let repository = project.map { project in
                 ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref, commit: commit)
             }
-            review.add(selection, format: format, repository: repository)
+            // Each project has its review ("" for files outside projects).
+            review.add(selection, format: format, repository: repository, projectID: project?.id ?? "")
         }
     }
 

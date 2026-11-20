@@ -330,7 +330,7 @@ extension DiffPage {
                 ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref,
                                  commit: CloneIndex.shared.record(forProject: projectID)?.commit)
             }
-            review.add(selection, format: format, repository: repository)
+            review.add(selection, format: format, repository: repository, projectID: projectID)
         }
     }
 }
