@@ -34,17 +34,17 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
         firstLine = text.firstLine
         let traits = UITraitCollection(userInterfaceStyle: key.isDark ? .dark : .light)
         let font = key.style.uiFont
-        let string = NSMutableAttributedString(string: text.string, attributes: [
+        let attributed = NSMutableAttributedString(string: text.string, attributes: [
             NSAttributedString.Key(kCTFontAttributeName as String): font,
             NSAttributedString.Key(kCTForegroundColorAttributeName as String):
                 RawTextStyle.textColor.resolvedColor(with: traits).cgColor,
         ])
         for run in text.runs {
             guard let category = run.category, let color = key.style.theme.color(for: category) else { continue }
-            string.addAttribute(NSAttributedString.Key(kCTForegroundColorAttributeName as String),
+            attributed.addAttribute(NSAttributedString.Key(kCTForegroundColorAttributeName as String),
                                 value: color.resolvedColor(with: traits).cgColor, range: run.range)
         }
-        let framesetter = CTFramesetterCreateWithAttributedString(string as CFAttributedString)
+        let framesetter = CTFramesetterCreateWithAttributedString(attributed as CFAttributedString)
         let width = max(1, key.width)
         let suggested = CTFramesetterSuggestFrameSizeWithConstraints(
             framesetter, CFRange(location: 0, length: 0), nil,
@@ -59,7 +59,7 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
         self.origins = origins
 
         let utf16 = text.string as NSString
-        string = utf16
+        self.string = utf16
         var starts: [(row: Int, line: Int)] = []
         var line = 0
         var counted = 0  // where newlines have been counted up to
