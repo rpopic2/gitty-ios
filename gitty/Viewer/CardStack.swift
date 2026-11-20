@@ -45,7 +45,7 @@ protocol ResultsPageSearch: AnyObject, Observable {
     var results: [CodeSymbol] { get }
     /// The text `results` are for.
     var resultsQuery: String { get }
-    /// Up with each set of results: a fresh list for each.
+    /// Up with each set of results.
     var version: Int { get }
     /// Still looking.
     var isPending: Bool { get }
@@ -74,8 +74,7 @@ final class StackSearch: ResultsPageSearch {
     private(set) var results: [CodeSymbol] = []
     /// The query `results` are for.
     private(set) var resultsQuery = ""
-    /// Up with each set of matches: the results list is a fresh list for each (see
-    /// `CodeDocumentModel.resultsVersion`).
+    /// Up with each set of matches.
     private(set) var version = 0
     private(set) var isSearching = false
     /// What's collapsed on its page: its own, starting with nothing, so every result shows
@@ -139,11 +138,17 @@ final class StackSearch: ResultsPageSearch {
             let files = await Task.detached(priority: .userInitiated) {
                 FileNameSearch.symbols(inFilesNamed: query, in: all, maxRank: 5)
             }.value
+            var listed: [CodeSymbol] = []
+            var listedIDs: Set<Int> = []
             for await matches in stream {
                 guard !Task.isCancelled, let self else { return }
                 let shown = album.map { ids in matches.filter { ids.contains($0.id) } } ?? matches
-                var ids = Set(files.map(\.id))
-                self.results = files + shown.filter { ids.insert($0.id).inserted }
+                // Rows already showing keep their places; matches found since go after them, best
+                // first (each batch is ranked again, so a better one would push the others down).
+                for symbol in files + shown where listedIDs.insert(symbol.id).inserted {
+                    listed.append(symbol)
+                }
+                self.results = listed
                 self.resultsQuery = query
                 self.version += 1
             }
@@ -347,7 +352,7 @@ struct ResultsBar {
 
 /// A search's results so far, as a list (`list`): a spinner until the first come, and No
 /// Results if none do. Observes the search itself, so only this redraws as results come in.
-/// A fresh list for each set (see `StackSearch.version`).
+/// The results, the same list while matches come in (a fresh one for each query).
 struct SearchResultsContent<Search: ResultsPageSearch, Results: View>: View {
     let search: Search
     @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String) -> Results
@@ -358,8 +363,10 @@ struct SearchResultsContent<Search: ResultsPageSearch, Results: View>: View {
         } else if search.results.isEmpty {
             placeholder { ContentUnavailableView.search(text: search.query) }
         } else {
+            // A fresh list for each query, not for each batch of matches: rebuilt, every row's
+            // code was laid out and colored again (it flashed) and its counts worked out again.
             list(search.results, search.resultsQuery)
-                .id(search.version)
+                .id(search.resultsQuery)
         }
     }
 

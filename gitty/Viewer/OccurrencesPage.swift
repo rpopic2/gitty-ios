@@ -36,7 +36,7 @@ final class OccurrenceSearch: ResultsPageSearch {
     let source: AnyHashable
     /// The list: each file with occurrences (its entry), then its occurrences' lines.
     private(set) var entries: [CodeSymbol] = []
-    /// Up with each new batch: a fresh list for each (see `StackSearch.version`).
+    /// Up with each new batch.
     private(set) var version = 0
     private(set) var count = 0
     private(set) var isSearching = true
