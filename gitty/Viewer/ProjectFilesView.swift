@@ -397,9 +397,21 @@ struct ProjectFilesView: View {
 
     // MARK: Loading
 
+    /// TEMPORARY, finding what slows a big project's loading: while this is false, a cloned
+    /// project's saved file list (a big JSON file for Linux) isn't read here. Set it back to true.
+    private static let readsClonedFileList = false
+
     private func load(refresh: Bool) async {
         do {
-            let (project, tree) = try await ProjectStore.shared.tree(for: projectID, refresh: refresh)
+            let project: ProjectInfo
+            let tree: ProjectTree
+            if !Self.readsClonedFileList, !refresh, await CloneStore.shared.record(forProject: projectID) != nil,
+               let known = await ProjectStore.shared.project(id: projectID), known.ref != nil {
+                project = known
+                tree = ProjectTree(entries: [], truncated: false, etag: nil, fetchedAt: .now)
+            } else {
+                (project, tree) = try await ProjectStore.shared.tree(for: projectID, refresh: refresh)
+            }
             clone = await CloneStore.shared.record(forProject: projectID)
             repositoryBytes = Self.bytes(of: tree)
             if refs == nil || refresh { Task { await loadRefs() } }
