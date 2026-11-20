@@ -253,6 +253,8 @@ struct SideBarView: View {
     @Environment(SideBarState.self) private var state: SideBarState?
     /// How comments are written in the review.
     @AppStorage("reviewFormat") private var reviewFormat: ReviewFormat = .compact
+    /// Occurrences matches only identifiers of the selection's kind (tree-sitter).
+    @AppStorage(OccurrenceTerm.sameKindKey) private var occurrencesSameKind = false
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -296,26 +298,30 @@ struct SideBarView: View {
                     Text("A project is a GitHub repository, or a folder of one.")
                 }
             }
-            Section("Code Font") {
-                Picker("Font", selection: $codeFont) {
-                    ForEach(CodeFont.allCases, id: \.self) { font in
-                        Text(font.title).tag(font)
+            // Options: denser rows than the lists above.
+            Section("Code") {
+                HStack(spacing: 8) {
+                    Picker("Font", selection: $codeFont) {
+                        ForEach(CodeFont.allCases, id: \.self) { font in
+                            Text(font.title).tag(font)
+                        }
                     }
+                    .labelsHidden()
+                    .fixedSize()
+                    Spacer(minLength: 4)
+                    Text("\(Int(codeFontSize)) pt")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Stepper("Size", value: $codeFontSize, in: CodeTextStyle.sizes, step: 1)
+                        .labelsHidden()
                 }
-                Stepper(value: $codeFontSize, in: CodeTextStyle.sizes, step: 1) {
-                    HStack {
-                        Text("Size")
-                        Spacer()
-                        Text("\(Int(codeFontSize)) pt")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                .optionRow()
                 Picker("Colors", selection: $syntaxTheme) {
                     ForEach(SyntaxTheme.allCases, id: \.self) { theme in
                         Text(theme.title).tag(theme)
                     }
                 }
+                .optionRow()
                 // How code looks in the chosen font, size and colors.
                 Text(SyntaxColoring.shared.attributed("int main(void) { return 0; } // hi",
                                                       fileExtension: "c", theme: syntaxTheme))
@@ -323,24 +329,26 @@ struct SideBarView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .accessibilityHidden(true)
+                    .optionRow()
             }
             Section {
-                Picker("Comment Format", selection: $reviewFormat) {
+                Picker("Comments", selection: $reviewFormat) {
                     Text("Compact").tag(ReviewFormat.compact)
                     Text("Markdown").tag(ReviewFormat.markdown)
                 }
+                .optionRow()
+                Toggle("Same Kind Occurrences", isOn: $occurrencesSameKind)
+                    .optionRow()
             } header: {
-                Text("Review")
+                Text("Options")
             } footer: {
-                switch reviewFormat {
-                case .compact:
-                    Text("Each comment starts with the file and lines, like `alc/main.c:12-14:`.")
-                case .markdown:
-                    Text("Each comment starts with a heading for the file and lines, and the selected code.")
-                }
+                Text(optionsFooter)
+                    .font(.caption2)
             }
         }
         .listStyle(.insetGrouped)
+        .listSectionSpacing(.compact)
+        .environment(\.defaultMinListRowHeight, 34)  // lets the option rows be shorter
         .alert("Add Project", isPresented: $isAddingProject) {
             TextField("owner/repository", text: $newProjectAddress)
                 .textInputAutocapitalization(.never)
@@ -368,6 +376,17 @@ struct SideBarView: View {
             projects = await ProjectStore.shared.projects()
             onSelect(project.id)
         }
+    }
+
+    /// What the options do, briefly.
+    private var optionsFooter: String {
+        let comments = reviewFormat == .compact
+            ? String(localized: "Comments start with the file and lines, like main.c:12-14.")
+            : String(localized: "Comments start with a heading for the file and lines, and the code.")
+        let kind = occurrencesSameKind
+            ? String(localized: "Occurrences finds only names of the same kind (a field, a type…), not in comments or strings; slower on big projects.")
+            : String(localized: "Occurrences finds the word anywhere.")
+        return comments + " " + kind
     }
 
     /// Files or a project looks selected while it's open.
@@ -435,5 +454,14 @@ private struct SideBarProjectRow: View {
             Image(systemName: "shippingbox")
                 .foregroundStyle(.tint)
         }
+    }
+}
+
+private extension View {
+    /// The sidebar's option rows: smaller text and less padding than the lists'.
+    func optionRow() -> some View {
+        font(.subheadline)
+            .controlSize(.small)
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 12))
     }
 }
