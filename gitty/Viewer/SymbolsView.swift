@@ -66,6 +66,10 @@ struct SymbolsView: View, Equatable {
     let onOpenURL: (@MainActor (URL) -> Void)?
     /// A blame's commit was tapped (its project and hash): show it.
     let onShowCommit: (@MainActor (String, String) -> Void)?
+    /// A file with no symbols shows its whole text while unfolded. Only where the list has
+    /// every file's symbols (the Code level): a results page or the stack has a file's title
+    /// without them.
+    let showsWholeFiles: Bool
 
     /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
@@ -114,7 +118,9 @@ struct SymbolsView: View, Equatable {
          onNeedsSymbols: (@MainActor (URL) -> Void)? = nil,
          onOpenURL: (@MainActor (URL) -> Void)? = nil,
          collapsed: CollapsedCodeStore = .shared,
-         onShowCommit: (@MainActor (String, String) -> Void)? = nil) {
+         onShowCommit: (@MainActor (String, String) -> Void)? = nil,
+         showsWholeFiles: Bool = false) {
+        self.showsWholeFiles = showsWholeFiles
         self.collapsed = collapsed
         self.onShowCommit = onShowCommit
         self.symbols = symbols
@@ -157,6 +163,7 @@ struct SymbolsView: View, Equatable {
             && lhs.downloadingFiles == rhs.downloadingFiles && lhs.collapsed === rhs.collapsed
             && lhs.folders?.count == rhs.folders?.count
             && (lhs.onShowCommit == nil) == (rhs.onShowCommit == nil)
+            && lhs.showsWholeFiles == rhs.showsWholeFiles
     }
 
     var body: some View {
@@ -374,8 +381,13 @@ struct SymbolsView: View, Equatable {
         }
     }
 
+    /// A file with no symbols (a README, a config file) shows its whole text under its title
+    /// instead: otherwise unfolding it would show nothing.
     private func code(for symbol: CodeSymbol) -> some View {
-        SymbolCode(symbol: symbol, store: codeBlocks, peek: peek, blames: blames, collapsed: collapsed, openFile: openFile,
+        let isWholeFile = showsWholeFiles && symbol.kind == .file && symbol.isDownloaded && symbol.isIndexed
+            && fileCounts.count(of: symbol, in: symbols) == 0
+        return SymbolCode(symbol: symbol, isWholeFile: isWholeFile, store: codeBlocks, peek: peek, blames: blames,
+                   collapsed: collapsed, openFile: openFile,
                    scope: collapseScope, contextMenu: contextMenu(for: symbol), onTap: { onOpen(symbol) },
                    onTapAt: { anchor in
                        if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
@@ -683,6 +695,7 @@ private struct FileTitle: View {
         .accessibilityLabel(isDownloaded ? Text("\(name), \(count) symbols") : Text("\(name), not downloaded"))
         .accessibilityValue(isDownloaded ? (isFolded ? Text("Folded") : Text("Unfolded")) : Text(verbatim: ""))
         .accessibilityHint(!isDownloaded ? Text("Downloads the file")
+            : count == 0 ? (isFolded ? Text("Shows the file’s text") : Text("Hides the file’s text"))
             : isFolded ? Text("Shows the file’s symbols") : Text("Hides the file’s symbols"))
         .accessibilityAddTraits([.isHeader, .isButton])
     }
@@ -1253,11 +1266,13 @@ private final class CodeBlockStore {
     }
 }
 
-/// Zoomed in: one symbol's whole code in the raw-text style, or nothing for a file's entry (its
-/// title is all it has). Always a single view, so the lazy list can count its items without
+/// Zoomed in: one symbol's whole code in the raw-text style. A file's entry has nothing (its
+/// title is all it has), unless the file has no symbols: then its whole text (`isWholeFile`). Always a single view, so the lazy list can count its items without
 /// making them; its block is made here, once the symbol scrolls in.
 private struct SymbolCode: View {
     let symbol: CodeSymbol
+    /// A file's entry that has no symbols: its whole text shows while it's unfolded.
+    let isWholeFile: Bool
     let store: CodeBlockStore
     let peek: CodePeek
     let blames: BlameStore
@@ -1271,10 +1286,11 @@ private struct SymbolCode: View {
     /// Read so a new theme makes it take its new block.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
-    init(symbol: CodeSymbol, store: CodeBlockStore, peek: CodePeek, blames: BlameStore, collapsed: CollapsedCodeStore,
-         openFile: URL, scope: String, contextMenu: CodeMenu, onTap: @escaping @MainActor () -> Void,
-         onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
+    init(symbol: CodeSymbol, isWholeFile: Bool = false, store: CodeBlockStore, peek: CodePeek, blames: BlameStore,
+         collapsed: CollapsedCodeStore, openFile: URL, scope: String, contextMenu: CodeMenu,
+         onTap: @escaping @MainActor () -> Void, onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.symbol = symbol
+        self.isWholeFile = isWholeFile
         self.store = store
         self.peek = peek
         self.blames = blames
@@ -1288,8 +1304,7 @@ private struct SymbolCode: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if symbol.kind != .file, !collapsed.isHidden(symbol, openFile: openFile, scope: scope),
-               !collapsed.isCollapsed(symbol, openFile: openFile, scope: scope) {
+            if isShown {
                 let block = store.block(for: symbol)
                 SymbolCodeText(block: block, peek: peek, blames: blames, file: symbol.fileURL ?? openFile,
                                layoutKey: store.layoutKey, onTap: onTap, onTapAt: onTapAt)
@@ -1299,6 +1314,17 @@ private struct SymbolCode: View {
                     .modifier(contextMenu)
             }
         }
+    }
+
+    /// Unfolded: a symbol's code, or a whole file's (`isWholeFile`); a file's entry otherwise
+    /// has nothing under its title.
+    private var isShown: Bool {
+        if isWholeFile {
+            return !collapsed.isHidden(symbol, openFile: openFile, scope: scope)
+                && !collapsed.isFileCollapsed(symbol.fileURL ?? openFile, scope: scope)
+        }
+        return symbol.kind != .file && !collapsed.isHidden(symbol, openFile: openFile, scope: scope)
+            && !collapsed.isCollapsed(symbol, openFile: openFile, scope: scope)
     }
 }
 

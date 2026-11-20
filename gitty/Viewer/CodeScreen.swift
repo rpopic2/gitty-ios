@@ -306,7 +306,8 @@ struct CodeScreen: View {
                 folders: model.activeAlbum == nil ? model.folderGroups : nil,
                 onNeedsSymbols: { model.needsSymbols(of: $0) },
                 onOpenURL: { onOpen($0) },
-                onShowCommit: { showBlameCommit(projectID: $0, id: $1) }
+                onShowCommit: { showBlameCommit(projectID: $0, id: $1) },
+                showsWholeFiles: true
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()
