@@ -363,96 +363,84 @@ struct SideBarView: View {
         self.onSettings = onSettings
     }
 
-    /// Files, then your projects (hold one to drag it) and Add Project.
-    @ViewBuilder
-    private var filesAndProjects: some View {
-        Section {
-            item(isSelected: isSelected("")) { onSelect("") } label: {
-                Label("Files", systemImage: "doc.on.doc")
-            }
-        }
-        Section {
-            ForEach(projects) { project in
-                item(isSelected: isSelected(project.id)) { onSelect(project.id) } label: {
-                    SideBarProjectRow(project: project)
-                }
-                .swipeActions {
-                    Button(role: .destructive) { delete(project) } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
-                .accessibilityAction(named: "Move Up") { move(project, by: -1) }
-                .accessibilityAction(named: "Move Down") { move(project, by: 1) }
-            }
-            // Hold a project and drag it.
-            .onMove { from, to in
-                projects.move(fromOffsets: from, toOffset: to)
-                saveOrder()
-            }
-            Button {
-                newProjectAddress = ""
-                isAddingProject = true
-            } label: {
-                Label {
-                    // As tall as a project's row (name, then owner · branch), centered.
-                    ZStack(alignment: .leading) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: " ")
-                            Text(verbatim: " ").font(.caption)
-                        }
-                        .hidden()
-                        Text("Add Project")
-                    }
-                } icon: {
-                    Image(systemName: "plus")
-                }
-            }
-        } header: {
-            Text("Projects")
-        } footer: {
-            if projects.isEmpty {
-                Text("A project is a GitHub repository, or a folder of one.")
-            }
-        }
-    }
-
-    /// The code's font, size and colors, with a preview.
-    private var codeSection: some View {
-        Section("Code") {
-            HStack(spacing: 8) {
-                Picker("Font", selection: $codeFont) {
-                    ForEach(CodeFont.allCases, id: \.self) { font in
-                        Text(font.title).tag(font)
-                    }
-                }
-                .labelsHidden()
-                .fixedSize()
-                Spacer(minLength: 4)
-                Text("\(Int(codeFontSize)) pt")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                Stepper("Size", value: $codeFontSize, in: CodeTextStyle.sizes, step: 1)
-                    .labelsHidden()
-            }
-            .optionRow()
-            Picker("Colors", selection: $syntaxTheme) {
-                ForEach(SyntaxTheme.allCases, id: \.self) { theme in
-                    Text(theme.title).tag(theme)
-                }
-            }
-            .optionRow()
-            // How code looks in the chosen font, size and colors.
-            CodePreviewLine(font: codeFont, size: codeFontSize, theme: syntaxTheme)
-                .optionRow()
-        }
-    }
-
-
     var body: some View {
         List {
-            filesAndProjects
+            Section {
+                item(isSelected: isSelected("")) { onSelect("") } label: {
+                    Label("Files", systemImage: "doc.on.doc")
+                }
+            }
+            Section {
+                ForEach(projects) { project in
+                    item(isSelected: isSelected(project.id)) { onSelect(project.id) } label: {
+                        SideBarProjectRow(project: project)
+                    }
+                    .swipeActions {
+                        Button(role: .destructive) { delete(project) } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    .accessibilityAction(named: "Move Up") { move(project, by: -1) }
+                    .accessibilityAction(named: "Move Down") { move(project, by: 1) }
+                }
+                // Hold a project and drag it.
+                .onMove { from, to in
+                    projects.move(fromOffsets: from, toOffset: to)
+                    saveOrder()
+                }
+                Button {
+                    newProjectAddress = ""
+                    isAddingProject = true
+                } label: {
+                    Label {
+                        // As tall as a project's row (name, then owner · branch), centered.
+                        ZStack(alignment: .leading) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: " ")
+                                Text(verbatim: " ").font(.caption)
+                            }
+                            .hidden()
+                            Text("Add Project")
+                        }
+                    } icon: {
+                        Image(systemName: "plus")
+                    }
+                }
+            } header: {
+                Text("Projects")
+            } footer: {
+                if projects.isEmpty {
+                    Text("A project is a GitHub repository, or a folder of one.")
+                }
+            }
             // Options: denser rows than the lists above.
-            codeSection
+            Section("Code") {
+                HStack(spacing: 8) {
+                    Picker("Font", selection: $codeFont) {
+                        ForEach(CodeFont.allCases, id: \.self) { font in
+                            Text(font.title).tag(font)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    Spacer(minLength: 4)
+                    Text("\(Int(codeFontSize)) pt")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Stepper("Size", value: $codeFontSize, in: CodeTextStyle.sizes, step: 1)
+                        .labelsHidden()
+                }
+                .optionRow()
+                Picker("Colors", selection: $syntaxTheme) {
+                    ForEach(SyntaxTheme.allCases, id: \.self) { theme in
+                        Text(theme.title).tag(theme)
+                    }
+                }
+                .optionRow()
+                // How code looks in the chosen font, size and colors.
+                CodePreviewLine(font: codeFont, size: codeFontSize, theme: syntaxTheme)
+                    .optionRow()
+            }
             Section {
                 Picker("Comments", selection: $reviewFormat) {
                     Text("Compact").tag(ReviewFormat.compact)
