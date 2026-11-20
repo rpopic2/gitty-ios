@@ -104,8 +104,8 @@ struct FileInfoView: View {
         Section {
             if let progress = model.cloneProgress {
                 HStack {
-                    ProgressView(value: progress)
-                    Text(progress, format: .percent.precision(.fractionLength(0)))
+                    ProgressView(value: progress.fraction)
+                    Text(Int64(progress.receivedBytes), format: .byteCount(style: .file))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -233,7 +233,7 @@ final class FileInfoModel {
     private(set) var hasLoaded = false
     private(set) var sizeSummary: String?
     private(set) var clone: CloneRecord?
-    private(set) var cloneProgress: Double?
+    private(set) var cloneProgress: FetchProgress?
     private(set) var history: [GitCommit] = []
     private(set) var canLoadMore = false
     private(set) var isLoading = false
@@ -275,10 +275,10 @@ final class FileInfoModel {
     func clone() async {
         guard let project = location?.project else { return }
         errorMessage = nil
-        cloneProgress = 0
-        let (fractions, continuation) = AsyncStream.makeStream(of: Double.self, bufferingPolicy: .bufferingNewest(1))
+        cloneProgress = .start
+        let (updates, continuation) = AsyncStream.makeStream(of: FetchProgress.self, bufferingPolicy: .bufferingNewest(1))
         let listener = Task {
-            for await fraction in fractions where cloneProgress != nil { cloneProgress = fraction }
+            for await update in updates where cloneProgress != nil { cloneProgress = update }
         }
         do {
             try await CloneStore.shared.clone(project) { continuation.yield($0) }
