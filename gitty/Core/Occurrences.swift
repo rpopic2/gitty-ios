@@ -1,5 +1,17 @@
 import Foundation
 
+/// What Occurrences looks for: the selected text, and, with Same Kind on (the sidebar), the
+/// identifier it is (its tree-sitter node type and language) so only identifiers of that kind
+/// match.
+nonisolated struct OccurrenceTerm: Equatable, Sendable {
+    let text: String
+    /// `nil`: the text, as a whole word, anywhere (comments and strings too).
+    let identifier: IdentifierHighlight?
+
+    /// The sidebar's Same Kind switch (off by default).
+    static let sameKindKey = "occurrencesSameKind"
+}
+
 /// Find All Occurrences: where a selected word is used in the project's files, as a whole word
 /// with its exact case (`count` matches `count`, not `counter` or `Count`).
 nonisolated enum Occurrences {
@@ -40,6 +52,20 @@ nonisolated enum Occurrences {
         case 0..<128: false
         default: true
         }
+    }
+
+    /// The matches to keep in a file: with an identifier, only identifiers of its kind (in
+    /// files of its language; any identifier in another language), found with tree-sitter;
+    /// files without a grammar keep the text matches. The text matches come first, so files
+    /// without the word are never parsed.
+    static func ranges(of term: OccurrenceTerm, in text: String, fileExtension: String) -> [NSRange] {
+        let textRanges = ranges(of: term.text, in: text as NSString)
+        guard let identifier = term.identifier, !textRanges.isEmpty,
+              SymbolLanguage.forExtension(fileExtension) != nil
+        else { return textRanges }
+        let map = IdentifierMap(text: text, fileExtension: fileExtension)
+        guard map.language != nil else { return textRanges }
+        return map.occurrences(of: identifier)
     }
 
     /// The 0-based line `location` is on, from `lineStarts` (see `AlbumContents.lineStarts`).

@@ -44,11 +44,33 @@ struct OccurrencesTests {
         let entry = CodeSymbol(id: 0, name: "a.c", kind: .file, range: NSRange(location: 0, length: text.length),
                                line: 1, preview: "", fileURL: url)
         let file = OccurrenceFile(url: url, fileURL: url, entry: entry, symbols: [entry, function])
-        let found = OccurrenceSearch.find("total", in: text, file: file)
+        let found = OccurrenceSearch.find(OccurrenceTerm(text: "total", identifier: nil), in: text as String, file: file)
         #expect(found.count == 2)  // line 1, and line 3 once (twice on it)
         #expect(found[0].line.line == 1 && found[0].page.kind == .lines)  // in no symbol: the lines around it
         #expect(found[1].line.line == 3 && found[1].page.name == "add")
         #expect(found[1].lineInPage == 1)  // the function's second line
+    }
+}
+
+struct SameKindOccurrencesTests {
+    @Test func onlyIdentifiersOfItsKindInItsLanguage() {
+        let text = "int count; // count\nvoid f(struct s *s) { s->count = count; }\n"
+        let field = IdentifierHighlight(name: "count", kind: "field_identifier", language: "C")
+        let ranges = Occurrences.ranges(of: OccurrenceTerm(text: "count", identifier: field), in: text, fileExtension: "c")
+        let nsText = text as NSString
+        #expect(ranges.count == 1)  // s->count only: not the variable, nor the comment
+        #expect(ranges.first.map { nsText.substring(with: NSRange(location: $0.location - 2, length: 2)) } == "->")
+    }
+
+    @Test func withoutAKindItsTheTextEverywhere() {
+        let text = "int count; // count\n"
+        #expect(Occurrences.ranges(of: OccurrenceTerm(text: "count", identifier: nil), in: text, fileExtension: "c").count == 2)
+    }
+
+    @Test func filesWithoutAGrammarKeepTheTextMatches() {
+        let field = IdentifierHighlight(name: "count", kind: "field_identifier", language: "C")
+        #expect(Occurrences.ranges(of: OccurrenceTerm(text: "count", identifier: field),
+                                   in: "the count of things", fileExtension: "md").count == 1)
     }
 }
 

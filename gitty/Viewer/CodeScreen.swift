@@ -565,7 +565,7 @@ struct CodeScreen: View {
 
     /// Occurrences on a card: where the selection is used, as a whole word, in the project's
     /// downloaded files that pass its filter, on a page over the card. The pages highlight it.
-    private func findOccurrences(of term: String, from card: CardRoute) {
+    private func findOccurrences(of query: OccurrenceTerm, from card: CardRoute) {
         pruneStack()
         var files: [OccurrenceFile] = []
         var skipped = 0
@@ -585,9 +585,13 @@ struct CodeScreen: View {
             }
             start = end
         }
-        let search = OccurrenceSearch(term: term, source: AnyHashable(card), files: files, skippedFiles: skipped)
+        let search = OccurrenceSearch(query: query, source: AnyHashable(card), files: files, skippedFiles: skipped)
         stackedOccurrences[search.id] = search
-        if term.unicodeScalars.allSatisfy({ $0.value > 127 || Occurrences.isWordCharacter(unichar($0.value)) }) {
+        // The pages highlight it: of its kind, with Same Kind; any identifier of the name otherwise.
+        let term = query.text
+        if let identifier = query.identifier {
+            highlights?.current = identifier
+        } else if term.unicodeScalars.allSatisfy({ $0.value > 127 || Occurrences.isWordCharacter(unichar($0.value)) }) {
             highlights?.current = IdentifierHighlight(name: term, kind: nil, language: nil)
         }
         cardPath.append(.occurrences(search.id))

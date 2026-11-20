@@ -16,7 +16,9 @@ nonisolated struct OccurrenceFile: Sendable {
 @MainActor @Observable
 final class OccurrenceSearch {
     let id = UUID()
-    let term: String
+    /// What it looks for (and, with Same Kind, the identifier's kind).
+    let query: OccurrenceTerm
+    var term: String { query.text }
     /// What its page zooms out of: the card it was found from.
     let source: AnyHashable
     /// The list: each file with occurrences (its entry), then its occurrences' lines.
@@ -44,8 +46,8 @@ final class OccurrenceSearch {
     @ObservationIgnored private var nextEntryID = 10_000_000
     @ObservationIgnored private var nextPageID = 20_000_000
 
-    init(term: String, source: AnyHashable, files: [OccurrenceFile], skippedFiles: Int) {
-        self.term = term
+    init(query: OccurrenceTerm, source: AnyHashable, files: [OccurrenceFile], skippedFiles: Int) {
+        self.query = query
         self.source = source
         self.skippedFiles = skippedFiles
         task = Task { [weak self] in await self?.search(files) }
@@ -56,18 +58,30 @@ final class OccurrenceSearch {
         task?.cancel()
     }
 
+    /// Files a few at a time, side by side (parsing them, with Same Kind, is the slow part),
+    /// their occurrences kept in file order.
     private func search(_ files: [OccurrenceFile]) async {
         var lastPublish = ContinuousClock.now
         var pending: [(OccurrenceFile, [Found])] = []
-        for file in files {
+        let query = query
+        let width = max(2, ProcessInfo.processInfo.activeProcessorCount)
+        var start = 0
+        while start < files.count {
             guard !Task.isCancelled else { return }
-            guard let text = await FileTextCache.shared.text(of: file.url) else { continue }
-            let term = term
-            let found = await Task.detached(priority: .userInitiated) {
-                Self.find(term, in: text as NSString, file: file)
-            }.value
-            guard !found.isEmpty else { continue }
-            pending.append((file, found))
+            let chunk = Array(files[start..<min(start + width, files.count)])
+            start += chunk.count
+            let found = await withTaskGroup(of: (Int, [Found]).self) { group in
+                for (index, file) in chunk.enumerated() {
+                    group.addTask(priority: .userInitiated) {
+                        guard let text = await FileTextCache.shared.text(of: file.url) else { return (index, []) }
+                        return (index, Self.find(query, in: text, file: file))
+                    }
+                }
+                var found = [[Found]](repeating: [], count: chunk.count)
+                for await (index, result) in group { found[index] = result }
+                return found
+            }
+            for (file, result) in zip(chunk, found) where !result.isEmpty { pending.append((file, result)) }
             // A batch at a time, so the list isn't rebuilt for every file.
             if ContinuousClock.now - lastPublish > .milliseconds(250) {
                 publish(pending)
@@ -116,9 +130,10 @@ final class OccurrenceSearch {
         let lineInPage: Int
     }
 
-    nonisolated static func find(_ term: String, in text: NSString, file: OccurrenceFile) -> [Found] {
-        let ranges = Occurrences.ranges(of: term, in: text)
+    nonisolated static func find(_ query: OccurrenceTerm, in string: String, file: OccurrenceFile) -> [Found] {
+        let ranges = Occurrences.ranges(of: query, in: string, fileExtension: file.url.pathExtension)
         guard !ranges.isEmpty else { return [] }
+        let text = string as NSString
         let starts = AlbumContents.lineStarts(of: text)
         let symbols = file.symbols.filter { $0.kind != .file }
         var found: [Found] = []

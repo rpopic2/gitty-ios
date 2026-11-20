@@ -109,12 +109,12 @@ nonisolated enum RawTextStyle {
     /// project's files (`Occurrences`).
     @MainActor
     static func occurrencesItems(for range: NSRange, in textView: UITextView,
-                                 onFind: (@MainActor (String) -> Void)?) -> [UIMenuElement] {
+                                 onFind: (@MainActor (String, NSRange) -> Void)?) -> [UIMenuElement] {
         guard let onFind, range.length > 0, range.length <= 500, NSMaxRange(range) <= textView.textStorage.length,
               let term = Occurrences.term(fromSelection: textView.textStorage.mutableString.substring(with: range))
         else { return [] }
         let action = UIAction(title: String(localized: "Occurrences"),
-                              image: UIImage(systemName: "text.magnifyingglass")) { _ in onFind(term) }
+                              image: UIImage(systemName: "text.magnifyingglass")) { _ in onFind(term, range) }
         return [action]
     }
 

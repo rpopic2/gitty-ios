@@ -31,7 +31,7 @@ struct SymbolPager: View {
     let onSearchSymbols: @MainActor (String) -> Void
     /// Occurrences in a page's text menu: where the selection is used, on a page stacked over
     /// this one.
-    let onFindOccurrences: (@MainActor (String) -> Void)?
+    let onFindOccurrences: (@MainActor (OccurrenceTerm) -> Void)?
     /// Where pages other than the first open (a symbol's id: the line, and where it goes on
     /// screen), like `initialAnchor` for the first: an occurrence's line.
     let pageAnchors: [Int: PageAnchor]
@@ -72,7 +72,7 @@ struct SymbolPager: View {
          onRefresh: @escaping @MainActor (URL?) async -> Void,
          symbolSearchTerm: @escaping @MainActor (String) -> String?,
          onSearchSymbols: @escaping @MainActor (String) -> Void,
-         onFindOccurrences: (@MainActor (String) -> Void)? = nil,
+         onFindOccurrences: (@MainActor (OccurrenceTerm) -> Void)? = nil,
          pageAnchors: [Int: PageAnchor] = [:],
          onComment: @escaping @MainActor (CodeSymbol, NSRange) -> Void,
          firstLine: @escaping @MainActor (CodeSymbol) -> Int,
@@ -405,7 +405,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
     /// …and searching symbols for it.
     var onSearchSymbols: (@MainActor (String) -> Void)? = nil
     /// Occurrences in the text menu: where the selection is used in the project.
-    var onFindOccurrences: (@MainActor (String) -> Void)? = nil
+    var onFindOccurrences: (@MainActor (OccurrenceTerm) -> Void)? = nil
     /// Comment in the text menu: adds a comment on the selected range to the review.
     var onComment: (@MainActor (NSRange) -> Void)? = nil
     /// Add to Album in the text menu, for the selected lines (`nil` hides it).
@@ -554,7 +554,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         var textID: Int?
         var symbolSearchTerm: (@MainActor (String) -> String?)?
         var onSearchSymbols: (@MainActor (String) -> Void)?
-        var onFindOccurrences: (@MainActor (String) -> Void)?
+        var onFindOccurrences: (@MainActor (OccurrenceTerm) -> Void)?
         var onComment: (@MainActor (NSRange) -> Void)?
         var albumMenu: (@MainActor (NSRange) -> UIMenu?)?
         var fileExtension = ""
@@ -582,7 +582,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 + RawTextStyle.searchItems(for: range, in: textView,
                                            searchTerm: symbolSearchTerm,
                                            onSearch: onSearchSymbols)
-                + RawTextStyle.occurrencesItems(for: range, in: textView, onFind: onFindOccurrences)
+                + RawTextStyle.occurrencesItems(for: range, in: textView,
+                                                onFind: occurrencesAction(in: textView))
             // Highlight is holding an identifier, not a menu item. Add to Album comes
             // last, after Copy and Share: on the menu's second page.
             return RawTextStyle.editMenu(from: suggestedActions, adding: extra, trailing: album)
@@ -765,6 +766,32 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 }
                 views.append(contentsOf: view.subviews)
             }
+        }
+
+        /// Occurrences in the menu: what to look for is worked out when it's chosen.
+        private func occurrencesAction(in textView: UITextView) -> (@MainActor (String, NSRange) -> Void)? {
+            guard let find = onFindOccurrences else { return nil }
+            return { [weak self, weak textView] text, range in
+                guard let self, let textView else { return }
+                find(self.occurrenceTerm(text, at: range, in: textView))
+            }
+        }
+
+        /// What Occurrences looks for: with Same Kind on (the sidebar), the identifier the
+        /// selection is, from the page's parse (made now if Highlight hasn't yet).
+        private func occurrenceTerm(_ text: String, at range: NSRange, in textView: UITextView) -> OccurrenceTerm {
+            guard UserDefaults.standard.bool(forKey: OccurrenceTerm.sameKindKey),
+                  NSMaxRange(range) <= textView.textStorage.length
+            else { return OccurrenceTerm(text: text, identifier: nil) }
+            // The selection without the spaces around it.
+            let selected = textView.textStorage.mutableString.substring(with: range) as NSString
+            let inside = selected.range(of: text)
+            guard inside.location != NSNotFound else { return OccurrenceTerm(text: text, identifier: nil) }
+            let map = identifiers ?? IdentifierMap(text: textView.textStorage.string, fileExtension: fileExtension)
+            identifiers = map
+            let found = map.identifier(containing: NSRange(location: range.location + inside.location, length: inside.length))
+            let identifier = found.flatMap { $0.name == text && $0.kind != nil ? $0 : nil }
+            return OccurrenceTerm(text: text, identifier: identifier)
         }
 
         /// The identifier under a point of the text view, and the character there: only right on
