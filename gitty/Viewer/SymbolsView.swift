@@ -276,9 +276,7 @@ struct SymbolsView: View, Equatable {
 
     /// Every file folded: the files grouped by folder, each folder's header (tap it to fold the
     /// folder) a plain row above its files. The titles stick, as in the outline: a file's, and
-    /// a symbol's under a file unfolded here. A folder's header can't be a row of its own and
-    /// still keep each symbol one item, so it's part of the item before it (the first folder's
-    /// comes before the list).
+    /// a symbol's under a file unfolded here.
     private var groupedByFolder: some View {
         let collapsed = collapsed
         let scope = collapseScope
@@ -291,16 +289,20 @@ struct SymbolsView: View, Equatable {
                                 // A folded file's symbols aren't items at all: thousands of empty
                                 // ones made scrolling here lag.
                                 isShown: { !collapsed.isHidden($0, openFile: openFile, scope: scope) })
+        // Each header is an item of its own, like each symbol: made only as it scrolls in. (As
+        // part of the symbol before it, every header after the last unfolded file was made at
+        // once, thousands in a project as big as Linux: unfolding a folder took seconds.)
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-            ForEach(layout.leading) { folderRowHeader($0) }
-            ForEach(layout.rows, id: \.symbol.id) { row in
-                Section {
-                    VStack(spacing: 0) {
-                        code(for: row.symbol)
-                        ForEach(row.headers) { folderRowHeader($0) }
+            ForEach(layout.items) { item in
+                switch item.content {
+                case .header(let folder):
+                    folderRowHeader(folder)
+                case .symbol(let symbol):
+                    Section {
+                        code(for: symbol)
+                    } header: {
+                        header(for: symbol)
                     }
-                } header: {
-                    header(for: row.symbol)
                 }
             }
         }
@@ -763,8 +765,8 @@ private struct FolderHeader: View {
     }
 }
 
-/// The grouped view's rows: each shown symbol (a folded folder's aren't), with the headers of
-/// the folders that start after it, and the folders that start before the first one.
+/// The grouped view's items, in order: each folder's header (a top folder's, showing only those),
+/// then its shown symbols (a folded folder's aren't).
 private struct FolderRows {
     /// A folder's header, or (showing only the top folders) a top folder's.
     enum Header: Identifiable {
@@ -779,13 +781,20 @@ private struct FolderRows {
         }
     }
 
-    struct Row {
-        let symbol: CodeSymbol
-        var headers: [Header] = []
+    /// One item of the list: a header, or a symbol that shows (under its title).
+    struct Item: Identifiable {
+        enum Content {
+            case header(Header)
+            case symbol(CodeSymbol)
+        }
+
+        /// A symbol's is its id (its place in the list, which the list's position goes by); a
+        /// header's is negative, so it never meets one, and the position passes over it.
+        let id: Int
+        let content: Content
     }
 
-    private(set) var leading: [Header] = []
-    private(set) var rows: [Row] = []
+    private(set) var items: [Item] = []
 
     /// - Parameters:
     ///   - showsTops: only the top folders (`TopFolder`), each with its folders while it's open.
@@ -794,12 +803,13 @@ private struct FolderRows {
     init(groups: [FolderGroup], showsTops: Bool, isTopOpen: (TopFolder) -> Bool,
          isFolded: (FolderGroup) -> Bool, isShown: (CodeSymbol) -> Bool) {
         func add(_ header: Header) {
-            if rows.isEmpty { leading.append(header) } else { rows[rows.count - 1].headers.append(header) }
+            let hash = UInt(bitPattern: header.id.hashValue) >> 1
+            items.append(Item(id: -1 - Int(hash), content: .header(header)))
         }
         func add(_ group: FolderGroup) {
             add(.folder(group))
             guard !isFolded(group) else { return }
-            for symbol in group.symbols where isShown(symbol) { rows.append(Row(symbol: symbol)) }
+            for symbol in group.symbols where isShown(symbol) { items.append(Item(id: symbol.id, content: .symbol(symbol))) }
         }
         guard showsTops else {
             groups.forEach(add)
