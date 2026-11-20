@@ -306,17 +306,23 @@ struct SymbolsView: View, Equatable {
         // Each header is an item of its own, like each symbol: made only as it scrolls in. (As
         // part of the symbol before it, every header after the last unfolded file was made at
         // once, thousands in a project as big as Linux: unfolding a folder took seconds.)
+        // Every item is a section of exactly one view and one header, whatever it is (a folder's
+        // header is the section's content, under an empty header), so the lazy list counts the
+        // items from their types alone. With a header item that wasn't a section, it ran this
+        // closure for every item in each layout pass: unfolding something hung for seconds.
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(layout.items) { item in
-                switch item.content {
-                case .header(let folder):
-                    folderRowHeader(folder)
-                case .symbol(let symbol, let indent):
-                    Section {
-                        code(for: symbol)
-                    } header: {
-                        // In line with its folder's header (inside a group); the code stays edge to edge.
-                        header(for: symbol, indent: indent)
+                Section {
+                    switch item.content {
+                    case .header(let folder): folderRowHeader(folder)
+                    case .symbol(let symbol, _): code(for: symbol)
+                    }
+                } header: {
+                    switch item.content {
+                    // One view all the same (an empty one would make the count vary), with no height.
+                    case .header: Color.clear.frame(height: 0)
+                    // In line with its folder's header (inside a group); the code stays edge to edge.
+                    case .symbol(let symbol, let indent): header(for: symbol, indent: indent)
                     }
                 }
             }
