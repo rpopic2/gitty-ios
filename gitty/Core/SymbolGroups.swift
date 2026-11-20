@@ -312,7 +312,7 @@ final class CollapsedCodeStore {
         save()
     }
 
-    /// Collapses or expands these symbols (a file's, from its title's menu), unfolding their
+    /// Collapses or expands these symbols (a file's), unfolding their
     /// file.
     func setCollapsed(_ isCollapsed: Bool, _ symbols: [CodeSymbol], openFile: URL, scope: String) {
         let byDefault = collapsedScopes.contains(scope)

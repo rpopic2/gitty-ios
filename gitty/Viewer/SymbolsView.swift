@@ -4,8 +4,8 @@ import UIKit
 /// The Code level: every top-level definition of the open file and its project, as an outline.
 /// Each file has a title line, and each symbol a title with its declaration, which sticks to the
 /// top while you read its code, edge to edge in the raw-text style under it. Tap a title to
-/// collapse or expand it (a file's folds all its symbols); Collapse All (the bar's menu, a
-/// file title's menu, or pinching in) leaves just the titles, like a C header, and Expand All
+/// collapse or expand it (a file's folds all its symbols); Collapse All (the bar's menu, or
+/// pinching in) leaves just the titles, like a C header, and Expand All
 /// brings the code back, keeping your place. Tap the code to open its page,
 /// full screen (see `SymbolPager`).
 ///
@@ -70,6 +70,9 @@ struct SymbolsView: View, Equatable {
     /// every file's symbols (the Code level): a results page or the stack has a file's title
     /// without them.
     let showsWholeFiles: Bool
+    /// The hold menu's text items (Comment, Search, Occurrences, Copy, Share, as when selecting
+    /// text on a page): what Search, Occurrences and Comment do. `nil`: just Copy and Share.
+    let textActions: CodeTextActions?
 
     /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
@@ -119,8 +122,10 @@ struct SymbolsView: View, Equatable {
          onOpenURL: (@MainActor (URL) -> Void)? = nil,
          collapsed: CollapsedCodeStore = .shared,
          onShowCommit: (@MainActor (String, String) -> Void)? = nil,
-         showsWholeFiles: Bool = false) {
+         showsWholeFiles: Bool = false,
+         textActions: CodeTextActions? = nil) {
         self.showsWholeFiles = showsWholeFiles
+        self.textActions = textActions
         self.collapsed = collapsed
         self.onShowCommit = onShowCommit
         self.symbols = symbols
@@ -163,7 +168,7 @@ struct SymbolsView: View, Equatable {
             && lhs.downloadingFiles == rhs.downloadingFiles && lhs.collapsed === rhs.collapsed
             && lhs.folders?.count == rhs.folders?.count
             && (lhs.onShowCommit == nil) == (rhs.onShowCommit == nil)
-            && lhs.showsWholeFiles == rhs.showsWholeFiles
+            && lhs.showsWholeFiles == rhs.showsWholeFiles && (lhs.textActions == nil) == (rhs.textActions == nil)
     }
 
     var body: some View {
@@ -388,7 +393,7 @@ struct SymbolsView: View, Equatable {
             && fileCounts.count(of: symbol, in: symbols) == 0
         return SymbolCode(symbol: symbol, isWholeFile: isWholeFile, store: codeBlocks, peek: peek, blames: blames,
                    collapsed: collapsed, openFile: openFile,
-                   scope: collapseScope, contextMenu: contextMenu(for: symbol), onTap: { onOpen(symbol) },
+                   scope: collapseScope, contextMenu: contextMenu(for: symbol, part: .code), onTap: { onOpen(symbol) },
                    onTapAt: { anchor in
                        if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
                    })
@@ -402,32 +407,25 @@ struct SymbolsView: View, Equatable {
                    isDownloading: symbol.fileURL.map(downloadingFiles.contains) ?? false,
                    onDownload: onDownloadFile,
                    onNeedsSymbols: onNeedsSymbols,
-                   contextMenu: contextMenu(for: symbol))
+                   contextMenu: contextMenu(for: symbol, part: .title))
     }
 
-    /// The long-press menu of a symbol's title and code (the same for both): a small preview
-    /// (not a snapshot of what may be hundreds of lines), Open, Add to Album, Show History, and
-    /// on a file's title, Collapse All and Expand All in it.
-    private func contextMenu(for symbol: CodeSymbol) -> CodeMenu {
-        let view = self
+    /// The long-press menu of a symbol's title or code: a small preview (not a snapshot of what
+    /// may be hundreds of lines), Open, Show History, the text items (see `CodeMenu`) and Add
+    /// to Album.
+    private func contextMenu(for symbol: CodeSymbol, part: CodeMenu.Part) -> CodeMenu {
         let onOpen = onOpen
         let onOpenURL = onOpenURL
-        return CodeMenu(symbol: symbol, openFile: openFile, albumContext: albumContext,
+        let blocks = codeBlocks
+        return CodeMenu(symbol: symbol, part: part, openFile: openFile, albumContext: albumContext,
                         onOpen: { symbol in
                             // Not downloaded: open the file itself, which downloads it.
                             if !symbol.isDownloaded, let url = symbol.fileURL, let onOpenURL { onOpenURL(url) } else { onOpen(symbol) }
                         },
                         onShowHistory: onShowHistory,
-                        onSetFileCollapsed: { view.setFileCollapsed($0, symbol) })
-    }
-
-    /// A file title's Collapse All / Expand All: its symbols.
-    private func setFileCollapsed(_ isCollapsed: Bool, _ entry: CodeSymbol) {
-        let file = entry.fileURL ?? openFile
-        let inFile = symbols.filter { $0.kind != .file && ($0.fileURL ?? openFile) == file }
-        withAnimation(.smooth(duration: 0.25)) {
-            collapsed.setCollapsed(isCollapsed, inFile, openFile: openFile, scope: collapseScope)
-        }
+                        textActions: textActions,
+                        ownText: ownText,
+                        codeRange: { blocks.shownRange(of: symbol) })
     }
 
     // MARK: Gestures
@@ -1185,7 +1183,7 @@ private final class CodeBlockStore {
     /// member starts: the members follow as their own blocks, so the type isn't shown twice
     /// (and a big class isn't one huge block). Members follow their type in the full list;
     /// in search results, where they don't, the type is whole.
-    private func shownRange(of symbol: CodeSymbol) -> NSRange {
+    func shownRange(of symbol: CodeSymbol) -> NSRange {
         updatePositions()
         guard let position = positions[symbol.id], position + 1 < symbols.count else { return symbol.range }
         let next = symbols[position + 1]
@@ -1328,39 +1326,141 @@ private struct SymbolCode: View {
     }
 }
 
-/// The long-press menu of a symbol's title and code: a small preview, then Open (its page),
-/// Show History, Add to Album, and on a file's title, Collapse All and Expand All in it.
+/// What the hold menu's Search, Occurrences and Comment do (see `SymbolsView.textActions`).
+struct CodeTextActions {
+    let onSearch: @MainActor (String) -> Void
+    let onFindOccurrences: (@MainActor (OccurrenceTerm) -> Void)?
+    /// A range of a file (`nil`: the open file), and the file's text the range is in.
+    let onComment: (@MainActor (NSRange, URL?, NSString) -> Void)?
+}
+
+/// The long-press menu of a symbol's title and code: a small preview, then Open (its page) and
+/// Show History; then the items selecting text on its page has (Comment, Search, Occurrences,
+/// Copy, Share), for what was held: a title's text (its declaration, or a file's name), or for
+/// the code, the title and its code together (all a block shows); then Add to Album.
 private struct CodeMenu: ViewModifier {
+    enum Part { case title, code }
+
     let symbol: CodeSymbol
+    let part: Part
     let openFile: URL
     let albumContext: AlbumMenuContext?
     let onOpen: @MainActor (CodeSymbol) -> Void
     /// Show History: a file's, and the symbol it was asked from (`nil` for a file's title).
     let onShowHistory: (@MainActor (URL, CodeSymbol?) -> Void)?
-    let onSetFileCollapsed: @MainActor (Bool) -> Void
+    let textActions: CodeTextActions?
+    /// The open file's text (its symbols have no `fileURL`).
+    let ownText: NSString?
+    /// The code's range in its file (what its block shows), worked out when an item is chosen.
+    let codeRange: @MainActor () -> NSRange
 
     func body(content: Content) -> some View {
         let file = symbol.fileURL ?? openFile
         content.contextMenu {
-            Button("Open", systemImage: "arrow.up.left.and.arrow.down.right") { onOpen(symbol) }
-            if albumContext != nil, let onShowHistory {
-                Button("Show History", systemImage: "clock.arrow.circlepath") {
-                    onShowHistory(file, symbol.kind == .file ? nil : symbol)
+            Section {
+                Button("Open", systemImage: "arrow.up.left.and.arrow.down.right") { onOpen(symbol) }
+                if albumContext != nil, let onShowHistory {
+                    Button("Show History", systemImage: "clock.arrow.circlepath") {
+                        onShowHistory(file, symbol.kind == .file ? nil : symbol)
+                    }
                 }
             }
+            Section { textItems }
             if let albumContext {
                 AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext,
                                download: symbol.isDownloaded ? nil : symbol.fileURL)
             }
-            if symbol.kind == .file, symbol.isDownloaded {
-                Section {
-                    Button("Collapse All in File", systemImage: "chevron.right.2") { onSetFileCollapsed(true) }
-                    Button("Expand All in File", systemImage: "chevron.down.2") { onSetFileCollapsed(false) }
-                }
-            }
         } preview: {
             CodeMenuPreview(symbol: symbol, fileExtension: file.pathExtension)
         }
+    }
+
+    /// Like the page's text menu. A title's text is known at once (from the list); the code's
+    /// is read from its file when an item is chosen.
+    @ViewBuilder private var textItems: some View {
+        switch part {
+        case .title:
+            let text = symbol.kind == .file ? symbol.name : CodeHeader.declaration(of: symbol)
+            if symbol.kind != .file, symbol.isDownloaded, let onComment = textActions?.onComment {
+                Button("Comment", systemImage: "text.bubble") {
+                    withFileText { fileText in
+                        if let range = Self.declarationRange(of: symbol, in: fileText) {
+                            onComment(range, symbol.fileURL, fileText)
+                        }
+                    }
+                }
+            }
+            if let onSearch = textActions?.onSearch, let query = SymbolSearch.query(fromSelection: text) {
+                Button("Search", systemImage: "magnifyingglass") { onSearch(query) }
+            }
+            if let onFind = textActions?.onFindOccurrences, let term = Occurrences.term(fromSelection: text) {
+                Button("Occurrences", systemImage: "text.magnifyingglass") {
+                    onFind(OccurrenceTerm(text: term, identifier: nil))
+                }
+            }
+            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+            Button("Share", systemImage: "square.and.arrow.up") { TextSharer.share(text) { _ in } }
+        case .code:
+            if let onComment = textActions?.onComment {
+                Button("Comment", systemImage: "text.bubble") {
+                    withCode { range, fileText in onComment(range, symbol.fileURL, fileText) }
+                }
+            }
+            if let onSearch = textActions?.onSearch {
+                Button("Search", systemImage: "magnifyingglass") {
+                    withCode { range, fileText in
+                        // A long selection searches with its start, as on a page.
+                        let head = NSRange(location: range.location, length: min(range.length, 500))
+                        if let query = SymbolSearch.query(fromSelection: fileText.substring(with: head)) {
+                            onSearch(query)
+                        }
+                    }
+                }
+            }
+            Button("Copy", systemImage: "doc.on.doc") {
+                withCode { range, fileText in UIPasteboard.general.string = fileText.substring(with: range) }
+            }
+            Button("Share", systemImage: "square.and.arrow.up") {
+                withCode { range, fileText in TextSharer.share(fileText.substring(with: range)) { _ in } }
+            }
+        }
+    }
+
+    /// The code's range and its file's text, once read (at once for the open file's).
+    private func withCode(_ body: @escaping @MainActor (NSRange, NSString) -> Void) {
+        let range = codeRange()
+        withFileText { fileText in
+            guard range.length > 0, NSMaxRange(range) <= fileText.length else { return }
+            body(range, fileText)
+        }
+    }
+
+    private func withFileText(_ body: @escaping @MainActor (NSString) -> Void) {
+        guard let file = symbol.fileURL, file != openFile else {
+            if let ownText { body(ownText) }
+            return
+        }
+        Task {
+            if let text = await FileTextCache.shared.text(of: file) { body(text as NSString) }
+        }
+    }
+
+    /// The declaration's line (the title's text) in its file, without the spaces around it.
+    static func declarationRange(of symbol: CodeSymbol, in text: NSString) -> NSRange? {
+        var line = 1
+        var index = 0
+        while line < symbol.line {
+            let found = text.range(of: "\n", options: .literal, range: NSRange(location: index, length: text.length - index))
+            guard found.location != NSNotFound else { return nil }
+            index = NSMaxRange(found)
+            line += 1
+        }
+        var end = text.range(of: "\n", options: .literal, range: NSRange(location: index, length: text.length - index)).location
+        if end == NSNotFound { end = text.length }
+        let blanks = CharacterSet.whitespacesAndNewlines
+        while index < end, let scalar = UnicodeScalar(text.character(at: index)), blanks.contains(scalar) { index += 1 }
+        while end > index, let scalar = UnicodeScalar(text.character(at: end - 1)), blanks.contains(scalar) { end -= 1 }
+        return end > index ? NSRange(location: index, length: end - index) : nil
     }
 }
 

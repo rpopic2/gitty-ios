@@ -307,7 +307,8 @@ struct CodeScreen: View {
                 onNeedsSymbols: { model.needsSymbols(of: $0) },
                 onOpenURL: { onOpen($0) },
                 onShowCommit: { showBlameCommit(projectID: $0, id: $1) },
-                showsWholeFiles: true
+                showsWholeFiles: true,
+                textActions: codeTextActions(from: nil)
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()
@@ -455,7 +456,8 @@ struct CodeScreen: View {
             onNeedsSymbols: { model.needsSymbols(of: $0) },
             onOpenURL: { onOpen($0) },
             collapsed: search.collapsed,
-            onShowCommit: { showBlameCommit(projectID: $0, id: $1) }
+            onShowCommit: { showBlameCommit(projectID: $0, id: $1) },
+            textActions: codeTextActions(from: .results(search.id))
         )
         .equatable()
     }
@@ -489,6 +491,14 @@ struct CodeScreen: View {
             albumItems: { stackedSymbols().map { AlbumItem($0.symbol, openFile: openFile) } },
             albumContext: albumContext
         )
+    }
+
+    /// A symbol's hold menu (`SymbolsView.textActions`): its Search and Occurrences pages go on
+    /// top of the page it's on (`nil`: the Code level, the first page).
+    private func codeTextActions(from page: CardRoute?) -> CodeTextActions {
+        CodeTextActions(onSearch: { searchInStack(for: $0, from: page) },
+                        onFindOccurrences: { findOccurrences(of: $0, from: page) },
+                        onComment: { range, file, text in comment(on: range, inFile: file, text: text) })
     }
 
     /// The stack's symbols, as code blocks: tap one to go back to its card.
@@ -578,11 +588,13 @@ struct CodeScreen: View {
 
     /// Search on a card: its results go on top of it. Older results pages stay where they are,
     /// keeping only their query.
-    private func searchInStack(for query: String, from card: CardRoute) {
+    /// - Parameter card: `nil`: from the Code level (a symbol's hold menu), the first page.
+    private func searchInStack(for query: String, from card: CardRoute?) {
         pruneStack()
         keepQuery()
-        let search = StackSearch(query: query, source: AnyHashable(card), model: model)
-        stackedResults[search.id] = StackedResults(query: query, source: AnyHashable(card), depth: cardPath.count + 1)
+        let source = card.map { AnyHashable($0) } ?? Self.screenSourceID
+        let search = StackSearch(query: query, source: source, model: model)
+        stackedResults[search.id] = StackedResults(query: query, source: source, depth: cardPath.count + 1)
         stackSearch = search
         cardPath.append(.results(search.id))
     }
@@ -602,7 +614,8 @@ struct CodeScreen: View {
 
     /// Occurrences on a card: where the selection is used, as a whole word, in the project's
     /// downloaded files that pass its filter, on a page over the card. The pages highlight it.
-    private func findOccurrences(of query: OccurrenceTerm, from card: CardRoute) {
+    /// - Parameter card: `nil`: from the Code level (a symbol's hold menu), the first page.
+    private func findOccurrences(of query: OccurrenceTerm, from card: CardRoute?) {
         pruneStack()
         var files: [OccurrenceFile] = []
         var skipped = 0
@@ -622,7 +635,8 @@ struct CodeScreen: View {
             }
             start = end
         }
-        let search = OccurrenceSearch(query: query, source: AnyHashable(card), files: files, skippedFiles: skipped)
+        let search = OccurrenceSearch(query: query, source: card.map { AnyHashable($0) } ?? Self.screenSourceID,
+                                      files: files, skippedFiles: skipped)
         stackedOccurrences[search.id] = search
         // The pages highlight it: of its kind, with Same Kind; any identifier of the name otherwise.
         let term = query.text
@@ -661,7 +675,8 @@ struct CodeScreen: View {
                 },
                 downloadingFiles: model.downloadingFiles,
                 onNeedsSymbols: { model.needsSymbols(of: $0) },
-                collapsed: search.collapsed
+                collapsed: search.collapsed,
+                textActions: codeTextActions(from: route)
             )
             .equatable()
             .environment(\.codeMark, query)  // what it found, marked
@@ -865,7 +880,11 @@ struct CodeScreen: View {
     ///   from elsewhere in the project).
     private func comment(on range: NSRange, inFile file: URL?) {
         guard let full = model.fullText(of: file) else { return }
-        let text = full.string as NSString
+        comment(on: range, inFile: file, text: full.string as NSString)
+    }
+
+    /// - Parameter text: the file's.
+    private func comment(on range: NSRange, inFile file: URL?, text: NSString) {
         guard range.length > 0, NSMaxRange(range) <= text.length else { return }
         let lines = ReviewText.lines(of: range, in: text)
         let code = text.substring(with: range)
