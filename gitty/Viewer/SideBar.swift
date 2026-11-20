@@ -317,6 +317,14 @@ private struct ScreenEdgePan: UIViewRepresentable {
             return velocity.x > 0 && velocity.x > abs(velocity.y)  // mostly rightward
         }
 
+        /// Alongside the screen's own drags: the Code level's peek follows any drag (it acts only
+        /// on one from the left edge), and starting first, it kept the edge swipe from starting
+        /// (on iPad, every time). Scroll views wait for these instead (below).
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
+
         /// Scrolling (the file, the lists) waits until the touch is known not to be a sidebar
         /// swipe, which UIKit decides within a few points. (A row's swipe to delete is leftward,
         /// so it never closes the sidebar.)
