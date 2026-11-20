@@ -297,7 +297,19 @@ struct SideBarView: View {
                     newProjectAddress = ""
                     isAddingProject = true
                 } label: {
-                    Label("Add Project", systemImage: "plus")
+                    Label {
+                        // As tall as a project's row (name, then owner · branch), centered.
+                        ZStack(alignment: .leading) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: " ")
+                                Text(verbatim: " ").font(.caption)
+                            }
+                            .hidden()
+                            Text("Add Project")
+                        }
+                    } icon: {
+                        Image(systemName: "plus")
+                    }
                 }
             } header: {
                 Text("Projects")
