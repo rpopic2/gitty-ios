@@ -188,7 +188,7 @@ nonisolated enum ProjectError: LocalizedError, Equatable {
 }
 
 /// A repository's branch and tag names.
-nonisolated struct ProjectRefs: Equatable, Sendable {
+nonisolated struct ProjectRefs: Codable, Equatable, Sendable {
     let branches: [String]
     let tags: [String]
 }
@@ -321,6 +321,16 @@ actor ProjectStore {
     func setRef(_ ref: String, for id: String) async throws -> (ProjectInfo, ProjectTree) {
         guard var project = project(id: id) else { throw ProjectError.unknownProject }
         guard let tree = try await fetchTree(project.link, ref: ref, etag: nil) else { throw ProjectError.notFound }
+        project.ref = ref
+        update(project)
+        saveTree(tree, for: id)
+        return (project, tree)
+    }
+
+    /// Moves the project to another branch or tag with its file list from the clone: no
+    /// network.
+    func setRef(_ ref: String, for id: String, tree: ProjectTree) throws -> (ProjectInfo, ProjectTree) {
+        guard var project = project(id: id) else { throw ProjectError.unknownProject }
         project.ref = ref
         update(project)
         saveTree(tree, for: id)

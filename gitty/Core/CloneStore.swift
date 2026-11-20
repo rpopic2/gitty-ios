@@ -19,6 +19,12 @@ nonisolated struct CloneRecord: Codable, Equatable, Sendable {
     let folderName: String
     /// Cloned with only the project's files checked out (`nil`: every file of the repository).
     var scope: CloneScope? = nil
+    /// The remote's branches and tags, listed (not downloaded) when cloning and on each fetch:
+    /// the project's branch menu, without GitHub's API.
+    var remoteRefs: ProjectRefs? = nil
+    /// Fetched (pull down in the project), not checked out yet: how many commits newer than
+    /// `commit` the branch is. Pull checks them out.
+    var newCommits: Int? = nil
 }
 
 /// A clone that keeps only the project's files on disk: those in its folder that its filter
@@ -209,6 +215,8 @@ nonisolated enum CloneError: LocalizedError, Equatable {
     /// The project is at a commit, not a branch or tag.
     case notABranchOrTag(String)
     case notCloned
+    /// The clone hasn't downloaded this branch or tag: pull it first.
+    case notFetched(String)
 
     var errorDescription: String? {
         switch self {
@@ -216,6 +224,8 @@ nonisolated enum CloneError: LocalizedError, Equatable {
             "“\(ref)” isn’t a branch or tag. Choose a branch or tag to clone."
         case .notCloned:
             "This project isn’t cloned."
+        case .notFetched(let ref):
+            "“\(ref)” isn’t downloaded. Pull it to read it."
         }
     }
 }
@@ -254,15 +264,6 @@ actor CloneStore {
     func clone(_ project: ProjectInfo, filtered: Bool = false,
                progress: @escaping @Sendable (Double) -> Void) async throws {
         guard let refName = project.ref else { throw CloneError.notABranchOrTag("") }
-        let refs = try await ProjectStore.shared.refs(for: project.id)
-        let ref: GitRef
-        if refs.branches.contains(refName) {
-            ref = .branch(refName)
-        } else if refs.tags.contains(refName) {
-            ref = .tag(refName)
-        } else {
-            throw CloneError.notABranchOrTag(refName)
-        }
         guard let remote = URL(string: "https://github.com/\(project.link.owner)/\(project.link.repo).git"),
               let rawPrefix = project.rawURL(for: "")?.absoluteString
         else { throw CloneError.notABranchOrTag(refName) }
@@ -273,13 +274,24 @@ actor CloneStore {
         let scope = filtered ? CloneScope(project: project, filter: ProjectFilterStore.standard.text(for: project.id)) : nil
         let includes = scope?.includes
 
-        let commit = try await serially(project.id) {
+        // The remote's branches and tags, from Git itself: whether the project's is a branch
+        // or a tag, and the branch menu from now on.
+        let (ref, refs, commit) = try await serially(project.id) { () throws -> (GitRef, ProjectRefs, String) in
             try? FileManager.default.removeItem(at: folder)  // a clone that didn't finish
             do {
                 let repository = try GitRepository.create(at: folder, remote: remote)
+                let refs = try repository.remoteRefs(token: token)
+                let ref: GitRef
+                if refs.branches.contains(refName) {
+                    ref = .branch(refName)
+                } else if refs.tags.contains(refName) {
+                    ref = .tag(refName)
+                } else {
+                    throw CloneError.notABranchOrTag(refName)
+                }
                 try repository.fetch(ref, depth: depth, token: token, progress: progress,
                                      isCancelled: { Task.isCancelled })
-                return try repository.checkout(ref, including: includes)
+                return (ref, refs, try repository.checkout(ref, including: includes))
             } catch {
                 try? FileManager.default.removeItem(at: folder)
                 throw error
@@ -287,7 +299,8 @@ actor CloneStore {
         }
         await documents.deleteDownloads(under: rawPrefix)
         index.save(CloneRecord(projectID: project.id, ref: ref, commit: commit, depth: Self.initialDepth,
-                               rawPrefix: rawPrefix, checkedOutAt: .now, folderName: folderName, scope: scope))
+                               rawPrefix: rawPrefix, checkedOutAt: .now, folderName: folderName, scope: scope,
+                               remoteRefs: refs))
         await documents.clonesChanged()
     }
 
@@ -300,26 +313,81 @@ actor CloneStore {
         await documents.clonesChanged()
     }
 
-    /// Switches the clone to another branch or tag: fetches its latest commit and checks it out.
+    /// Switches the clone to another branch or tag, and returns its file list (from the clone).
+    /// One it has downloaded before is just checked out, offline, as it was fetched then; one it
+    /// hasn't is downloaded (its latest commit) only when `pulling`, otherwise it throws
+    /// `CloneError.notFetched`.
     /// - Parameter rawPrefix: the project's raw file address at the new ref.
-    func switchTo(_ ref: GitRef, projectID: String, rawPrefix: String) async throws {
+    @discardableResult
+    func switchTo(_ ref: GitRef, projectID: String, rawPrefix: String, pulling: Bool = false) async throws -> ProjectTree {
         guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
         let folder = index.folder(of: record)
-        let token = await GitHubAuth.shared.token()
+        let token = pulling ? await GitHubAuth.shared.token() : nil
         let depth = Self.initialDepth
         let includes = record.scope?.includes
-        let commit = try await serially(projectID) {
+        let (commit, tree, fetched) = try await serially(projectID) { () throws -> (String, ProjectTree, Bool) in
             let repository = try GitRepository(at: folder)
-            try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
-            return try repository.checkout(ref, including: includes)
+            var fetched = false
+            if repository.fetchedCommit(of: ref) == nil {
+                guard pulling else { throw CloneError.notFetched(ref.name) }
+                try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
+                fetched = true
+            }
+            let commit = try repository.checkout(ref, including: includes)
+            return (commit, try repository.tree(of: ref), fetched)
         }
         record.ref = ref
         record.commit = commit
-        record.depth = Self.initialDepth
+        if fetched { record.depth = Self.initialDepth }
+        record.newCommits = nil
         record.rawPrefix = rawPrefix
         record.checkedOutAt = .now
         index.save(record)
         await documents.clonesChanged()
+        return tree
+    }
+
+    /// The file list at the clone's branch or tag, from the clone.
+    func tree(projectID: String) async throws -> ProjectTree {
+        guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        let ref = record.ref
+        return try await serially(projectID) { try GitRepository(at: folder).tree(of: ref) }
+    }
+
+    /// Whether the clone has downloaded these branches and tags (by name), for the branch menu.
+    func fetchedRefs(projectID: String) async -> Set<String> {
+        guard let record = index.record(forProject: projectID), let refs = record.remoteRefs else { return [] }
+        let folder = index.folder(of: record)
+        return (try? await serially(projectID) { () throws -> Set<String> in
+            let repository = try GitRepository(at: folder)
+            let all = refs.branches.map(GitRef.branch) + refs.tags.map(GitRef.tag)
+            return Set(all.filter { repository.fetchedCommit(of: $0) != nil }.map(\.name))
+        }) ?? []
+    }
+
+    /// Pull down in the project: downloads the branch or tag's latest commits (as much history as
+    /// before) without checking them out, and lists the remote's branches and tags again.
+    /// Returns how many commits are new (`newCommits`); Pull checks them out.
+    @discardableResult
+    func fetch(projectID: String) async throws -> Int {
+        guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        let token = await GitHubAuth.shared.token()
+        let ref = record.ref
+        let depth = record.depth
+        let checkedOut = record.commit
+        let (refs, newCommits) = try await serially(projectID) { () throws -> (ProjectRefs?, Int) in
+            let repository = try GitRepository(at: folder)
+            try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
+            let refs = try? repository.remoteRefs(token: token)
+            let latest = repository.fetchedCommit(of: ref) ?? checkedOut
+            return (refs, latest == checkedOut ? 0 : max(1, repository.commitsAhead(latest, of: checkedOut)))
+        }
+        if let refs { record.remoteRefs = refs }
+        record.newCommits = newCommits
+        index.save(record)
+        return newCommits
     }
 
     /// Pull to refresh on a cloned file: fetches the branch or tag's latest commit (as much
@@ -337,7 +405,11 @@ actor CloneStore {
             try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
             return try repository.checkout(ref, including: includes)
         }
-        guard commit != record.commit else { return false }
+        record.newCommits = nil
+        guard commit != record.commit else {
+            index.save(record)
+            return false
+        }
         record.commit = commit
         record.checkedOutAt = .now
         index.save(record)

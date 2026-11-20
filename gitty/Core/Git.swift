@@ -182,6 +182,106 @@ nonisolated final class GitRepository {
         }
     }
 
+    /// The branches and tags `origin` has (`git ls-remote`): asked of the remote, nothing
+    /// downloaded. Sorted by name.
+    func remoteRefs(token: String?) throws -> ProjectRefs {
+        var remote: OpaquePointer?
+        try Git.check(git_remote_lookup(&remote, pointer, "origin"))
+        defer { git_remote_free(remote) }
+        let context = FetchContext(token: token, progress: { _ in }, isCancelled: { false })
+        var callbacks = git_remote_callbacks()
+        git_remote_init_callbacks(&callbacks, UInt32(GIT_REMOTE_CALLBACKS_VERSION))
+        callbacks.payload = Unmanaged.passUnretained(context).toOpaque()
+        callbacks.credentials = { out, _, _, allowed, payload in
+            guard let payload else { return GIT_PASSTHROUGH.rawValue }
+            let context = Unmanaged<FetchContext>.fromOpaque(payload).takeUnretainedValue()
+            guard let token = context.token, !context.triedToken,
+                  allowed & UInt32(truncatingIfNeeded: GIT_CREDENTIAL_USERPASS_PLAINTEXT.rawValue) != 0
+            else { return GIT_PASSTHROUGH.rawValue }
+            context.triedToken = true
+            return git_credential_userpass_plaintext_new(out, "x-access-token", token)
+        }
+        return try withExtendedLifetime(context) {
+            try Git.check(git_remote_connect(remote, GIT_DIRECTION_FETCH, &callbacks, nil, nil))
+            defer { git_remote_disconnect(remote) }
+            var heads: UnsafeMutablePointer<UnsafePointer<git_remote_head>?>?
+            var count = 0
+            try Git.check(git_remote_ls(&heads, &count, remote))
+            var branches: [String] = []
+            var tags: [String] = []
+            for index in 0..<count {
+                guard let head = heads?[index]?.pointee, let raw = head.name else { continue }
+                let name = String(cString: raw)
+                if name.hasPrefix("refs/heads/") {
+                    branches.append(String(name.dropFirst("refs/heads/".count)))
+                } else if name.hasPrefix("refs/tags/"), !name.hasSuffix("^{}") {
+                    tags.append(String(name.dropFirst("refs/tags/".count)))
+                }
+            }
+            let order: (String, String) -> Bool = { $0.localizedStandardCompare($1) == .orderedAscending }
+            return ProjectRefs(branches: branches.sorted(by: order), tags: tags.sorted(by: order))
+        }
+    }
+
+    /// The file list at `ref` (fetched), from the clone: no network. Like GitHub's, with each
+    /// file's size.
+    func tree(of ref: GitRef) throws -> ProjectTree {
+        var commit: OpaquePointer?
+        try Git.check(git_revparse_single(&commit, pointer, ref.localReference + "^{commit}"))
+        defer { git_object_free(commit) }
+        var tree: OpaquePointer?
+        try Git.check(git_object_peel(&tree, commit, GIT_OBJECT_TREE))
+        defer { git_object_free(tree) }
+        let collector = TreeCollector()
+        try withExtendedLifetime(collector) {
+            try Git.check(git_tree_walk(tree, GIT_TREEWALK_PRE, { root, entry, payload in
+                guard let entry, let payload, let name = git_tree_entry_name(entry) else { return 0 }
+                let collector = Unmanaged<TreeCollector>.fromOpaque(payload).takeUnretainedValue()
+                let kind: ProjectTree.Entry.Kind
+                switch git_tree_entry_type(entry) {
+                case GIT_OBJECT_BLOB: kind = .file
+                case GIT_OBJECT_TREE: kind = .folder
+                case GIT_OBJECT_COMMIT: kind = .submodule
+                default: return 0
+                }
+                let path = (root.map { String(cString: $0) } ?? "") + String(cString: name)
+                collector.items.append((path, kind, git_tree_entry_id(entry).pointee))
+                return 0
+            }, Unmanaged.passUnretained(collector).toOpaque()))
+        }
+        var odb: OpaquePointer?
+        try Git.check(git_repository_odb(&odb, pointer))
+        defer { git_odb_free(odb) }
+        let entries = collector.items.map { item -> ProjectTree.Entry in
+            var id = item.id
+            var size: Int?
+            if item.kind == .file {
+                var length = 0
+                var type = GIT_OBJECT_ANY
+                if git_odb_read_header(&length, &type, odb, &id) == 0 { size = length }
+            }
+            return ProjectTree.Entry(path: item.path, kind: item.kind, sha: Git.string(&id), size: size)
+        }
+        return ProjectTree(entries: entries, truncated: false, etag: nil, fetchedAt: .now)
+    }
+
+    /// The commit `ref` is at in the clone, if it was ever fetched.
+    func fetchedCommit(of ref: GitRef) -> String? {
+        var object: OpaquePointer?
+        guard git_revparse_single(&object, pointer, ref.localReference + "^{commit}") == 0 else { return nil }
+        defer { git_object_free(object) }
+        return Git.string(git_object_id(object))
+    }
+
+    /// How many commits `newer` has that `older` doesn't (0 if either isn't known).
+    func commitsAhead(_ newer: String, of older: String) -> Int {
+        var newerID = git_oid(), olderID = git_oid()
+        guard git_oid_fromstr(&newerID, newer) == 0, git_oid_fromstr(&olderID, older) == 0 else { return 0 }
+        var ahead = 0, behind = 0
+        guard git_graph_ahead_behind(&ahead, &behind, pointer, &newerID, &olderID) == 0 else { return 0 }
+        return ahead
+    }
+
     /// Puts `ref`'s files (once fetched) in the working directory, replacing what's there, and
     /// points HEAD at its commit. Returns the commit's hash.
     /// - Parameter includes: only the files it lets through (paths in the repository) are
@@ -474,6 +574,11 @@ nonisolated private final class PathCollector {
 }
 
 /// What the fetch callbacks need, passed to them as their payload.
+/// What `tree(of:)` walks into, from libgit2's callback.
+nonisolated private final class TreeCollector {
+    var items: [(path: String, kind: ProjectTree.Entry.Kind, id: git_oid)] = []
+}
+
 nonisolated private final class FetchContext {
     let token: String?
     var triedToken = false
