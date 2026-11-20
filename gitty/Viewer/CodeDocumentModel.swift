@@ -304,7 +304,8 @@ final class CodeDocumentModel {
             isLoadingProjectSymbols = false
             projectSymbolsLoaded = true
             publishSymbols()
-            startIndexing()
+            // The folders first: reading the files' symbols waits a moment (not for files on screen).
+            startIndexing(after: .seconds(1.5))
             if reloadsProjectSymbols {
                 reloadsProjectSymbols = false
                 loadedFilter = nil
@@ -323,7 +324,8 @@ final class CodeDocumentModel {
     /// Reads the files whose symbols aren't known, a batch at a time: those on screen first,
     /// then the rest in path order (up to `backgroundSymbolLimit`). The list is published
     /// again now and then, not for every batch (each time builds the whole list).
-    private func startIndexing() {
+    /// - Parameter delay: before reading files that aren't on screen.
+    private func startIndexing(after delay: Duration = .zero) {
         indexingTask?.cancel()
         indexingTask = nil
         guard let project = indexingProject, !pendingSet.isEmpty else {
@@ -331,6 +333,10 @@ final class CodeDocumentModel {
             return
         }
         indexingTask = Task {
+            let start = ContinuousClock.now
+            while ContinuousClock.now - start < delay, priorityFiles.isEmpty, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
             var lastPublish = ContinuousClock.now
             var symbolCount = otherFiles.reduce(0) { $0 + $1.symbols.count }
             var paused = false
@@ -366,8 +372,9 @@ final class CodeDocumentModel {
                 }
                 for file in batch { pendingSet.remove(file) }  // gone, or unreadable
                 updateIndexingProgress(paused: false)
-                // Files on screen soon after they show; the rest every second and a half.
-                let interval: Duration = isPriority ? .milliseconds(300) : .milliseconds(1500)
+                // Files on screen soon after they show; the rest every few seconds (each new list
+                // is built again whole).
+                let interval: Duration = isPriority ? .milliseconds(300) : .seconds(3)
                 if ContinuousClock.now - lastPublish > interval {
                     publishSymbols()
                     lastPublish = .now

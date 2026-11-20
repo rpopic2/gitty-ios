@@ -53,12 +53,14 @@ actor ProjectSymbolIndex {
 
     /// Files that are never text, by their extension (images, archives, fonts, media…).
     nonisolated static func isNeverText(_ path: String) -> Bool {
-        let neverText: Set<String> = ["png", "jpg", "jpeg", "gif", "bmp", "ico", "icns", "webp", "tif", "tiff", "heic",
-                                      "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "jar", "a", "o", "so",
-                                      "dylib", "dll", "exe", "bin", "class", "woff", "woff2", "ttf", "otf", "mp3",
-                                      "mp4", "mov", "wav", "m4a", "aac", "psd", "sketch", "car", "pbxuser"]
-        return neverText.contains((path as NSString).pathExtension.lowercased())
+        neverText.contains((path as NSString).pathExtension.lowercased())
     }
+
+    nonisolated private static let neverText: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "icns", "webp", "tif", "tiff", "heic", "pdf", "zip", "gz", "tgz",
+        "bz2", "xz", "7z", "rar", "tar", "jar", "a", "o", "so", "dylib", "dll", "exe", "bin", "class", "woff", "woff2",
+        "ttf", "otf", "mp3", "mp4", "mov", "wav", "m4a", "aac", "psd", "sketch", "car", "pbxuser",
+    ]
 
     /// The project a file belongs to, if any: the one with the most specific folder.
     static func project(containing url: URL, in projects: [ProjectInfo]) -> ProjectInfo? {
