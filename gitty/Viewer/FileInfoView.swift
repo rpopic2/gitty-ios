@@ -112,7 +112,10 @@ struct FileInfoView: View {
                     Text(Int64(progress.receivedBytes), format: .byteCount(style: .file))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
-                    Button("Cancel") { cloneTask?.cancel() }
+                    Button("Cancel", systemImage: "xmark.circle.fill") { cloneTask?.cancel() }
+                        .labelStyle(.iconOnly)
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
                         .buttonStyle(.borderless)
                 }
                 .accessibilityElement(children: .combine)

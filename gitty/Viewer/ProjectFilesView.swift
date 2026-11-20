@@ -484,7 +484,10 @@ struct ProjectFilesView: View {
                     .font(.footnote)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
-                Button("Cancel") { downloadTask?.cancel() }
+                Button("Cancel", systemImage: "xmark.circle.fill") { downloadTask?.cancel() }
+                    .labelStyle(.iconOnly)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
                     .buttonStyle(.borderless)  // only the button, not the whole row
             }
         } else if let clone {
