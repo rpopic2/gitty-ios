@@ -83,32 +83,56 @@ nonisolated struct FolderGroup: Identifiable, Sendable {
     }
 }
 
-/// A project's first-level folder (`arch`, `drivers`…) and every folder under it: what the Code
-/// level shows past every folder folded, when there are too many folders to go through.
-nonisolated struct TopFolder: Identifiable, Sendable {
-    /// Its name, "" for the files at the project's top (they're a folder of their own).
-    let name: String
-    /// It and its folders, in the list's order.
-    let groups: [FolderGroup]
-
-    var id: String { name }
-    var fileCount: Int { groups.reduce(0) { $0 + $1.fileCount } }
-
-    /// Over this many folders, pinching in once more past every folder folded shows only the
-    /// top folders (and such a project starts there).
+/// The list's folders as a tree, for grouping: a folder (the project too) with more than
+/// `threshold` folders under it, at any depth, shows as one header (a group) until it's opened,
+/// so a project as big as Linux doesn't list thousands of folders.
+nonisolated struct FolderTree: Sendable {
+    /// Over this many folders under it, a folder is a group.
     static let threshold = 50
 
-    /// The folders by their first-level folder, in the order each first comes.
-    static func tops(of groups: [FolderGroup]) -> [TopFolder] {
-        var order: [String] = []
-        var byName: [String: [FolderGroup]] = [:]
-        for group in groups {
-            let name = group.path.split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
-            if byName[name] == nil { order.append(name) }
-            byName[name, default: []].append(group)
-        }
-        return order.map { TopFolder(name: $0, groups: byName[$0] ?? []) }
+    nonisolated struct Node: Sendable {
+        /// Its path in the project ("" for the project).
+        let path: String
+        /// Its folders, in the list's order.
+        var children: [String] = []
+        /// Its own files' folder (`nil`: it has only folders).
+        var group: FolderGroup?
+        /// Every folder with files under it (not itself), in the list's order.
+        var below: [FolderGroup] = []
+        var fileCount = 0
+
+        var name: String { path.split(separator: "/").last.map(String.init) ?? path }
+        var isGroup: Bool { below.count > FolderTree.threshold }
     }
+
+    private(set) var nodes: [String: Node] = [:]
+
+    var root: Node { nodes[""] ?? Node(path: "") }
+
+    init(_ groups: [FolderGroup]) {
+        nodes[""] = Node(path: "")
+        for group in groups {
+            let parts = group.path.split(separator: "/").map(String.init)
+            var path = ""
+            var ancestors = [""]
+            for part in parts {
+                let parent = path
+                path = path.isEmpty ? part : path + "/" + part
+                if nodes[path] == nil {
+                    nodes[path] = Node(path: path)
+                    nodes[parent]?.children.append(path)
+                }
+                ancestors.append(path)
+            }
+            nodes[group.path]?.group = group
+            for ancestor in ancestors {
+                nodes[ancestor]?.fileCount += group.fileCount
+                if ancestor != group.path { nodes[ancestor]?.below.append(group) }
+            }
+        }
+    }
+
+    func node(_ path: String) -> Node? { nodes[path] }
 }
 
 /// What's collapsed at the Code level, saved in `UserDefaults`:
@@ -145,13 +169,9 @@ final class CollapsedCodeStore {
     private(set) var foldedFolderScopes: Set<String>
     /// Projects' scopes the Code level has shown (see `startFolded`).
     @ObservationIgnored private var seenScopes: Set<String>
-    /// Scopes showing only their top folders: the level past every folder folded, for a
-    /// project with many folders (`TopFolder`).
-    private(set) var topFolderScopes: Set<String>
-    /// Top folders opened at that level (their folders show): `top#` + scope + the name.
-    private(set) var openTopFolders: Set<String>
-    /// Scopes already checked for starting at their top folders (`startFolded`).
-    @ObservationIgnored private var topCheckedScopes: Set<String>
+    /// Groups of folders opened (`FolderTree`): `group#` + scope + the folder's path. A group
+    /// starts closed.
+    private(set) var openGroups: Set<String>
     /// `nil`: not saved (`temporary()`).
     @ObservationIgnored private let defaults: UserDefaults?
 
@@ -163,9 +183,7 @@ final class CollapsedCodeStore {
         static let folders = "collapsedCode.folders"
         static let foldedFolderScopes = "collapsedCode.foldedFolderScopes"
         static let seenScopes = "collapsedCode.seenScopes"
-        static let topFolderScopes = "collapsedCode.topFolderScopes"
-        static let openTopFolders = "collapsedCode.openTopFolders"
-        static let topCheckedScopes = "collapsedCode.topCheckedScopes"
+        static let openGroups = "collapsedCode.openGroups"
         /// Before Collapse All: symbols and `file#` keys together.
         static let old = "collapsedCode"
     }
@@ -180,9 +198,7 @@ final class CollapsedCodeStore {
             folders = []
             foldedFolderScopes = []
             seenScopes = []
-            topFolderScopes = []
-            openTopFolders = []
-            topCheckedScopes = []
+            openGroups = []
             return
         }
         var flipped = Set(defaults.stringArray(forKey: Key.flipped) ?? [])
@@ -200,39 +216,16 @@ final class CollapsedCodeStore {
         folders = Set(defaults.stringArray(forKey: Key.folders) ?? [])
         foldedFolderScopes = Set(defaults.stringArray(forKey: Key.foldedFolderScopes) ?? [])
         seenScopes = Set(defaults.stringArray(forKey: Key.seenScopes) ?? [])
-        topFolderScopes = Set(defaults.stringArray(forKey: Key.topFolderScopes) ?? [])
-        openTopFolders = Set(defaults.stringArray(forKey: Key.openTopFolders) ?? [])
-        topCheckedScopes = Set(defaults.stringArray(forKey: Key.topCheckedScopes) ?? [])
+        openGroups = Set(defaults.stringArray(forKey: Key.openGroups) ?? [])
     }
 
-    /// A project with many folders (`TopFolder.threshold`) starts at its top folders, once:
-    /// when it's shown with every folder folded (a project new to the Code level is).
-    func startAtTopFolders(scope: String) {
-        guard defaults != nil, !topCheckedScopes.contains(scope) else { return }
-        topCheckedScopes.insert(scope)
-        if areAllFilesFolded(scope: scope), areAllFoldersFolded(scope: scope) { topFolderScopes.insert(scope) }
-        save()
+    func isGroupOpen(_ path: String, scope: String) -> Bool {
+        openGroups.contains("group#" + scope + path)
     }
 
-    func showsTopFolders(scope: String) -> Bool {
-        topFolderScopes.contains(scope)
-    }
-
-    /// Shows only the top folders (pinching in once more past every folder folded), or every
-    /// folder again.
-    func setShowsTopFolders(_ shows: Bool, scope: String) {
-        if shows { topFolderScopes.insert(scope) } else { topFolderScopes.remove(scope) }
-        openTopFolders = openTopFolders.filter { !$0.hasPrefix("top#" + scope) }
-        save()
-    }
-
-    func isTopFolderOpen(_ name: String, scope: String) -> Bool {
-        openTopFolders.contains("top#" + scope + name)
-    }
-
-    func toggleTopFolder(_ name: String, scope: String) {
-        let key = "top#" + scope + name
-        if openTopFolders.contains(key) { openTopFolders.remove(key) } else { openTopFolders.insert(key) }
+    func toggleGroup(_ path: String, scope: String) {
+        let key = "group#" + scope + path
+        if openGroups.contains(key) { openGroups.remove(key) } else { openGroups.insert(key) }
         save()
     }
 
@@ -266,13 +259,7 @@ final class CollapsedCodeStore {
     func setAllFoldersFolded(_ isFolded: Bool, scope: String) {
         if isFolded { foldedFolderScopes.insert(scope) } else { foldedFolderScopes.remove(scope) }
         folders = folders.filter { !$0.hasPrefix("folder#" + scope) }
-        if !isFolded { leaveTopFolders(scope) }
         save()
-    }
-
-    private func leaveTopFolders(_ scope: String) {
-        topFolderScopes.remove(scope)
-        openTopFolders = openTopFolders.filter { !$0.hasPrefix("top#" + scope) }
     }
 
     func toggleFolder(_ path: String, scope: String) {
@@ -345,7 +332,6 @@ final class CollapsedCodeStore {
         folders = folders.filter { !$0.hasPrefix("folder#" + scope) }
         flipped = flipped.filter { !$0.hasPrefix(scope) }
         files = files.filter { !$0.hasPrefix("file#" + scope) }
-        leaveTopFolders(scope)
         save()
     }
 
@@ -354,7 +340,6 @@ final class CollapsedCodeStore {
     func setAllFilesFolded(_ isFolded: Bool, scope: String) {
         if isFolded { foldedScopes.insert(scope) } else { foldedScopes.remove(scope) }
         files = files.filter { !$0.hasPrefix("file#" + scope) }
-        if !isFolded { leaveTopFolders(scope) }
         save()
     }
 
@@ -382,8 +367,6 @@ final class CollapsedCodeStore {
         defaults.set(folders.sorted(), forKey: Key.folders)
         defaults.set(foldedFolderScopes.sorted(), forKey: Key.foldedFolderScopes)
         defaults.set(seenScopes.sorted(), forKey: Key.seenScopes)
-        defaults.set(topFolderScopes.sorted(), forKey: Key.topFolderScopes)
-        defaults.set(openTopFolders.sorted(), forKey: Key.openTopFolders)
-        defaults.set(topCheckedScopes.sorted(), forKey: Key.topCheckedScopes)
+        defaults.set(openGroups.sorted(), forKey: Key.openGroups)
     }
 }

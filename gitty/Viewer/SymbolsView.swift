@@ -73,6 +73,8 @@ struct SymbolsView: View, Equatable {
     @State private var fileCounts = FileSymbolCounts()
     /// The files by folder, while every file is folded.
     @State private var folderGroups = FolderGroupCache()
+    /// The folders as a tree, for grouping a project with many.
+    @State private var folderTrees = FolderTreeCache()
     /// Not observed: updated every scroll frame without redrawing anything.
     @State private var scroll = ScrollTracking()
     /// The line-number peek.
@@ -282,9 +284,9 @@ struct SymbolsView: View, Equatable {
         let scope = collapseScope
         let openFile = openFile
         let groups = folders ?? folderGroups.groups(of: symbols, openFile: openFile, scope: scope)
-        let layout = FolderRows(groups: groups,
-                                showsTops: collapsed.showsTopFolders(scope: scope),
-                                isTopOpen: { collapsed.isTopFolderOpen($0.name, scope: scope) },
+        let tree = folderTrees.tree(of: groups)
+        let layout = FolderRows(groups: groups, tree: tree,
+                                isGroupOpen: { collapsed.isGroupOpen($0, scope: scope) },
                                 isFolded: { collapsed.isFolderFolded($0.path, scope: scope) },
                                 // A folded file's symbols aren't items at all: thousands of empty
                                 // ones made scrolling here lag.
@@ -311,37 +313,35 @@ struct SymbolsView: View, Equatable {
     @ViewBuilder
     private func folderRowHeader(_ header: FolderRows.Header) -> some View {
         switch header {
-        case .folder(let group): folderHeader(group)
-        case .top(let top): topFolderHeader(top)
+        case .folder(let group, let label, let indent): folderHeader(group, label: label, indent: indent)
+        case .group(let node, let label, let indent): groupHeader(node, label: label, indent: indent)
         }
     }
 
-    /// A top folder's header (showing only the top folders): tap it for its folders, folded.
-    private func topFolderHeader(_ top: TopFolder) -> some View {
+    /// A group's header (a folder with many folders under it): tap it for its folders.
+    private func groupHeader(_ node: FolderTree.Node, label: String, indent: Int) -> some View {
         let collapsed = collapsed
         let scope = collapseScope
-        let isOpen = collapsed.isTopFolderOpen(top.name, scope: scope)
-        let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleTopFolder(top.name, scope: scope) } }
-        return FolderHeader(path: top.name, fileCount: top.fileCount, isFolded: !isOpen, onToggle: toggle)
+        let isOpen = collapsed.isGroupOpen(node.path, scope: scope)
+        let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleGroup(node.path, scope: scope) } }
+        return FolderHeader(path: label, fileCount: node.fileCount, isFolded: !isOpen, indent: indent, onToggle: toggle)
             .contextMenu {
                 Button(isOpen ? "Fold Folder" : "Unfold Folder",
                        systemImage: isOpen ? "chevron.right" : "chevron.down", action: toggle)
-                Button("Show All Folders", systemImage: "folder") {
-                    withAnimation(.smooth(duration: 0.25)) { collapsed.setShowsTopFolders(false, scope: scope) }
-                }
             } preview: {
-                FolderPathPreview(path: rootFolderName + "/" + top.name, fileCount: top.fileCount)
+                FolderPathPreview(path: rootFolderName + "/" + node.path, fileCount: node.fileCount)
             }
     }
 
-    private func folderHeader(_ group: FolderGroup) -> some View {
+    /// - Parameter label: its path from the group it's in ("" for the project's top files).
+    private func folderHeader(_ group: FolderGroup, label: String, indent: Int) -> some View {
         let collapsed = collapsed
         let scope = collapseScope
         let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
         let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) } }
         let fullPath = group.path.isEmpty ? rootFolderName : rootFolderName + "/" + group.path
-        return FolderHeader(path: group.path.isEmpty ? rootFolderName : group.path, fileCount: group.fileCount,
-                            isFolded: isFolded, onToggle: toggle)
+        return FolderHeader(path: label.isEmpty ? rootFolderName : label, fileCount: group.fileCount,
+                            isFolded: isFolded, indent: indent, onToggle: toggle)
             .contextMenu {
                 folderMenu(group, isFolded: isFolded, toggle: toggle)
             } preview: {
@@ -450,16 +450,9 @@ struct SymbolsView: View, Equatable {
 
     /// Pinching in (fingers together) zooms out a step, one per pinch, when the fingers lift past
     /// the threshold: from the code, to every symbol collapsed to its title (an outline), every
-    /// file folded to its title (grouped by folder), every folder folded to its header, and with
-    /// many folders (`TopFolder.threshold`) only the top folders. There's
+    /// file folded to its title (grouped by folder), every folder folded to its header. There's
     /// no pinching back in: unfolding everything at once hung a project as big as Linux, so
     /// folders and files unfold from their long-press menus and titles.
-    /// The folders in the list (not counting the project's top).
-    private var folderCount: Int {
-        let groups = folders ?? folderGroups.groups(of: symbols, openFile: openFile, scope: collapseScope)
-        return groups.lazy.filter { !$0.path.isEmpty }.count
-    }
-
     private func pinch(_ reader: ScrollViewProxy) -> some Gesture {
         MagnifyGesture()
             .onChanged { value in
@@ -477,8 +470,6 @@ struct SymbolsView: View, Equatable {
                         setAllFilesFolded(true, reader)
                     } else if !collapsed.areAllFoldersFolded(scope: scope) {
                         withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(true, scope: scope) }
-                    } else if folderCount > TopFolder.threshold, !collapsed.showsTopFolders(scope: scope) {
-                        withAnimation(.smooth(duration: 0.25)) { collapsed.setShowsTopFolders(true, scope: scope) }
                     }
                 }
                 pinchZoom.settle()  // back as it was
@@ -721,12 +712,15 @@ private struct FolderHeader: View {
     let path: String
     let fileCount: Int
     let isFolded: Bool
+    /// How many groups it's in (a step in for each).
+    let indent: Int
     let onToggle: @MainActor () -> Void
 
-    init(path: String, fileCount: Int, isFolded: Bool, onToggle: @escaping @MainActor () -> Void) {
+    init(path: String, fileCount: Int, isFolded: Bool, indent: Int = 0, onToggle: @escaping @MainActor () -> Void) {
         self.path = path
         self.fileCount = fileCount
         self.isFolded = isFolded
+        self.indent = indent
         self.onToggle = onToggle
     }
 
@@ -751,7 +745,8 @@ private struct FolderHeader: View {
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, 16 + CGFloat(indent) * 16)
+            .padding(.trailing, 16)
             .frame(minHeight: 50)
             .background(Color(uiColor: .systemGroupedBackground))
             .contentShape(Rectangle())
@@ -768,15 +763,18 @@ private struct FolderHeader: View {
 /// The grouped view's items, in order: each folder's header (a top folder's, showing only those),
 /// then its shown symbols (a folded folder's aren't).
 private struct FolderRows {
-    /// A folder's header, or (showing only the top folders) a top folder's.
-    enum Header: Identifiable {
-        case folder(FolderGroup)
-        case top(TopFolder)
+    /// A folder's header (its files' folder), or a group's (a folder with many folders under
+    /// it, `FolderTree`).
+    enum Header {
+        /// `label`: its path from the group it's in ("" for the project's top files); `indent`:
+        /// how many groups it's in.
+        case folder(FolderGroup, label: String, indent: Int)
+        case group(FolderTree.Node, label: String, indent: Int)
 
-        var id: String {
+        var key: String {
             switch self {
-            case .folder(let group): "folder:" + group.path
-            case .top(let top): "top:" + top.name
+            case .folder(let group, _, _): "folder:" + group.path
+            case .group(let node, _, _): "group:" + node.path
             }
         }
     }
@@ -797,32 +795,61 @@ private struct FolderRows {
     private(set) var items: [Item] = []
 
     /// - Parameters:
-    ///   - showsTops: only the top folders (`TopFolder`), each with its folders while it's open.
-    ///     The files at the project's top stay as they are.
+    ///   - tree: the folders as a tree, when the project has so many that it's a group itself:
+    ///     each open group shows its folders (groups closed until opened, the others with all
+    ///     their folders), then its own files' folder. `nil`: every folder, as they come.
     ///   - isShown: whether a symbol shows (not in a folded file).
-    init(groups: [FolderGroup], showsTops: Bool, isTopOpen: (TopFolder) -> Bool,
+    init(groups: [FolderGroup], tree: FolderTree?, isGroupOpen: (String) -> Bool,
          isFolded: (FolderGroup) -> Bool, isShown: (CodeSymbol) -> Bool) {
         func add(_ header: Header) {
-            let hash = UInt(bitPattern: header.id.hashValue) >> 1
+            let hash = UInt(bitPattern: header.key.hashValue) >> 1
             items.append(Item(id: -1 - Int(hash), content: .header(header)))
         }
-        func add(_ group: FolderGroup) {
-            add(.folder(group))
+        func add(_ group: FolderGroup, label: String, indent: Int) {
+            add(.folder(group, label: label, indent: indent))
             guard !isFolded(group) else { return }
             for symbol in group.symbols where isShown(symbol) { items.append(Item(id: symbol.id, content: .symbol(symbol))) }
         }
-        guard showsTops else {
-            groups.forEach(add)
+        guard let tree, tree.root.isGroup else {
+            for group in groups { add(group, label: group.path, indent: 0) }
             return
         }
-        for top in TopFolder.tops(of: groups) {
-            guard !top.name.isEmpty else {
-                top.groups.forEach(add)
-                continue
-            }
-            add(.top(top))
-            if isTopOpen(top) { top.groups.forEach(add) }
+        func relative(_ path: String, to base: String) -> String {
+            base.isEmpty ? path : String(path.dropFirst(base.count + 1))
         }
+        func addChildren(of node: FolderTree.Node, indent: Int) {
+            for path in node.children {
+                guard let child = tree.node(path) else { continue }
+                if child.isGroup {
+                    add(.group(child, label: relative(child.path, to: node.path), indent: indent))
+                    guard isGroupOpen(child.path) else { continue }
+                    addChildren(of: child, indent: indent + 1)
+                    if let own = child.group { add(own, label: child.name, indent: indent + 1) }
+                } else {
+                    for group in (child.group.map { [$0] } ?? []) + child.below {
+                        add(group, label: relative(group.path, to: node.path), indent: indent)
+                    }
+                }
+            }
+        }
+        addChildren(of: tree.root, indent: 0)
+        if let own = tree.root.group { add(own, label: "", indent: 0) }
+    }
+}
+
+/// The folders as a tree, worked out again only when they change. Not observed.
+private final class FolderTreeCache {
+    private var key: [Int] = []
+    private var tree: FolderTree?
+
+    func tree(of groups: [FolderGroup]) -> FolderTree {
+        let key = [groups.count, groups.first?.symbols.first?.id ?? -1, groups.last?.symbols.last?.id ?? -1,
+                   groups.reduce(0) { $0 + $1.symbols.count }]
+        if key != self.key || tree == nil {
+            self.key = key
+            tree = FolderTree(groups)
+        }
+        return tree!
     }
 }
 

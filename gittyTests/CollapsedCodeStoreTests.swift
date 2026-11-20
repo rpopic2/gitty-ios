@@ -31,27 +31,30 @@ struct CollapsedCodeStoreTests {
         #expect(!reopened.areAllFoldersFolded(scope: scope))
     }
 
-    @Test func aBigProjectStartsAtItsTopFoldersOnceAndUnfoldingLeavesThem() throws {
+    @Test func aGroupStartsClosedAndStaysOpenOnceOpened() throws {
         let (store, defaults) = try store()
-        store.startFolded(scope: scope)
-        store.startAtTopFolders(scope: scope)
-        #expect(store.showsTopFolders(scope: scope))
-        store.toggleTopFolder("drivers", scope: scope)
-        #expect(store.isTopFolderOpen("drivers", scope: scope))
-        store.setAllFoldersFolded(false, scope: scope)  // Unfold All Folders: every folder again
-        #expect(!store.showsTopFolders(scope: scope))
-        let reopened = CollapsedCodeStore(defaults: defaults)
-        reopened.startAtTopFolders(scope: scope)  // once only
-        #expect(!reopened.showsTopFolders(scope: scope))
+        #expect(!store.isGroupOpen("drivers", scope: scope))
+        store.toggleGroup("drivers", scope: scope)
+        #expect(store.isGroupOpen("drivers", scope: scope))
+        #expect(CollapsedCodeStore(defaults: defaults).isGroupOpen("drivers", scope: scope))
+        #expect(!store.isGroupOpen("drivers", scope: "https://elsewhere/"))  // its scope only
     }
 
-    @Test func topFoldersGatherTheirFoldersAndKeepTheProjectsTopFiles() {
-        func group(_ path: String, files: Int) -> FolderGroup { FolderGroup(path: path, symbols: [], fileCount: files) }
-        let tops = TopFolder.tops(of: [group("", files: 3), group("arch", files: 1), group("arch/x86", files: 4),
-                                       group("drivers/gpu", files: 2), group("arch/arm", files: 5)])
-        #expect(tops.map(\.name) == ["", "arch", "drivers"])
-        #expect(tops[1].groups.map(\.path) == ["arch", "arch/x86", "arch/arm"])
-        #expect(tops[1].fileCount == 10)
+    @Test func aFolderWithMoreThanFiftyFoldersUnderItIsAGroup() throws {
+        func group(_ path: String, files: Int = 1) -> FolderGroup { FolderGroup(path: path, symbols: [], fileCount: files) }
+        // drivers/ has 51 folders under it (gpu, and 50 inside it); fs/ has 2.
+        let deep = (0..<50).map { group("drivers/gpu/d\($0)") }
+        let tree = FolderTree([group("", files: 3), group("drivers/gpu")] + deep + [group("fs"), group("fs/ext4"), group("fs/nfs")])
+        #expect(tree.root.isGroup)  // 54 folders with files under it
+        #expect(tree.root.children == ["drivers", "fs"])
+        #expect(tree.root.fileCount == 3 + 51 + 3)
+        let drivers = try #require(tree.node("drivers"))
+        #expect(drivers.isGroup)
+        #expect(drivers.group == nil)  // only folders in it
+        #expect(drivers.children == ["drivers/gpu"])
+        #expect(tree.node("drivers/gpu")?.isGroup == false)  // 50 under it: not more than 50
+        #expect(tree.node("fs")?.isGroup == false)
+        #expect(tree.node("fs")?.below.map(\.path) == ["fs/ext4", "fs/nfs"])
     }
 
     @Test func aProjectWithFoldsFromBeforeKeepsThem() throws {
