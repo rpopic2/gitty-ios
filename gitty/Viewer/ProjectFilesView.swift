@@ -648,7 +648,7 @@ struct ProjectFilesView: View {
         .buttonStyle(.borderless)  // only this, not the history button beside it
         .disabled(isSwitchingRef || cloneProgress != nil)
         .accessibilityLabel("Branch")
-        .accessibilityValue(project.ref ?? "")
+        .accessibilityValue(Text(verbatim: project.ref ?? ""))
         .sheet(isPresented: $isPickingRef, onDismiss: {
             comparing = pendingComparison
             pendingComparison = nil
