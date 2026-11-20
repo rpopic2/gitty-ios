@@ -6,9 +6,14 @@ import UIKit
 @Observable
 final class SideBarState {
     /// How much of the sidebar shows, 0 (closed) to `width` (open). It changes on every frame
-    /// of a swipe: only the offsets read it (`SideBarSlide`), so nothing else redraws.
+    /// of a swipe: only the content's offset reads it (`SideBarSlide`), so nothing else redraws;
+    /// the sidebar's UIKit view is moved directly (`placeSideBar`).
     var reveal: CGFloat = 0 {
         didSet {
+            if !isAnimatingSideBar {
+                sideBarView?.layer.removeAllAnimations()  // a drag takes over from an animation
+                placeSideBar()
+            }
             let isOpen = reveal > 0
             guard isOpen != self.isOpen else { return }
             self.isOpen = isOpen
@@ -21,7 +26,13 @@ final class SideBarState {
             }
         }
     }
-    var width: CGFloat = 320
+    var width: CGFloat = 320 {
+        didSet { placeSideBar() }
+    }
+    /// The sidebar's own UIKit view (`SideBarHost`): moved by its transform, so a swipe's frames
+    /// cost SwiftUI nothing for it, however many rows it has.
+    @ObservationIgnored weak var sideBarView: UIView?
+    @ObservationIgnored private var isAnimatingSideBar = false
     /// The swipe from the right edge opens it. Off while a screen needs that swipe.
     var isEdgeSwipeEnabled = true
 
@@ -30,11 +41,26 @@ final class SideBarState {
     private(set) var isOpen = false
 
     func open() {
-        withAnimation(Self.animation) { reveal = width }
+        slide(to: width)
     }
 
     func close() {
-        withAnimation(Self.animation) { reveal = 0 }
+        slide(to: 0)
+    }
+
+    /// The content with SwiftUI's animation, the sidebar with UIKit's same curve.
+    private func slide(to value: CGFloat) {
+        isAnimatingSideBar = true
+        withAnimation(Self.animation) { reveal = value }
+        isAnimatingSideBar = false
+        UIView.animate(springDuration: Self.duration, bounce: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.placeSideBar()
+        }
+    }
+
+    /// Puts the sidebar where `reveal` says: off to the right by what doesn't show.
+    func placeSideBar() {
+        sideBarView?.transform = CGAffineTransform(translationX: width - reveal, y: 0)
     }
 
     /// Ends a drag: open or close, whichever the finger was heading for.
@@ -49,7 +75,8 @@ final class SideBarState {
         reveal = min(max(value, 0), width)
     }
 
-    private static let animation = Animation.smooth(duration: 0.3)
+    private static let duration = 0.3
+    private static let animation = Animation.smooth(duration: duration)
 }
 
 /// The app's content with the sidebar to its right, as wide as the screen. Swiping left from the
@@ -87,9 +114,8 @@ struct SideBarContainer<Content: View, SideBar: View>: View {
             // Over the content, so its width never sizes the screen. Built ahead of time, off
             // screen, so the first frame of a swipe doesn't have to build its list.
             .overlay(alignment: .topTrailing) {
-                sideBar()
+                SideBarHost(state: state, content: sideBar())
                     .modifier(SideBarSlide(state: state, isSideBar: true))
-                    .accessibilityAction(.escape) { state.close() }
             }
             .background(ScreenEdgePan(state: state))
     }
@@ -105,15 +131,84 @@ private struct SideBarSlide: ViewModifier {
 
     func body(content: Content) -> some View {
         if isSideBar {
+            // Moved by its UIKit view's transform (`SideBarState.placeSideBar`), not here.
             content
                 .frame(width: state.width)
-                .offset(x: state.width - state.reveal)
+                .ignoresSafeArea(edges: .vertical)
                 .allowsHitTesting(state.isOpen)
                 .accessibilityHidden(!state.isOpen)
         } else {
             content
                 .offset(x: -state.reveal)
                 .accessibilityHidden(state.isOpen)
+        }
+    }
+}
+
+/// The sidebar in a UIKit view of its own (in a hosting controller), which `SideBarState` moves
+/// by its transform: SwiftUI moving it (an offset, every frame of a swipe) went through the
+/// list's layout each time, more the more rows it had.
+private struct SideBarHost<Content: View>: UIViewControllerRepresentable {
+    let state: SideBarState
+    let content: Content
+
+    func makeUIViewController(context: Context) -> SideBarHostController {
+        let controller = SideBarHostController(rootView: root)
+        state.sideBarView = controller.host.view
+        state.placeSideBar()
+        return controller
+    }
+
+    func updateUIViewController(_ controller: SideBarHostController, context: Context) {
+        controller.host.rootView = root
+    }
+
+    /// The hosting controller starts a new environment: the sidebar's state goes in again.
+    private var root: AnyView {
+        let state = state
+        return AnyView(content
+            .environment(state)
+            .accessibilityAction(.escape) { state.close() })
+    }
+}
+
+final class SideBarHostController: UIViewController {
+    let host: UIHostingController<AnyView>
+
+    init(rootView: AnyView) {
+        host = UIHostingController(rootView: rootView)
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func loadView() {
+        view = PassThroughView()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        addChild(host)
+        host.view.backgroundColor = .clear
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // Bounds and center, not the frame: its transform moves it.
+        host.view.bounds = view.bounds
+        host.view.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+    }
+
+    /// Touches where the sidebar isn't (it's off screen, or still sliding in) go to the content
+    /// under it.
+    private final class PassThroughView: UIView {
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            let hit = super.hitTest(point, with: event)
+            return hit === self ? nil : hit
         }
     }
 }
