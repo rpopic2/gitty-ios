@@ -278,7 +278,7 @@ struct SideBarView: View {
             Section {
                 ForEach(projects) { project in
                     item(isSelected: isSelected(project.id)) { onSelect(project.id) } label: {
-                        SideBarProjectRow(project: project)
+                        SideBarProjectRow(project: project, isDownloading: GitDownloads.shared.active.contains(project.id))
                     }
                     .swipeActions {
                         Button(role: .destructive) { delete(project) } label: {
@@ -460,6 +460,7 @@ struct SideBarView: View {
     /// one stay on the device.
     private func delete(_ project: ProjectInfo) {
         projects.removeAll { $0.id == project.id }
+        GitDownloads.shared.cancel(projectID: project.id)  // a clone going on
         ProjectFilterStore.standard.remove(for: project.id)
         AlbumStore.shared.deleteAlbums(inProject: project.id)
         onDelete(project.id)
@@ -473,16 +474,25 @@ struct SideBarView: View {
 /// A project: its name, then owner · branch (and folder).
 private struct SideBarProjectRow: View {
     let project: ProjectInfo
+    /// Cloning or pulling, perhaps while another project shows.
+    let isDownloading: Bool
 
     var body: some View {
         Label {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.title)
-                    .lineLimit(1)
-                Text([project.link.owner, project.ref].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(project.title)
+                        .lineLimit(1)
+                    Text([project.link.owner, project.ref].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if isDownloading {
+                    Spacer(minLength: 0)
+                    ProgressView()
+                        .accessibilityLabel("Downloading")
+                }
             }
         } icon: {
             Image(systemName: "shippingbox")

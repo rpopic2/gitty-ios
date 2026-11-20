@@ -24,8 +24,8 @@ struct ProjectFilesView: View {
     /// The project's clone, if it's cloned.
     @State private var clone: CloneRecord?
     /// A Git download going on (Clone, Pull, pull down, a branch), in the Pull row with Cancel.
-    @State private var download: GitDownload?
-    @State private var downloadTask: Task<Void, Never>?
+    /// Kept for the whole app: it goes on while another project shows.
+    private var download: GitDownloads.Download? { GitDownloads.shared.download(for: projectID) }
     /// Asks before a big download on a mobile network.
     @State private var downloads = DownloadGuard()
     /// The space the project takes on this device: its clone, or the files downloaded one by one.
@@ -53,14 +53,6 @@ struct ProjectFilesView: View {
     }
     /// A branch or tag chosen that the clone hasn't downloaded: asks to pull it.
     @State private var refToPull: RefToPull?
-
-    private struct GitDownload {
-        let id = UUID()
-        let title: String
-        /// Roughly how much it downloads, when known.
-        let estimate: Int64?
-        var progress = FetchProgress.start
-    }
 
     private struct RefToPull: Identifiable {
         let name: String
@@ -142,6 +134,14 @@ struct ProjectFilesView: View {
                 Text("Its files are removed from this device. They download one by one again when you open them.")
             }
             .downloadConfirmation(downloads)
+            // A download ended, perhaps started by this project's view before it was left: show
+            // what it did (the clone, the branch, the space taken).
+            .onChange(of: GitDownloads.shared.finished[projectID]) {
+                Task {
+                    await load(refresh: false)
+                    await loadRefs()
+                }
+            }
             // Back from the Code level: files may have downloaded meanwhile.
             .onChange(of: isActive) { _, isActive in
                 if isActive { Task { await refreshStorage() } }
@@ -434,7 +434,7 @@ struct ProjectFilesView: View {
                     .font(.footnote)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
-                Button("Cancel", systemImage: "xmark.circle.fill") { downloadTask?.cancel() }
+                Button("Cancel", systemImage: "xmark.circle.fill") { GitDownloads.shared.cancel(projectID: projectID) }
                     .labelStyle(.iconOnly)
                     .font(.title3)
                     .foregroundStyle(.secondary)
@@ -494,37 +494,14 @@ struct ProjectFilesView: View {
         return count == 1 ? String(localized: "1 new commit") : String(localized: "\(count) new commits")
     }
 
-    /// Runs a Git download, shown in the Pull row with Cancel. Cancelling isn't an error.
-    @discardableResult
+    /// Runs a Git download, shown in the Pull row with Cancel (`GitDownloads`: it goes on while
+    /// another project shows). Cancelling isn't an error.
     private func startDownload(_ title: String, estimate: Int64? = nil,
-                               _ work: @escaping @MainActor (_ progress: @escaping @Sendable (FetchProgress) -> Void) async throws -> Void)
-        -> Task<Void, Never> {
-        downloadTask?.cancel()
-        let shown = GitDownload(title: title, estimate: estimate)
-        download = shown
-        let (updates, continuation) = AsyncStream.makeStream(of: FetchProgress.self, bufferingPolicy: .bufferingNewest(1))
-        Task {
-            // Not after it's finished (a last update can arrive late).
-            for await update in updates where download?.id == shown.id { download?.progress = update }
+                               _ work: @escaping @MainActor (_ progress: @escaping @Sendable (FetchProgress) -> Void) async throws -> Void) {
+        GitDownloads.shared.start(projectID: projectID, title: title, estimate: estimate, work: work) { error in
+            isSignedIn = await GitHubAuth.shared.isSignedIn
+            cloneError = error
         }
-        let task = Task {
-            do {
-                try await work { continuation.yield($0) }
-            } catch {
-                if !Task.isCancelled {
-                    isSignedIn = await GitHubAuth.shared.isSignedIn
-                    cloneError = error
-                }
-            }
-            continuation.finish()
-            if download?.id == shown.id {
-                download = nil
-                downloadTask = nil
-            }
-            await refreshStorage()
-        }
-        downloadTask = task
-        return task
     }
 
     /// The space the project takes on this device, for its row.
