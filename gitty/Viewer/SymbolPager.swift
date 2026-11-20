@@ -278,16 +278,6 @@ final class PageTextView: UIView {
         }
     }
 
-    /// The view controller showing the page, for the transition going back.
-    var owningViewController: UIViewController? {
-        var responder: UIResponder? = next
-        while let current = responder {
-            if let controller = current as? UIViewController { return controller }
-            responder = current.next
-        }
-        return nil
-    }
-
     override func layoutSubviews() {
         super.layoutSubviews()
         // Not while sliding: a frame is only meaningful without a transform.
@@ -672,8 +662,10 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 let slide = CGAffineTransform(translationX: shown, y: 0)
                 textView.transform = slide
                 gutter.transform = slide
-            case .cancelled where showNumbersWhileGoingBack(in: page):
-                break
+            case .cancelled:
+                // Going back may have taken the drag: the watch keeps the numbers out while it
+                // does, and puts them away otherwise.
+                watchGoingBack(page)
             default:
                 Self.hideNumbers(in: page, animated: true)
             }
@@ -692,26 +684,63 @@ struct ReadOnlyTextView: UIViewRepresentable {
             gutter.setNeedsDisplay()
         }
 
-        /// Going back has taken over the drag from the left edge (it cancels the peek, or wins
-        /// before it starts): the numbers come all the way out and stay while the card follows
-        /// the finger, as on a results page. They go once the card has gone, or has come back.
-        /// `false` when nothing is going back.
-        @discardableResult
-        private func showNumbersWhileGoingBack(in page: PageTextView) -> Bool {
-            guard let lineNumbering, let coordinator = page.owningViewController?.transitionCoordinator,
-                  coordinator.isInteractive
-            else { return false }
+        /// Watching the card while an edge drag may be closing it (see `watchGoingBack`).
+        private var isWatchingGoingBack = false
+
+        /// Going back takes the drag from the peek (cancelling it, or winning before it starts),
+        /// and nothing says so but the card itself, which shrinks under the finger. So the card
+        /// is watched: while it's smaller than the screen the numbers are all the way out, as on
+        /// a results page; back to full size (going back was let go), they slide away; gone,
+        /// they're put back unseen. A drag that wasn't going back ends the watch.
+        private func watchGoingBack(_ page: PageTextView) {
+            guard !isWatchingGoingBack, lineNumbering != nil else { return }
+            isWatchingGoingBack = true
+            Task { @MainActor [weak self, weak page] in
+                var isShowing = false
+                var fullSizeFrames = 0
+                var quietFrames = 0
+                defer { self?.isWatchingGoingBack = false }
+                for _ in 0..<900 {  // 15 s at most
+                    try? await Task.sleep(for: .milliseconds(16))
+                    guard let self, let page else { return }
+                    guard let window = page.window else {
+                        Self.hideNumbers(in: page, animated: false)  // the card has gone
+                        return
+                    }
+                    let isShrunk = page.convert(page.bounds, to: nil).width < window.bounds.width * 0.97
+                    let isPeeking = self.peek.map { $0.state == .began || $0.state == .changed } ?? false
+                    if isShrunk {
+                        fullSizeFrames = 0
+                        if !isShowing {
+                            isShowing = true
+                            self.showAllNumbers(in: page)
+                        }
+                    } else if isShowing {
+                        fullSizeFrames += 1
+                        if fullSizeFrames > 8 {  // settled back at full size
+                            Self.hideNumbers(in: page, animated: true)
+                            return
+                        }
+                    } else if !isPeeking {
+                        quietFrames += 1
+                        if quietFrames > 20 {  // not going back after all
+                            if !page.gutter.isHidden { Self.hideNumbers(in: page, animated: true) }
+                            return
+                        }
+                    }
+                }
+            }
+        }
+
+        /// The numbers all the way out, at once.
+        private func showAllNumbers(in page: PageTextView) {
+            guard let lineNumbering else { return }
             if page.gutter.isHidden { prepareNumbers(in: page, numbering: lineNumbering) }
             let slide = CGAffineTransform(translationX: page.gutter.bounds.width, y: 0)
             UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState]) {
                 page.textView.transform = slide
                 page.gutter.transform = slide
             }
-            coordinator.animate(alongsideTransition: nil) { context in
-                // Stayed: slide back. Gone: put it back as it was, unseen.
-                Self.hideNumbers(in: page, animated: context.isCancelled)
-            }
-            return true
         }
 
         private static func hideNumbers(in page: PageTextView, animated: Bool) {
@@ -942,15 +971,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
             guard gestureRecognizer === peek else { return true }
             guard lineNumbering != nil, touch.location(in: nil).x <= Self.peekEdgeWidth else { return false }
             // If going back wins the drag before the peek starts, the numbers still come out.
-            if let page = gestureRecognizer.view as? PageTextView {
-                Task { @MainActor [weak self, weak page] in
-                    for _ in 0..<4 {
-                        try? await Task.sleep(for: .milliseconds(80))
-                        guard let self, let page, page.gutter.isHidden else { return }
-                        if self.showNumbersWhileGoingBack(in: page) { return }
-                    }
-                }
-            }
+            if let page = gestureRecognizer.view as? PageTextView { watchGoingBack(page) }
             return true
         }
 
