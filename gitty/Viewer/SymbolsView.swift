@@ -305,9 +305,14 @@ struct SymbolsView: View, Equatable {
         let scope = collapseScope
         let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
         let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) } }
+        let fullPath = group.path.isEmpty ? rootFolderName : rootFolderName + "/" + group.path
         return FolderHeader(path: group.path.isEmpty ? rootFolderName : group.path, fileCount: group.fileCount,
                             isFolded: isFolded, onToggle: toggle)
-            .contextMenu { folderMenu(group, isFolded: isFolded, toggle: toggle) }
+            .contextMenu {
+                folderMenu(group, isFolded: isFolded, toggle: toggle)
+            } preview: {
+                FolderPathPreview(path: fullPath, fileCount: group.fileCount)
+            }
     }
 
     /// A folder's long-press menu: fold or unfold it (or all of them), and add its files to an
@@ -654,6 +659,31 @@ private struct FileTitle: View {
 
 /// A folder's header while every file is folded: its path (the project's name for its top) and
 /// how many files it has, with a chevron; tap it to fold the folder.
+/// A folder's long-press preview: its whole path from the project's top (the header cuts a long
+/// one short), wrapped, and how many files it has.
+private struct FolderPathPreview: View {
+    let path: String
+    let fileCount: Int
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "folder.fill")
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(path)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(fileCount == 1 ? "1 file" : "\(fileCount) files")
+                    .font(.subheadline)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .frame(width: 320, alignment: .leading)
+    }
+}
+
 private struct FolderHeader: View {
     let path: String
     let fileCount: Int
