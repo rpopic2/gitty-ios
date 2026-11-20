@@ -545,7 +545,12 @@ struct CodeScreen: View {
         stackedCards = [:]
         stackedResults = [search.id: StackedResults(query: query, source: Self.screenSourceID, depth: 1)]
         stackSearch = search
-        cardPath = [.results(search.id)]
+        // Straight in, not zoomed out of the screen: the page's field, on the keyboard, would
+        // zoom with it and jump into place after (the keyboard stays up: the bar's field hands
+        // it over).
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { cardPath = [.results(search.id)] }
     }
 
     /// The start of an https:// (or http://) address, or one.
