@@ -317,6 +317,27 @@ nonisolated final class GitRepository {
         return Git.string(id)
     }
 
+    /// Every file's path in the checked-out commit, in Git's order: each folder's entries by
+    /// name, a folder's files where the folder comes. Already in order, so a big clone's list
+    /// needs no sorting (and no walk through its folder on disk).
+    func checkedOutFilePaths() throws -> [String] {
+        var tree: OpaquePointer?
+        try Git.check(git_revparse_single(&tree, pointer, "HEAD^{tree}"))
+        defer { git_object_free(tree) }
+        let collector = PathCollector()
+        try withExtendedLifetime(collector) {
+            try Git.check(git_tree_walk(tree, GIT_TREEWALK_PRE, { root, entry, payload in
+                guard let entry, let payload, git_tree_entry_type(entry) == GIT_OBJECT_BLOB,
+                      let name = git_tree_entry_name(entry)
+                else { return 0 }
+                let collector = Unmanaged<PathCollector>.fromOpaque(payload).takeUnretainedValue()
+                collector.paths.append((root.map { String(cString: $0) } ?? "") + String(cString: name))
+                return 0
+            }, Unmanaged.passUnretained(collector).toOpaque()))
+        }
+        return collector.paths
+    }
+
     /// The size of the files among `entries` (a tree's, by their hashes) this clone doesn't
     /// have: what fetching them would add, before compression.
     func missingBytes(of entries: [ProjectTree.Entry]) throws -> Int64 {
@@ -636,6 +657,11 @@ nonisolated final class GitRepository {
             return try body(diff)
         }
     }
+}
+
+/// What `checkedOutFilePaths` walks into, from libgit2's callback.
+nonisolated private final class PathCollector {
+    var paths: [String] = []
 }
 
 /// What `tree(of:)` walks into, from libgit2's callback.

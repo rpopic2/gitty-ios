@@ -75,21 +75,32 @@ actor ProjectSymbolIndex {
     /// Every downloaded file in `project` except `excluded` that may be text, in path order,
     /// only files the project's filter lets through: with its symbols when they're known,
     /// otherwise just its title (`isIndexed` false). Reads no file.
+    /// A cloned project's come in Git's order, as they are (sorting tens of thousands took
+    /// seconds); the files downloaded one by one, a few, are sorted.
     /// - Returns: also the files whose saved copy changed since they were indexed (a pull
-    ///   changes a clone's): their old symbols show until `index` reads them again.
-    func listing(in project: ProjectInfo, excluding excluded: URL,
-                 matching filter: FileFilter = .none) async -> (files: [FileSymbols], stale: Set<URL>) {
-        guard let prefix = Self.prefix(of: project) else { return ([], []) }
-        let files = await store.savedDocuments()
-            .filter { metadata in
-                let address = metadata.url.absoluteString
-                guard metadata.url != excluded, address.hasPrefix(prefix) else { return false }
-                guard !Self.isNeverText(address) else { return false }
-                guard !filter.isEmpty else { return true }
-                let relative = String(address.dropFirst(prefix.count))
-                return filter.matches(relative.removingPercentEncoding ?? relative)
-            }
-            .sorted { $0.url.absoluteString.localizedStandardCompare($1.url.absoluteString) == .orderedAscending }
+    ///   changes a clone's): their old symbols show until `index` reads them again; and where
+    ///   `excluded` goes among them.
+    func listing(in project: ProjectInfo, excluding excluded: URL, matching filter: FileFilter = .none) async
+        -> (files: [FileSymbols], stale: Set<URL>, excludedPlace: Int) {
+        guard let prefix = Self.prefix(of: project) else { return ([], [], 0) }
+        func passes(_ metadata: DocumentMetadata) -> Bool {
+            let address = metadata.url.absoluteString
+            guard address.hasPrefix(prefix), !Self.isNeverText(address) else { return false }
+            guard !filter.isEmpty else { return true }
+            let relative = String(address.dropFirst(prefix.count))
+            return filter.matches(relative.removingPercentEncoding ?? relative)
+        }
+        var files: [DocumentMetadata]
+        if let clone = CloneIndex.shared.record(forProject: project.id) {
+            files = CloneIndex.shared.files(of: clone).filter(passes)
+        } else {
+            files = await store.savedDocuments().filter(passes)
+                .sorted { $0.url.absoluteString.localizedStandardCompare($1.url.absoluteString) == .orderedAscending }
+        }
+        let excludedPlace = files.firstIndex { $0.url == excluded }
+            ?? files.firstIndex { $0.url.absoluteString > excluded.absoluteString }
+            ?? files.count
+        files.removeAll { $0.url == excluded }
         listed = Dictionary(files.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
         var stale: Set<URL> = []
         let found = files.compactMap { metadata -> FileSymbols? in
@@ -100,7 +111,12 @@ actor ProjectSymbolIndex {
             case .notText: return nil
             }
         }
-        return (found, stale)
+        // Where the open file goes, counted in what's listed (files that aren't text aren't).
+        let place = files.prefix(excludedPlace).reduce(0) { count, metadata in
+            if case .notText = cache[metadata.url]?.result { return count }
+            return count + 1
+        }
+        return (found, stale, place)
     }
 
     /// A file's title before its symbols are known.

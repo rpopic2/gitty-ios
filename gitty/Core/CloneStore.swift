@@ -136,20 +136,15 @@ nonisolated final class CloneIndex: @unchecked Sendable {
         allRecords().flatMap { files(of: $0) }
     }
 
-    private func files(of record: CloneRecord) -> [DocumentMetadata] {
+    /// A clone's files, in Git's order (`GitRepository.checkedOutFilePaths`): listed once per
+    /// checkout.
+    func files(of record: CloneRecord) -> [DocumentMetadata] {
         if let list = lock.withLock({ fileLists[record.projectID] }) { return list }
         let root = folder(of: record)
-        let rootPath = root.standardizedFileURL.path + "/"
+        let paths = (try? GitRepository(at: root).checkedOutFilePaths()) ?? walk(root)
         var list: [DocumentMetadata] = []
-        let enumerator = FileManager.default.enumerator(
-            at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsPackageDescendants])
-        while let file = enumerator?.nextObject() as? URL {
-            if file.lastPathComponent == ".git" {
-                enumerator?.skipDescendants()
-                continue
-            }
-            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
-            let path = String(file.standardizedFileURL.path.dropFirst(rootPath.count))
+        list.reserveCapacity(paths.count)
+        for path in paths {
             let encoded = path.split(separator: "/")
                 .map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
                 .joined(separator: "/")
@@ -158,6 +153,23 @@ nonisolated final class CloneIndex: @unchecked Sendable {
         }
         lock.withLock { fileLists[record.projectID] = list }
         return list
+    }
+
+    /// The files in a clone's folder, if Git couldn't say (in no particular order).
+    private func walk(_ root: URL) -> [String] {
+        let rootPath = root.standardizedFileURL.path + "/"
+        var paths: [String] = []
+        let enumerator = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsPackageDescendants])
+        while let file = enumerator?.nextObject() as? URL {
+            if file.lastPathComponent == ".git" {
+                enumerator?.skipDescendants()
+                continue
+            }
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            paths.append(String(file.standardizedFileURL.path.dropFirst(rootPath.count)))
+        }
+        return paths.sorted()
     }
 
     private func metadata(_ url: URL, _ record: CloneRecord) -> DocumentMetadata {

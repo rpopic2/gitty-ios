@@ -79,6 +79,8 @@ final class CodeDocumentModel {
     @ObservationIgnored private var otherFiles: [ProjectSymbolIndex.FileSymbols] = []
     /// Each of `otherFiles`' place, by its URL.
     @ObservationIgnored private var otherFilePlaces: [URL: Int] = [:]
+    /// Where the open file goes among `otherFiles` in a clone (Git's order), from the listing.
+    @ObservationIgnored private var ownPlace: Int?
     /// Files found not to be text while indexing: left out of the list.
     @ObservationIgnored private var notTextFiles: Set<URL> = []
     @ObservationIgnored private var isLoadingProjectSymbols = false
@@ -277,11 +279,14 @@ final class CodeDocumentModel {
                 // Every file at once, its symbols if they're known: the rest are read after.
                 CollapsedCodeStore.shared.startFolded(scope: collapseScope)
                 let listing = await ProjectSymbolIndex.shared.listing(in: project, excluding: url, matching: filter)
-                let listed = (try? await ProjectStore.shared.tree(for: project.id))?.1
+                // A clone has every file: none to add from the file list (and its order stays Git's).
+                let isCloned = CloneIndex.shared.record(forProject: project.id) != nil
+                let listed = isCloned ? nil : (try? await ProjectStore.shared.tree(for: project.id))?.1
                 let own = url
                 otherFiles = await Task.detached(priority: .userInitiated) {
                     Self.merging(listing.files, notDownloadedFrom: listed, of: project, matching: filter, excluding: own)
                 }.value
+                ownPlace = isCloned ? listing.excludedPlace : nil
                 otherFilePlaces = Dictionary(otherFiles.enumerated().map { ($1.url, $0) }, uniquingKeysWith: { first, _ in first })
                 notTextFiles = []
                 pendingFiles = otherFiles.filter { !$0.file.isIndexed || listing.stale.contains($0.url) }.map(\.url)
@@ -291,6 +296,7 @@ final class CodeDocumentModel {
                 indexingProject = project
             } else {
                 indexingProject = nil
+                ownPlace = nil
                 pendingFiles = []
                 pendingSet = []
             }
@@ -447,10 +453,11 @@ final class CodeDocumentModel {
         if case .symbols(let symbols) = ownSymbols { own = symbols }
         let ownEntries = (ownFileEntry.map { [$0] } ?? []) + own
         let ownAddress = url.absoluteString
-        // The other files come in path order: the open file goes before the first that's after it.
-        let ownPlace = otherFiles.firstIndex {
+        // The other files come in path order: the open file goes before the first that's after it
+        // (in a clone's, where Git has it).
+        let ownPlace = min(self.ownPlace ?? otherFiles.firstIndex {
             ownAddress.localizedStandardCompare($0.url.absoluteString) == .orderedAscending
-        } ?? otherFiles.count
+        } ?? otherFiles.count, otherFiles.count)
         func appendOwn() {
             for symbol in ownEntries { combined.append(symbol.moved(to: combined.count, file: nil)) }
         }
