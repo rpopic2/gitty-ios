@@ -58,6 +58,8 @@ struct SymbolsView: View, Equatable {
     let onDownloadFile: (@MainActor (URL) -> Void)?
     /// Files downloading now (their titles show it).
     let downloadingFiles: Set<URL>
+    /// `symbols`' folders, built with them away from the main thread (`nil`: grouped here).
+    let folders: [FolderGroup]?
     /// A file's title came on screen before its symbols were known: read them now.
     let onNeedsSymbols: (@MainActor (URL) -> Void)?
     /// Open on a not-downloaded file's title: open the file (which downloads it).
@@ -108,6 +110,7 @@ struct SymbolsView: View, Equatable {
          onShowHistory: (@MainActor (URL, CodeSymbol?) -> Void)? = nil,
          onDownloadFile: (@MainActor (URL) -> Void)? = nil,
          downloadingFiles: Set<URL> = [],
+         folders: [FolderGroup]? = nil,
          onNeedsSymbols: (@MainActor (URL) -> Void)? = nil,
          onOpenURL: (@MainActor (URL) -> Void)? = nil,
          collapsed: CollapsedCodeStore = .shared,
@@ -135,6 +138,7 @@ struct SymbolsView: View, Equatable {
         self.onShowHistory = onShowHistory
         self.onDownloadFile = onDownloadFile
         self.downloadingFiles = downloadingFiles
+        self.folders = folders
         self.onNeedsSymbols = onNeedsSymbols
         self.onOpenURL = onOpenURL
     }
@@ -151,6 +155,7 @@ struct SymbolsView: View, Equatable {
             && (lhs.onCloseSearch == nil) == (rhs.onCloseSearch == nil)
             && lhs.albumContext == rhs.albumContext && (lhs.onShowHistory == nil) == (rhs.onShowHistory == nil)
             && lhs.downloadingFiles == rhs.downloadingFiles && lhs.collapsed === rhs.collapsed
+            && lhs.folders?.count == rhs.folders?.count
             && (lhs.onShowCommit == nil) == (rhs.onShowCommit == nil)
     }
 
@@ -280,7 +285,7 @@ struct SymbolsView: View, Equatable {
         let collapsed = collapsed
         let scope = collapseScope
         let openFile = openFile
-        let layout = FolderRows(groups: folderGroups.groups(of: symbols, openFile: openFile, scope: scope),
+        let layout = FolderRows(groups: folders ?? folderGroups.groups(of: symbols, openFile: openFile, scope: scope),
                                 isFolded: { collapsed.isFolderFolded($0.path, scope: scope) },
                                 // A folded file's symbols aren't items at all: thousands of empty
                                 // ones made scrolling here lag.

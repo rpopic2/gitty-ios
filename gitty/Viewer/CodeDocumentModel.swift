@@ -301,16 +301,18 @@ final class CodeDocumentModel {
                 pendingSet = []
             }
             loadedFilter = filter
-            isLoadingProjectSymbols = false
-            projectSymbolsLoaded = true
-            publishSymbols()
+            // Loaded once the list is showing (it's built in the background).
+            publishSymbols {
+                self.projectSymbolsLoaded = true
+                self.isLoadingProjectSymbols = false
+                if self.reloadsProjectSymbols {
+                    self.reloadsProjectSymbols = false
+                    self.loadedFilter = nil
+                    self.loadProjectSymbols()
+                }
+            }
             // The folders first: reading the files' symbols waits a moment (not for files on screen).
             startIndexing(after: .seconds(1.5))
-            if reloadsProjectSymbols {
-                reloadsProjectSymbols = false
-                loadedFilter = nil
-                loadProjectSymbols()
-            }
         }
     }
 
@@ -451,42 +453,77 @@ final class CodeDocumentModel {
 
     /// One flat list, in path order, the open file in its place among the project's: each
     /// file's entry, then its symbols in file order. Ids are positions in this list.
-    private func publishSymbols() {
+    /// Builds the list, and its folders for the Code level, away from the main thread (a big
+    /// project has tens of thousands of files), then shows both at once. A newer one wins.
+    /// - Parameter then: once it's showing (the project's files being in, say).
+    private func publishSymbols(then done: (@MainActor () -> Void)? = nil) {
+        // Until the open file's symbols are in, it waits for the list they bring.
+        if let done { publishCompletions.append(done) }
         guard let ownSymbols else { return }
-        var combined: [CodeSymbol] = []
-        // Each file's entry, then its symbols. A file without symbols (a README, a web page,
-        // another language) is just its entry: its page is the whole file.
         var own: [CodeSymbol] = []
         if case .symbols(let symbols) = ownSymbols { own = symbols }
         let ownEntries = (ownFileEntry.map { [$0] } ?? []) + own
-        let ownAddress = url.absoluteString
+        let files = otherFiles, notText = notTextFiles, place = ownPlace
+        let openFile = url, scope = collapseScope
+        publishVersion += 1
+        let version = publishVersion
+        Task {
+            let (combined, groups) = await Task.detached(priority: .userInitiated) {
+                let combined = Self.combine(own: ownEntries, openFile: openFile, others: files,
+                                            leavingOut: notText, ownPlace: place)
+                return (combined, FolderGroup.groups(of: combined, openFile: openFile, scope: scope))
+            }.value
+            // A newer list is on its way: what was waiting for this one waits for it.
+            guard version == publishVersion else { return }
+            symbolIndex = .ready(combined)
+            folderGroups = groups
+            let completions = publishCompletions
+            publishCompletions = []
+            for completion in completions { completion() }
+            // Building the search index takes a while for a big project: while its files are
+            // being read, not for every new list.
+            if indexingTask == nil || ContinuousClock.now - lastSearchPrepare > .seconds(6) {
+                lastSearchPrepare = .now
+                prepareSearch(for: combined)
+            }
+            publishAlbum()
+            indexAlbumFilesIfNeeded()
+        }
+    }
+
+    /// Each file's entry, then its symbols, the open file in its place. A file without symbols
+    /// (a README, a web page, another language) is just its entry: its page is the whole file.
+    nonisolated private static func combine(own ownEntries: [CodeSymbol], openFile: URL,
+                                            others: [ProjectSymbolIndex.FileSymbols], leavingOut notText: Set<URL>,
+                                            ownPlace place: Int?) -> [CodeSymbol] {
+        var combined: [CodeSymbol] = []
+        combined.reserveCapacity(others.count + ownEntries.count)
+        let ownAddress = openFile.absoluteString
         // The other files come in path order: the open file goes before the first that's after it
         // (in a clone's, where Git has it).
-        let ownPlace = min(self.ownPlace ?? otherFiles.firstIndex {
+        let ownPlace = min(place ?? others.firstIndex {
             ownAddress.localizedStandardCompare($0.url.absoluteString) == .orderedAscending
-        } ?? otherFiles.count, otherFiles.count)
+        } ?? others.count, others.count)
         func appendOwn() {
             for symbol in ownEntries { combined.append(symbol.moved(to: combined.count, file: nil)) }
         }
-        for (index, file) in otherFiles.enumerated() {
+        for (index, file) in others.enumerated() {
             if index == ownPlace { appendOwn() }
-            if !notTextFiles.isEmpty, notTextFiles.contains(file.url) { continue }
+            if !notText.isEmpty, notText.contains(file.url) { continue }
             combined.append(file.file.moved(to: combined.count, file: file.url))
             for symbol in file.symbols {
                 combined.append(symbol.moved(to: combined.count, file: file.url))
             }
         }
-        if ownPlace == otherFiles.count { appendOwn() }
-        symbolIndex = .ready(combined)
-        // Building the search index takes a while for a big project: while its files are
-        // being read, not for every new list.
-        if indexingTask == nil || ContinuousClock.now - lastSearchPrepare > .seconds(6) {
-            lastSearchPrepare = .now
-            prepareSearch(for: combined)
-        }
-        publishAlbum()
-        indexAlbumFilesIfNeeded()
+        if ownPlace == others.count { appendOwn() }
+        return combined
     }
+
+    /// The whole list's folders (`FolderGroup`), built with it: the Code level shows these
+    /// instead of grouping the list itself.
+    private(set) var folderGroups: [FolderGroup] = []
+    @ObservationIgnored private var publishVersion = 0
+    @ObservationIgnored private var publishCompletions: [@MainActor () -> Void] = []
 
     // MARK: - Album
 
