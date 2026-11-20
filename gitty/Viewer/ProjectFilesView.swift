@@ -37,6 +37,8 @@ struct ProjectFilesView: View {
     @State private var isShowingHistory = false
     /// A cloned project's branches and tags the clone has downloaded (the others need a pull).
     @State private var fetchedRefs: Set<String> = []
+    /// The branch picker is up.
+    @State private var isPickingRef = false
     /// A branch or tag chosen that the clone hasn't downloaded: asks to pull it.
     @State private var refToPull: RefToPull?
     /// Pull down (a fetch) or Pull is going on.
@@ -635,26 +637,11 @@ struct ProjectFilesView: View {
         }
     }
 
+    /// The branch row: tap it for the picker (searchable, recent first).
     private func branchMenu(project: ProjectInfo) -> some View {
-        Menu {
-            if let refs {
-                if !refs.branches.isEmpty {
-                    Section("Branches") {
-                        ForEach(refs.branches, id: \.self) { name in
-                            refButton(name, isTag: false, current: project.ref)
-                        }
-                    }
-                }
-                if !refs.tags.isEmpty {
-                    Section("Tags") {
-                        ForEach(refs.tags, id: \.self) { name in
-                            refButton(name, isTag: true, current: project.ref)
-                        }
-                    }
-                }
-            } else {
-                Button("Load Branches and Tags") { Task { await loadRefs() } }
-            }
+        Button {
+            isPickingRef = true
+            if refs == nil { Task { await loadRefs() } }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.triangle.branch")
@@ -677,23 +664,17 @@ struct ProjectFilesView: View {
             }
             .contentShape(Rectangle())
         }
+        .buttonStyle(.borderless)  // only this, not the history button beside it
         .disabled(isSwitchingRef || cloneProgress != nil)
         .accessibilityLabel("Branch")
         .accessibilityValue(project.ref ?? "")
-    }
-
-    private func refButton(_ name: String, isTag: Bool, current: String?) -> some View {
-        Button {
-            switchRef(to: name, isTag: isTag)
-        } label: {
-            if name == current {
-                Label(name, systemImage: "checkmark")
-            } else if clone != nil, !fetchedRefs.contains(name) {
-                Text(name)
-                Text("Not downloaded")
-            } else {
-                Text(name)
+        .sheet(isPresented: $isPickingRef) {
+            BranchPicker(refs: refs, current: project.ref, recent: RecentRefsStore.standard.names(for: projectID),
+                         downloaded: clone == nil ? nil : fetchedRefs) { name, isTag in
+                switchRef(to: name, isTag: isTag)
             }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -714,6 +695,7 @@ struct ProjectFilesView: View {
     /// isn't cloned lists its files from GitHub.
     private func switchRef(to name: String, isTag: Bool) {
         guard case .loaded(let project, _) = state, name != project.ref else { return }
+        RecentRefsStore.standard.add(name, for: projectID)
         if clone != nil, !fetchedRefs.contains(name) {
             refToPull = RefToPull(name: name, isTag: isTag)
             return

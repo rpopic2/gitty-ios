@@ -3,6 +3,14 @@ import Testing
 @testable import gitty
 
 struct SymbolSearchTests {
+    @Test func branchesAreSearchedLikeSymbols() {
+        let branches = ["main", "parser-old/main", "feature/parser", "release/1.0", "fix/Parser-crash"]
+        #expect(SymbolSearch.matchingNames("parser", in: branches)
+                == ["feature/parser", "fix/Parser-crash", "parser-old/main"])  // the last part first, any case
+        #expect(SymbolSearch.matchingNames("fpc", in: branches) == ["fix/Parser-crash"])  // letters in order
+        #expect(SymbolSearch.matchingNames("", in: branches) == branches)
+    }
+
     private func symbols(_ names: [String]) -> [CodeSymbol] {
         names.enumerated().map { index, name in
             CodeSymbol(id: index, name: name, kind: .method, range: NSRange(location: 0, length: 0),

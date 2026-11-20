@@ -37,11 +37,13 @@ nonisolated enum SymbolSearch {
             let fullWords: [String]
             let memberWords: [String]
 
-            init(_ name: String) {
+            /// - Parameter separator: what the name's last part follows, which counts most (a
+            ///   member's `.`; a branch's `/`).
+            init(_ name: String, separator: Character = ".") {
                 full = name.lowercased()
-                member = SymbolSearch.memberName(full)
+                member = SymbolSearch.memberName(full, separator: separator)
                 fullWords = SymbolSearch.words(of: name)
-                memberWords = SymbolSearch.words(of: SymbolSearch.memberName(name))
+                memberWords = SymbolSearch.words(of: SymbolSearch.memberName(name, separator: separator))
             }
         }
     }
@@ -284,9 +286,22 @@ nonisolated enum SymbolSearch {
 
     /// The part after the last dot: `draw` in `Circle.draw`, `IsReadOnly` in
     /// `List.ICollection<T>.IsReadOnly`. Names without a dot are their own member name.
-    static func memberName(_ name: String) -> String {
-        guard let dot = name.lastIndex(of: "."), name.index(after: dot) < name.endIndex else { return name }
+    static func memberName(_ name: String, separator: Character = ".") -> String {
+        guard let dot = name.lastIndex(of: separator), name.index(after: dot) < name.endIndex else { return name }
         return String(name[name.index(after: dot)...])
+    }
+
+    /// Names (branches, say) that match `query`, best first (equal matches keep their order),
+    /// ranked as symbols are. An empty query keeps them all.
+    /// - Parameter separator: what a name's last part follows, which counts most (`/` for
+    ///   branches: `parser` finds `feature/parser` before `parser-old/main`).
+    static func matchingNames(_ query: String, in names: [String], separator: Character = "/") -> [String] {
+        let query = Query(query)
+        guard !query.text.isEmpty else { return names }
+        return names.enumerated()
+            .compactMap { index, name in rank(query, Index.Entry(name, separator: separator)).map { (name, $0, index) } }
+            .sorted { $0.1 != $1.1 ? $0.1 < $1.1 : $0.2 < $1.2 }
+            .map(\.0)
     }
 
     static func isSubsequence(_ query: String, of text: String) -> Bool {

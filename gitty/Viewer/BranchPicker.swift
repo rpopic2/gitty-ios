@@ -1,0 +1,126 @@
+import SwiftUI
+
+/// The branches and tags you switched a project to lately, newest first, on this device.
+nonisolated struct RecentRefsStore: @unchecked Sendable {
+    static let standard = RecentRefsStore(defaults: .standard)
+    static let limit = 5
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+    }
+
+    func names(for projectID: String) -> [String] {
+        defaults.stringArray(forKey: key(projectID)) ?? []
+    }
+
+    func add(_ name: String, for projectID: String) {
+        let names = [name] + self.names(for: projectID).filter { $0 != name }
+        defaults.set(Array(names.prefix(Self.limit)), forKey: key(projectID))
+    }
+
+    private func key(_ projectID: String) -> String { "recentRefs:" + projectID }
+}
+
+/// Choosing a branch or tag: searched as symbols are (`SymbolSearch.matchingNames`, the part
+/// after the last `/` counting most), the ones used lately first. On a cloned project, the ones
+/// the clone hasn't downloaded say so (choosing one asks to pull it).
+struct BranchPicker: View {
+    let refs: ProjectRefs?
+    let current: String?
+    let recent: [String]
+    /// A cloned project's downloaded branches and tags (`nil`: not cloned, all of them can be
+    /// shown).
+    let downloaded: Set<String>?
+    let onChoose: @MainActor (_ name: String, _ isTag: Bool) -> Void
+
+    @State private var query = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let refs {
+                    list(refs)
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .navigationTitle("Branches and Tags")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: Text("Search Branches and Tags"))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func list(_ refs: ProjectRefs) -> some View {
+        let branches = SymbolSearch.matchingNames(query, in: refs.branches)
+        let tags = SymbolSearch.matchingNames(query, in: refs.tags)
+        let recentShown = query.isEmpty ? recent.filter { refs.branches.contains($0) || refs.tags.contains($0) } : []
+        return List {
+            if !recentShown.isEmpty {
+                Section("Recent") {
+                    ForEach(recentShown, id: \.self) { name in
+                        row(name, isTag: !refs.branches.contains(name))
+                    }
+                }
+            }
+            if !branches.isEmpty {
+                Section("Branches") {
+                    ForEach(branches, id: \.self) { row($0, isTag: false) }
+                }
+            }
+            if !tags.isEmpty {
+                Section("Tags") {
+                    ForEach(tags, id: \.self) { row($0, isTag: true) }
+                }
+            }
+            if branches.isEmpty && tags.isEmpty && !query.isEmpty {
+                ContentUnavailableView.search(text: query)
+                    .listRowBackground(Color.clear)
+            }
+        }
+    }
+
+    private func row(_ name: String, isTag: Bool) -> some View {
+        let isDownloaded = downloaded?.contains(name) ?? true
+        return Button {
+            dismiss()
+            if name != current { onChoose(name, isTag) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: isTag ? "tag" : "arrow.triangle.branch")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.body.monospaced())
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if !isDownloaded {
+                        Text("Not downloaded")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if name == current {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
+                        .accessibilityLabel("Current")
+                }
+            }
+            .contentShape(Rectangle())
+        }
+    }
+}
