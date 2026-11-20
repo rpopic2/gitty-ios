@@ -140,10 +140,10 @@ nonisolated final class GitRepository {
     /// Downloads `ref` from `origin`, `depth` commits deep (`nil`: all of its history).
     /// - Parameters:
     ///   - token: a GitHub token, for private repositories (sent as the password).
-    ///   - progress: the fraction of objects received, now and then.
+    ///   - progress: how far it's got, now and then.
     ///   - isCancelled: checked as data arrives; `true` stops the fetch.
     func fetch(_ ref: GitRef, depth: Int?, token: String?,
-               progress: @escaping @Sendable (Double) -> Void = { _ in },
+               progress: @escaping @Sendable (FetchProgress) -> Void = { _ in },
                isCancelled: @escaping @Sendable () -> Bool = { false }) throws {
         var remote: OpaquePointer?
         try Git.check(git_remote_lookup(&remote, pointer, "origin"))
@@ -171,7 +171,8 @@ nonisolated final class GitRepository {
             let context = Unmanaged<FetchContext>.fromOpaque(payload).takeUnretainedValue()
             if context.isCancelled() { return -1 }  // stops the fetch
             if let stats = stats?.pointee, stats.total_objects > 0 {
-                context.report(Double(stats.received_objects) / Double(stats.total_objects))
+                context.report(FetchProgress(fraction: Double(stats.received_objects) / Double(stats.total_objects),
+                                             receivedBytes: Int(stats.received_bytes)))
             }
             return 0
         }
@@ -609,26 +610,35 @@ nonisolated private final class TreeCollector {
     var items: [(path: String, kind: ProjectTree.Entry.Kind, id: git_oid)] = []
 }
 
+/// How far a fetch has got: the share of objects received, and the bytes downloaded so far.
+nonisolated struct FetchProgress: Equatable, Sendable {
+    var fraction: Double
+    var receivedBytes: Int
+
+    static let start = FetchProgress(fraction: 0, receivedBytes: 0)
+}
+
 /// What the fetch callbacks need, passed to them as their payload.
 nonisolated private final class FetchContext {
     let token: String?
     var triedToken = false
-    let progress: @Sendable (Double) -> Void
+    let progress: @Sendable (FetchProgress) -> Void
     let isCancelled: @Sendable () -> Bool
-    private var lastReported = -1.0
+    private var lastReported: ContinuousClock.Instant?
 
-    init(token: String?, progress: @escaping @Sendable (Double) -> Void,
+    init(token: String?, progress: @escaping @Sendable (FetchProgress) -> Void,
          isCancelled: @escaping @Sendable () -> Bool) {
         self.token = token
         self.progress = progress
         self.isCancelled = isCancelled
     }
 
-    /// Every 1%, not every object.
-    func report(_ fraction: Double) {
-        guard fraction - lastReported >= 0.01 || fraction >= 1 else { return }
-        lastReported = fraction
-        progress(fraction)
+    /// Ten times a second (and the end), not for every object.
+    func report(_ progress: FetchProgress) {
+        let now = ContinuousClock.now
+        if let lastReported, now - lastReported < .milliseconds(100), progress.fraction < 1 { return }
+        lastReported = now
+        self.progress(progress)
     }
 }
 

@@ -234,8 +234,8 @@ actor CloneStore {
 
     /// Clones the project at its branch or tag, the latest commit only, then reads its files
     /// from the clone: the files downloaded one by one are deleted.
-    /// - Parameter progress: the fraction of objects received.
-    func clone(_ project: ProjectInfo, progress: @escaping @Sendable (Double) -> Void) async throws {
+    /// - Parameter progress: how far the download has got.
+    func clone(_ project: ProjectInfo, progress: @escaping @Sendable (FetchProgress) -> Void) async throws {
         guard let refName = project.ref else { throw CloneError.notABranchOrTag("") }
         guard let remote = URL(string: "https://github.com/\(project.link.owner)/\(project.link.repo).git"),
               let rawPrefix = project.rawURL(for: "")?.absoluteString

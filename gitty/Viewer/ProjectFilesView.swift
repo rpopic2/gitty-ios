@@ -25,7 +25,7 @@ struct ProjectFilesView: View {
     /// The project's clone, if it's cloned.
     @State private var clone: CloneRecord?
     /// While cloning: the fraction received.
-    @State private var cloneProgress: Double?
+    @State private var cloneProgress: FetchProgress?
     @State private var cloneError: (any Error)?
     @State private var isConfirmingDeleteClone = false
     /// The whole repository's files' size, roughly what Clone downloads (compressed, less).
@@ -447,7 +447,8 @@ struct ProjectFilesView: View {
                 ProgressView()
                 Text("Cloning…")
                 Spacer(minLength: 8)
-                Text(cloneProgress, format: .percent.precision(.fractionLength(0)))
+                // What's downloaded so far (compressed, so less than the files' size).
+                Text(Int64(cloneProgress.receivedBytes), format: .byteCount(style: .file))
                     .monospacedDigit()
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -560,11 +561,11 @@ struct ProjectFilesView: View {
     /// Clones the project (the latest commit). Its files then come from the clone, and the ones
     /// downloaded one by one are deleted.
     private func startClone(_ project: ProjectInfo) {
-        cloneProgress = 0
-        let (fractions, continuation) = AsyncStream.makeStream(of: Double.self, bufferingPolicy: .bufferingNewest(1))
+        cloneProgress = .start
+        let (updates, continuation) = AsyncStream.makeStream(of: FetchProgress.self, bufferingPolicy: .bufferingNewest(1))
         Task {
-            // Not after it's finished (a last fraction can arrive late).
-            for await fraction in fractions where cloneProgress != nil { cloneProgress = fraction }
+            // Not after it's finished (a last update can arrive late).
+            for await update in updates where cloneProgress != nil { cloneProgress = update }
         }
         Task {
             do {
