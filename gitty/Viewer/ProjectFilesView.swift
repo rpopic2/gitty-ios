@@ -628,7 +628,7 @@ struct ProjectFilesView: View {
                 Image(systemName: "arrow.triangle.branch")
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                Text(project.ref ?? "")
+                Text(verbatim: project.ref ?? "")
                     .font(.body.monospaced())
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -653,15 +653,7 @@ struct ProjectFilesView: View {
             comparing = pendingComparison
             pendingComparison = nil
         }) {
-            BranchPicker(refs: refs, current: project.ref, recent: RecentRefsStore.standard.names(for: projectID),
-                         downloaded: clone == nil ? nil : fetchedRefs,
-                         onChoose: { name, isTag in switchRef(to: name, isTag: isTag) },
-                         // Comparing needs the clone.
-                         onCompare: clone == nil ? nil : { name, isTag in
-                             pendingComparison = Comparing(head: isTag ? .tag(name) : .branch(name))
-                         })
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+            branchPicker(current: project.ref)
         }
         .sheet(item: $comparing) { item in
             NavigationStack {
@@ -673,6 +665,23 @@ struct ProjectFilesView: View {
                     }
             }
         }
+    }
+
+    /// The branch row's picker. Comparing needs the clone.
+    private func branchPicker(current: String?) -> some View {
+        let downloaded: Set<String>? = clone == nil ? nil : fetchedRefs
+        var onCompare: (@MainActor (_ name: String, _ isTag: Bool) -> Void)?
+        if clone != nil {
+            onCompare = { name, isTag in
+                pendingComparison = Comparing(head: isTag ? .tag(name) : .branch(name))
+            }
+        }
+        return BranchPicker(refs: refs, current: current, recent: RecentRefsStore.standard.names(for: projectID),
+                            downloaded: downloaded,
+                            onChoose: { name, isTag in switchRef(to: name, isTag: isTag) },
+                            onCompare: onCompare)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
     }
 
     /// The branches and tags: a cloned project's from the clone (listed from the remote when
