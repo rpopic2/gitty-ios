@@ -39,6 +39,14 @@ struct ProjectFilesView: View {
     @State private var fetchedRefs: Set<String> = []
     /// The branch picker is up.
     @State private var isPickingRef = false
+    /// A branch or tag held in the picker, compared with the checkout once the picker's gone.
+    @State private var pendingComparison: Comparing?
+    @State private var comparing: Comparing?
+
+    private struct Comparing: Identifiable {
+        let head: GitSide
+        var id: GitSide { head }
+    }
     /// A branch or tag chosen that the clone hasn't downloaded: asks to pull it.
     @State private var refToPull: RefToPull?
     /// Pull down (a fetch) or Pull is going on.
@@ -668,13 +676,29 @@ struct ProjectFilesView: View {
         .disabled(isSwitchingRef || cloneProgress != nil)
         .accessibilityLabel("Branch")
         .accessibilityValue(project.ref ?? "")
-        .sheet(isPresented: $isPickingRef) {
+        .sheet(isPresented: $isPickingRef, onDismiss: {
+            comparing = pendingComparison
+            pendingComparison = nil
+        }) {
             BranchPicker(refs: refs, current: project.ref, recent: RecentRefsStore.standard.names(for: projectID),
-                         downloaded: clone == nil ? nil : fetchedRefs) { name, isTag in
-                switchRef(to: name, isTag: isTag)
-            }
+                         downloaded: clone == nil ? nil : fetchedRefs,
+                         onChoose: { name, isTag in switchRef(to: name, isTag: isTag) },
+                         // Comparing needs the clone.
+                         onCompare: clone == nil ? nil : { name, isTag in
+                             pendingComparison = Comparing(head: isTag ? .tag(name) : .branch(name))
+                         })
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $comparing) { item in
+            NavigationStack {
+                CompareView(projectID: projectID, base: .checkedOut, head: item.head)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { comparing = nil }
+                        }
+                    }
+            }
         }
     }
 

@@ -4,6 +4,8 @@ import SwiftUI
 /// first if there's none. Tap a commit for the files it changed, and a file for its diff.
 struct BranchHistoryView: View {
     @State private var model: BranchHistoryModel
+    /// A commit held: compared with the checkout.
+    @State private var comparedCommit: GitCommit?
     @Environment(\.dismiss) private var dismiss
 
     init(projectID: String) {
@@ -29,6 +31,9 @@ struct BranchHistoryView: View {
             }
             .navigationDestination(for: GitCommit.self) { commit in
                 CommitFilesView(projectID: model.projectID, commit: commit)
+            }
+            .navigationDestination(item: $comparedCommit) { commit in
+                CompareView(projectID: model.projectID, base: .commit(commit.id), head: .checkedOut)
             }
             .refreshable { await model.pull() }
         }
@@ -73,6 +78,12 @@ struct BranchHistoryView: View {
             ForEach(model.commits) { commit in
                 NavigationLink(value: commit) {
                     CommitRow(commit: commit)
+                }
+                // Touch and hold: what's changed since this commit (change either side there).
+                .contextMenu {
+                    Button("Compare with Checked Out", systemImage: "arrow.left.arrow.right") {
+                        comparedCommit = commit
+                    }
                 }
             }
             if model.canLoadMore {
@@ -210,6 +221,8 @@ struct CommitFilesView: View {
     @State private var changes: [GitChange]?
     @State private var errorMessage: String?
     @State private var diffStart: DiffStart?
+    /// Compare (the toolbar): this commit with the checkout, or anything else.
+    @State private var isComparing = false
     /// The diff zooms out of its file's row, and closes like a symbol's card.
     @Namespace private var diffNamespace
 
@@ -269,6 +282,16 @@ struct CommitFilesView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(commit.shortID)
         .navigationBarTitleDisplayMode(.inline)
+        // What's changed since this commit, up to the checkout (either side can be changed there).
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Compare", systemImage: "arrow.left.arrow.right") { isComparing = true }
+                    .accessibilityHint("Compares this commit with another, or with the checkout")
+            }
+        }
+        .navigationDestination(isPresented: $isComparing) {
+            CompareView(projectID: projectID, base: .commit(commit.id), head: .checkedOut)
+        }
         .task {
             guard changes == nil else { return }
             do {
@@ -285,7 +308,7 @@ struct CommitFilesView: View {
 }
 
 /// A changed file: what happened to it, its name and folder.
-private struct ChangeRow: View {
+struct ChangeRow: View {
     let change: GitChange
 
     var body: some View {

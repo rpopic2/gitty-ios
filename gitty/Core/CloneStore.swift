@@ -217,6 +217,8 @@ nonisolated enum CloneError: LocalizedError, Equatable {
     case notCloned
     /// The clone hasn't downloaded this branch or tag: pull it first.
     case notFetched(String)
+    /// The downloaded history doesn't go back far enough (to where two branches split).
+    case historyTooShort
 
     var errorDescription: String? {
         switch self {
@@ -226,6 +228,8 @@ nonisolated enum CloneError: LocalizedError, Equatable {
             "This project isn’t cloned."
         case .notFetched(let ref):
             "“\(ref)” isn’t downloaded. Pull it to read it."
+        case .historyTooShort:
+            "The downloaded history doesn’t go back to where they split. Load more history to compare them."
         }
     }
 }
@@ -467,6 +471,84 @@ actor CloneStore {
         let ref = record.ref
         try await serially(projectID) {
             try GitRepository(at: folder).fetch(ref, depth: deeper, token: token, isCancelled: { Task.isCancelled })
+        }
+        record.depth = deeper
+        index.save(record)
+    }
+
+    // MARK: Comparing
+
+    /// Works out a comparison in the clone, offline: both sides' commits, where they split
+    /// (for `.sinceSplit`) and the commits in between. Throws `CloneError.notFetched` for a side
+    /// it doesn't have, and `.historyTooShort` when where they split isn't downloaded.
+    func compare(_ comparison: GitComparison, projectID: String) async throws -> ResolvedComparison {
+        guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        return try await serially(projectID) { () throws -> ResolvedComparison in
+            let repository = try GitRepository(at: folder)
+            guard let base = repository.resolve(comparison.base) else {
+                throw CloneError.notFetched(comparison.base.label)
+            }
+            guard let head = repository.resolve(comparison.head) else {
+                throw CloneError.notFetched(comparison.head.label)
+            }
+            let split = repository.mergeBase(base, head)
+            let before: String
+            switch comparison.mode {
+            case .sinceSplit:
+                guard let split else { throw CloneError.historyTooShort }
+                before = split
+            case .direct:
+                before = base
+            }
+            let (commits, hasMore) = try repository.commits(from: split ?? base, to: head, limit: 200)
+            return ResolvedComparison(comparison: comparison, before: before, after: head,
+                                      afterCommit: try repository.commit(head), commits: commits,
+                                      hasMoreCommits: hasMore)
+        }
+    }
+
+    /// The files that differ from one commit to another.
+    func changes(projectID: String, from before: String, to after: String) async throws -> [GitChange] {
+        guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        return try await serially(projectID) { try GitRepository(at: folder).changes(from: before, to: after) }
+    }
+
+    func patch(projectID: String, from before: String, to after: String, path: String) async throws -> String {
+        guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        return try await serially(projectID) {
+            try GitRepository(at: folder).patch(from: before, to: after, path: path)
+        }
+    }
+
+    /// Downloads a branch or tag into the clone (its latest commit), without checking it out:
+    /// a comparison's side that wasn't there.
+    func fetchRef(_ ref: GitRef, projectID: String) async throws {
+        guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        let token = await GitHubAuth.shared.token()
+        let depth = Self.initialDepth
+        try await serially(projectID) {
+            try GitRepository(at: folder).fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
+        }
+    }
+
+    /// More history for a comparison's branches and tags (and the checked-out one), so where
+    /// they split can be found.
+    func loadMoreHistory(for refs: [GitRef], projectID: String) async throws {
+        guard var record = index.record(forProject: projectID) else { return }
+        let folder = index.folder(of: record)
+        let token = await GitHubAuth.shared.token()
+        // A clone with all its history (no depth) gets all of theirs too.
+        let deeper = record.depth.map { $0 + Self.deepenStep }
+        let all = Array(Set(refs + [record.ref]))
+        try await serially(projectID) {
+            let repository = try GitRepository(at: folder)
+            for ref in all {
+                try repository.fetch(ref, depth: deeper, token: token, isCancelled: { Task.isCancelled })
+            }
         }
         record.depth = deeper
         index.save(record)

@@ -12,6 +12,9 @@ struct CommitDiffView: View {
     let startPath: String
     /// The commit's changes, when they're known already (from its list of files).
     var knownChanges: [GitChange]? = nil
+    /// Not one commit but a comparison of two (`commit` is its newer side): its diffs, from one
+    /// to the other.
+    var comparison: ResolvedComparison? = nil
 
     @State private var changes: [GitChange]?
     @State private var errorMessage: String?
@@ -50,7 +53,8 @@ struct CommitDiffView: View {
                 // screen): both hide while you scroll down.
                 VStack(spacing: 0) {
                     if let changes, let index = currentIndex(in: changes) {
-                        DiffCaption(change: changes[index], commit: commit, index: index, count: changes.count)
+                        DiffCaption(change: changes[index], commit: commit, comparison: comparison,
+                                    index: index, count: changes.count)
                             .padding(.bottom, 8)
                     }
                     if let review, review.isDocked {
@@ -78,7 +82,12 @@ struct CommitDiffView: View {
                 return
             }
             do {
-                changes = try await CloneStore.shared.changes(projectID: projectID, commit: commit.id)
+                if let comparison {
+                    changes = try await CloneStore.shared.changes(projectID: projectID, from: comparison.before,
+                                                                  to: comparison.after)
+                } else {
+                    changes = try await CloneStore.shared.changes(projectID: projectID, commit: commit.id)
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -116,7 +125,7 @@ struct CommitDiffView: View {
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 0) {
                         ForEach(changes) { change in
-                            DiffPage(projectID: projectID, commit: commit, change: change,
+                            DiffPage(projectID: projectID, commit: commit, comparison: comparison, change: change,
                                      isCurrent: change.path == currentPath, insets: insets,
                                      onScrollDown: { isCaptionHidden = $0 },
                                      onClose: { dismiss() })
@@ -147,6 +156,8 @@ struct CommitDiffView: View {
 private struct DiffCaption: View {
     let change: GitChange
     let commit: GitCommit
+    /// A comparison's caption says what's compared ("main...feature") instead of who and when.
+    let comparison: ResolvedComparison?
     let index: Int
     let count: Int
 
@@ -165,9 +176,15 @@ private struct DiffCaption: View {
                     .truncationMode(.head)
             }
             HStack(spacing: 4) {
-                Text(commit.author)
-                Text("·")
-                Text(commit.date, format: .dateTime.day().month().year().hour().minute())
+                if let comparison {
+                    Text(comparison.title)
+                        .monospaced()
+                        .truncationMode(.middle)
+                } else {
+                    Text(commit.author)
+                    Text("·")
+                    Text(commit.date, format: .dateTime.day().month().year().hour().minute())
+                }
                 Spacer(minLength: 8)
                 if count > 1 {
                     Text("\(index + 1) of \(count)")
@@ -233,6 +250,7 @@ extension GitChange.Kind {
 private struct DiffPage: View {
     let projectID: String
     let commit: GitCommit
+    let comparison: ResolvedComparison?
     let change: GitChange
     let isCurrent: Bool
     /// The screen's safe area, plus room for the caption at the bottom.
@@ -289,7 +307,12 @@ private struct DiffPage: View {
         // Again for another font or colors.
         .task(id: codeTextStyle) {
             do {
-                let patch = try await CloneStore.shared.patch(projectID: projectID, commit: commit.id, path: change.path)
+                let patch = if let comparison {
+                    try await CloneStore.shared.patch(projectID: projectID, from: comparison.before,
+                                                      to: comparison.after, path: change.path)
+                } else {
+                    try await CloneStore.shared.patch(projectID: projectID, commit: commit.id, path: change.path)
+                }
                 let style = codeTextStyle
                 let fileExtension = (change.path as NSString).pathExtension
                 let (parsed, rendered) = await Task.detached(priority: .userInitiated) {
@@ -320,8 +343,10 @@ extension DiffPage {
         guard let diff, let text, let review, range.length > 0, NSMaxRange(range) <= text.length else { return }
         let lines = ReviewText.lines(of: range, in: text.string as NSString)
         let picked = diff.selection((lines.start - 1)...(lines.end - 1))
+        // A comparison's comment names it ("main...feature"), at its newer side.
         let selection = ReviewDiffSelection(path: change.path, oldPath: change.oldPath, commit: commit.id,
-                                            summary: commit.summary, oldLines: picked.old, newLines: picked.new,
+                                            summary: comparison?.title ?? commit.summary,
+                                            oldLines: picked.old, newLines: picked.new,
                                             diff: picked.text)
         let format = reviewFormat
         let projectID = projectID

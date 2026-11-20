@@ -34,6 +34,11 @@ struct BranchPicker: View {
     /// shown).
     let downloaded: Set<String>?
     let onChoose: @MainActor (_ name: String, _ isTag: Bool) -> Void
+    /// Choosing a comparison's side instead (`CompareView`): the checkout and commits (typed
+    /// as hashes) can be chosen too.
+    var onChooseSide: (@MainActor (GitSide) -> Void)? = nil
+    /// Touch and hold a branch or tag: Compare with Checked Out (`nil`: not offered).
+    var onCompare: (@MainActor (_ name: String, _ isTag: Bool) -> Void)? = nil
 
     @State private var query = ""
     @Environment(\.dismiss) private var dismiss
@@ -48,10 +53,11 @@ struct BranchPicker: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .navigationTitle("Branches and Tags")
+            .navigationTitle(onChooseSide == nil ? "Branches and Tags" : "Compare")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: Text("Search Branches and Tags"))
+                        prompt: onChooseSide == nil ? Text("Search Branches and Tags")
+                                                    : Text("Branch, Tag or Commit Hash"))
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .toolbar {
@@ -67,6 +73,17 @@ struct BranchPicker: View {
         let tags = SymbolSearch.matchingNames(query, in: refs.tags)
         let recentShown = query.isEmpty ? recent.filter { refs.branches.contains($0) || refs.tags.contains($0) } : []
         return List {
+            if let onChooseSide {
+                // A comparison's side: the checkout, or the commit a typed hash names.
+                Section {
+                    if query.isEmpty {
+                        sideRow(.checkedOut, onChooseSide)
+                    }
+                    if let hash = GitSide.commitHash(in: query) {
+                        sideRow(.commit(hash), onChooseSide)
+                    }
+                }
+            }
             if !recentShown.isEmpty {
                 Section("Recent") {
                     ForEach(recentShown, id: \.self) { name in
@@ -91,11 +108,26 @@ struct BranchPicker: View {
         }
     }
 
+    private func sideRow(_ side: GitSide, _ choose: @escaping @MainActor (GitSide) -> Void) -> some View {
+        Button {
+            dismiss()
+            choose(side)
+        } label: {
+            Label(side == .checkedOut ? side.label : String(localized: "Commit \(side.label)"),
+                  systemImage: side.systemImage)
+                .foregroundStyle(.primary)
+        }
+    }
+
     private func row(_ name: String, isTag: Bool) -> some View {
         let isDownloaded = downloaded?.contains(name) ?? true
         return Button {
             dismiss()
-            if name != current { onChoose(name, isTag) }
+            if let onChooseSide {
+                onChooseSide(isTag ? .tag(name) : .branch(name))
+            } else if name != current {
+                onChoose(name, isTag)
+            }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: isTag ? "tag" : "arrow.triangle.branch")
@@ -121,6 +153,14 @@ struct BranchPicker: View {
                 }
             }
             .contentShape(Rectangle())
+        }
+        .contextMenu {
+            if let onCompare, name != current {
+                Button("Compare with Checked Out", systemImage: "arrow.left.arrow.right") {
+                    dismiss()
+                    onCompare(name, isTag)
+                }
+            }
         }
     }
 }

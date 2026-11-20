@@ -468,7 +468,20 @@ nonisolated final class GitRepository {
     /// The files a commit changed, against its first parent (everything, for the first commit
     /// or a shallow clone's oldest), with renames found.
     func changes(in commitID: String) throws -> [GitChange] {
-        try withDiff(of: commitID, path: nil) { diff in
+        try withDiff(of: commitID, path: nil, Self.changeList)
+    }
+
+    /// The files that differ from one commit to another, with renames found.
+    func changes(from before: String, to after: String) throws -> [GitChange] {
+        try withDiff(from: before, to: after, path: nil, Self.changeList)
+    }
+
+    /// One file's changes from one commit to another, as a unified diff.
+    func patch(from before: String, to after: String, path: String) throws -> String {
+        try withDiff(from: before, to: after, path: path, Self.patchText)
+    }
+
+    private static func changeList(_ diff: OpaquePointer?) -> [GitChange] {
             (0..<git_diff_num_deltas(diff)).compactMap { index -> GitChange? in
                 guard let delta = git_diff_get_delta(diff, index)?.pointee else { return nil }
                 let newPath = String(cString: delta.new_file.path)
@@ -485,13 +498,15 @@ nonisolated final class GitRepository {
                 return GitChange(path: kind == .deleted ? oldPath : newPath,
                                  oldPath: kind == .renamed || kind == .copied ? oldPath : nil, kind: kind)
             }
-        }
     }
 
     /// One file's changes in a commit, as a unified diff (`diff --git` header and hunks).
     /// Empty if the commit didn't change it.
     func patch(in commitID: String, path: String) throws -> String {
-        try withDiff(of: commitID, path: path) { diff in
+        try withDiff(of: commitID, path: path, Self.patchText)
+    }
+
+    private static func patchText(_ diff: OpaquePointer?) -> String {
             var text = ""
             for index in 0..<git_diff_num_deltas(diff) {
                 var patch: OpaquePointer?
@@ -503,7 +518,58 @@ nonisolated final class GitRepository {
                 text += String(decoding: UnsafeRawBufferPointer(start: bytes, count: buffer.size), as: UTF8.self)
             }
             return text
+    }
+
+    // MARK: Comparing
+
+    /// The commit a side is at in the clone, without fetching: `nil` if it isn't downloaded
+    /// (or the hash isn't in the downloaded history).
+    func resolve(_ side: GitSide) -> String? {
+        let spec: String
+        switch side {
+        case .branch(let name): spec = GitRef.branch(name).localReference
+        case .tag(let name): spec = GitRef.tag(name).localReference
+        case .commit(let id): spec = id
+        case .checkedOut: spec = "HEAD"
         }
+        var object: OpaquePointer?
+        guard git_revparse_single(&object, pointer, spec + "^{commit}") == 0 else { return nil }
+        defer { git_object_free(object) }
+        return Git.string(git_object_id(object))
+    }
+
+    /// Where two commits' histories meet (`git merge-base`): `nil` if they don't within the
+    /// downloaded history.
+    func mergeBase(_ one: String, _ two: String) -> String? {
+        var first = git_oid(), second = git_oid(), base = git_oid()
+        guard git_oid_fromstr(&first, one) == 0, git_oid_fromstr(&second, two) == 0,
+              git_merge_base(&base, pointer, &first, &second) == 0
+        else { return nil }
+        return Git.string(&base)
+    }
+
+    /// `head`'s commits that `base` doesn't have (`git log base..head`), newest first, up to
+    /// `limit`; and whether there are more.
+    func commits(from base: String, to head: String, limit: Int) throws -> (commits: [GitCommit], hasMore: Bool) {
+        var walk: OpaquePointer?
+        try Git.check(git_revwalk_new(&walk, pointer))
+        defer { git_revwalk_free(walk) }
+        git_revwalk_sorting(walk, UInt32(truncatingIfNeeded: GIT_SORT_TIME.rawValue))
+        var headID = git_oid(), baseID = git_oid()
+        try Git.check(git_oid_fromstr(&headID, head))
+        try Git.check(git_oid_fromstr(&baseID, base))
+        try Git.check(git_revwalk_push(walk, &headID))
+        _ = git_revwalk_hide(walk, &baseID)
+        var commits: [GitCommit] = []
+        var id = git_oid()
+        while git_revwalk_next(&id, walk) == 0 {
+            guard commits.count < limit else { return (commits, true) }
+            var commit: OpaquePointer?
+            guard git_commit_lookup(&commit, pointer, &id) == 0 else { continue }
+            defer { git_commit_free(commit) }
+            commits.append(Self.commit(commit))
+        }
+        return (commits, false)
     }
 
     // MARK: Helpers
@@ -550,7 +616,32 @@ nonisolated final class GitRepository {
             }
         }
         defer { git_tree_free(parentTree) }
+        return try withDiff(parentTree, tree, path: path, body)
+    }
 
+    /// The diff from one commit's files to another's, limited to `path` if given.
+    private func withDiff<Result>(from before: String, to after: String, path: String?,
+                                  _ body: (OpaquePointer?) throws -> Result) throws -> Result {
+        func tree(of commitID: String) throws -> OpaquePointer? {
+            var id = git_oid()
+            try Git.check(git_oid_fromstr(&id, commitID))
+            var commit: OpaquePointer?
+            try Git.check(git_commit_lookup(&commit, pointer, &id))
+            defer { git_commit_free(commit) }
+            var tree: OpaquePointer?
+            try Git.check(git_commit_tree(&tree, commit))
+            return tree
+        }
+        let old = try tree(of: before)
+        defer { git_tree_free(old) }
+        let new = try tree(of: after)
+        defer { git_tree_free(new) }
+        return try withDiff(old, new, path: path, body)
+    }
+
+    /// The diff from one tree to another (`nil`: nothing, so everything is added).
+    private func withDiff<Result>(_ parentTree: OpaquePointer?, _ tree: OpaquePointer?, path: String?,
+                                  _ body: (OpaquePointer?) throws -> Result) throws -> Result {
         var options = git_diff_options()
         git_diff_options_init(&options, UInt32(GIT_DIFF_OPTIONS_VERSION))
         let paths = path.map { [$0] } ?? []
