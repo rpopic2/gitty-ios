@@ -960,8 +960,15 @@ private final class CodeBlock {
         return preview.split(separator: "\n", omittingEmptySubsequences: false).dropFirst().joined(separator: "\n")
     }
 
+    /// Its code's height when its layout went, for that width and style: until it's laid out
+    /// again, its stand-in keeps that height, so coming back into view doesn't push the list.
+    private(set) var rememberedHeight: (key: CodeLayoutKey, height: CGFloat)?
+
     /// Off screen for a while: lets its layout go (it's made again when it comes back).
     func discardLayout() {
+        if let layouts, let layoutKey {
+            rememberedHeight = (layoutKey, layouts.reduce(0) { $0 + $1.height })
+        }
         task?.cancel()
         layoutKey = nil
         layouts = nil
@@ -1059,8 +1066,10 @@ private final class CodeBlockStore {
     static let laidOutLimit = 120
     private var laidOut: [Int] = []
 
-    /// A symbol came into view: prepare it first, then the next few, so they're usually ready
-    /// (at their final height) before they're on screen.
+    /// A symbol came into view: prepare it first, then the next few below it and above it, so
+    /// they're usually ready (at their final height) before they're on screen whichever way the
+    /// list scrolls. (A block coming in above at its stand-in's height, then growing, pushed the
+    /// list down: scrolling up jumped by about its height.)
     func appeared(_ symbol: CodeSymbol) {
         guard let key = layoutKey else { return }
         prepare(symbol, for: key, isVisible: true)
@@ -1069,6 +1078,10 @@ private final class CodeBlockStore {
         let end = min(start + Self.lookahead + 1, symbols.count)
         for next in symbols[(start + 1)..<max(start + 1, end)] where next.kind != .file && isShown(next) {
             prepare(next, for: key, isVisible: false)
+        }
+        let begin = max(start - Self.lookahead, 0)
+        for previous in symbols[begin..<start].reversed() where previous.kind != .file && isShown(previous) {
+            prepare(previous, for: key, isVisible: false)
         }
     }
 
@@ -1271,6 +1284,11 @@ private struct SymbolCodeText: View {
             piece(layout)
         } else if isEmpty {
             Color.clear.frame(height: 0)
+        } else if let remembered = block.rememberedHeight, remembered.key == layoutKey {
+            // Laid out before: as tall as it was, so it doesn't grow once it's laid out again.
+            Text(verbatim: block.placeholder)
+                .frame(height: remembered.height, alignment: .topLeading)
+                .clipped()
         } else {
             Text(verbatim: block.placeholder)
         }
