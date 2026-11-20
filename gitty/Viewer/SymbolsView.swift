@@ -267,7 +267,11 @@ struct SymbolsView: View, Equatable {
             if collapsed.areAllFilesFolded(scope: scope) {
                 groupedByFolder
             } else {
+                // A fresh list when Collapse All turns on or off (`keep` brings the top symbol
+                // back): in the same one, every section changing at once made it match each
+                // row's old place against its new one, over a second on a big list.
                 outline
+                    .id(collapsed.areAllCollapsed(scope: scope))
             }
         }
         .scrollTargetLayout()
