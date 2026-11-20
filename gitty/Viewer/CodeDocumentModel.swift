@@ -303,6 +303,10 @@ final class CodeDocumentModel {
             loadedFilter = filter
             // Loaded once the list is showing (it's built in the background).
             publishSymbols {
+                // A project with many folders starts at its top folders.
+                if self.folderGroups.lazy.filter({ !$0.path.isEmpty }).count > TopFolder.threshold {
+                    CollapsedCodeStore.shared.startAtTopFolders(scope: self.collapseScope)
+                }
                 self.projectSymbolsLoaded = true
                 self.isLoadingProjectSymbols = false
                 if self.reloadsProjectSymbols {

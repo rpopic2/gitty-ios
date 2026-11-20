@@ -31,6 +31,29 @@ struct CollapsedCodeStoreTests {
         #expect(!reopened.areAllFoldersFolded(scope: scope))
     }
 
+    @Test func aBigProjectStartsAtItsTopFoldersOnceAndUnfoldingLeavesThem() throws {
+        let (store, defaults) = try store()
+        store.startFolded(scope: scope)
+        store.startAtTopFolders(scope: scope)
+        #expect(store.showsTopFolders(scope: scope))
+        store.toggleTopFolder("drivers", scope: scope)
+        #expect(store.isTopFolderOpen("drivers", scope: scope))
+        store.setAllFoldersFolded(false, scope: scope)  // Unfold All Folders: every folder again
+        #expect(!store.showsTopFolders(scope: scope))
+        let reopened = CollapsedCodeStore(defaults: defaults)
+        reopened.startAtTopFolders(scope: scope)  // once only
+        #expect(!reopened.showsTopFolders(scope: scope))
+    }
+
+    @Test func topFoldersGatherTheirFoldersAndKeepTheProjectsTopFiles() {
+        func group(_ path: String, files: Int) -> FolderGroup { FolderGroup(path: path, symbols: [], fileCount: files) }
+        let tops = TopFolder.tops(of: [group("", files: 3), group("arch", files: 1), group("arch/x86", files: 4),
+                                       group("drivers/gpu", files: 2), group("arch/arm", files: 5)])
+        #expect(tops.map(\.name) == ["", "arch", "drivers"])
+        #expect(tops[1].groups.map(\.path) == ["arch", "arch/x86", "arch/arm"])
+        #expect(tops[1].fileCount == 10)
+    }
+
     @Test func aProjectWithFoldsFromBeforeKeepsThem() throws {
         let (store, _) = try store()
         store.setAllCollapsed(true, scope: scope)  // Collapse All, before scopes were kept

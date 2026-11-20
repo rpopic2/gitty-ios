@@ -283,24 +283,53 @@ struct SymbolsView: View, Equatable {
         let collapsed = collapsed
         let scope = collapseScope
         let openFile = openFile
-        let layout = FolderRows(groups: folders ?? folderGroups.groups(of: symbols, openFile: openFile, scope: scope),
+        let groups = folders ?? folderGroups.groups(of: symbols, openFile: openFile, scope: scope)
+        let layout = FolderRows(groups: groups,
+                                showsTops: collapsed.showsTopFolders(scope: scope),
+                                isTopOpen: { collapsed.isTopFolderOpen($0.name, scope: scope) },
                                 isFolded: { collapsed.isFolderFolded($0.path, scope: scope) },
                                 // A folded file's symbols aren't items at all: thousands of empty
                                 // ones made scrolling here lag.
                                 isShown: { !collapsed.isHidden($0, openFile: openFile, scope: scope) })
         return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-            ForEach(layout.leading) { folderHeader($0) }
+            ForEach(layout.leading) { folderRowHeader($0) }
             ForEach(layout.rows, id: \.symbol.id) { row in
                 Section {
                     VStack(spacing: 0) {
                         code(for: row.symbol)
-                        ForEach(row.folders) { folderHeader($0) }
+                        ForEach(row.headers) { folderRowHeader($0) }
                     }
                 } header: {
                     header(for: row.symbol)
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func folderRowHeader(_ header: FolderRows.Header) -> some View {
+        switch header {
+        case .folder(let group): folderHeader(group)
+        case .top(let top): topFolderHeader(top)
+        }
+    }
+
+    /// A top folder's header (showing only the top folders): tap it for its folders, folded.
+    private func topFolderHeader(_ top: TopFolder) -> some View {
+        let collapsed = collapsed
+        let scope = collapseScope
+        let isOpen = collapsed.isTopFolderOpen(top.name, scope: scope)
+        let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleTopFolder(top.name, scope: scope) } }
+        return FolderHeader(path: top.name, fileCount: top.fileCount, isFolded: !isOpen, onToggle: toggle)
+            .contextMenu {
+                Button(isOpen ? "Fold Folder" : "Unfold Folder",
+                       systemImage: isOpen ? "chevron.right" : "chevron.down", action: toggle)
+                Button("Show All Folders", systemImage: "folder") {
+                    withAnimation(.smooth(duration: 0.25)) { collapsed.setShowsTopFolders(false, scope: scope) }
+                }
+            } preview: {
+                FolderPathPreview(path: rootFolderName + "/" + top.name, fileCount: top.fileCount)
+            }
     }
 
     private func folderHeader(_ group: FolderGroup) -> some View {
@@ -419,9 +448,16 @@ struct SymbolsView: View, Equatable {
 
     /// Pinching in (fingers together) zooms out a step, one per pinch, when the fingers lift past
     /// the threshold: from the code, to every symbol collapsed to its title (an outline), every
-    /// file folded to its title (grouped by folder), every folder folded to its header. There's
+    /// file folded to its title (grouped by folder), every folder folded to its header, and with
+    /// many folders (`TopFolder.threshold`) only the top folders. There's
     /// no pinching back in: unfolding everything at once hung a project as big as Linux, so
     /// folders and files unfold from their long-press menus and titles.
+    /// The folders in the list (not counting the project's top).
+    private var folderCount: Int {
+        let groups = folders ?? folderGroups.groups(of: symbols, openFile: openFile, scope: collapseScope)
+        return groups.lazy.filter { !$0.path.isEmpty }.count
+    }
+
     private func pinch(_ reader: ScrollViewProxy) -> some Gesture {
         MagnifyGesture()
             .onChanged { value in
@@ -437,8 +473,10 @@ struct SymbolsView: View, Equatable {
                         setAllCollapsed(true, reader)
                     } else if !collapsed.areAllFilesFolded(scope: scope) {
                         setAllFilesFolded(true, reader)
-                    } else {
+                    } else if !collapsed.areAllFoldersFolded(scope: scope) {
                         withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(true, scope: scope) }
+                    } else if folderCount > TopFolder.threshold, !collapsed.showsTopFolders(scope: scope) {
+                        withAnimation(.smooth(duration: 0.25)) { collapsed.setShowsTopFolders(true, scope: scope) }
                     }
                 }
                 pinchZoom.settle()  // back as it was
@@ -728,20 +766,52 @@ private struct FolderHeader: View {
 /// The grouped view's rows: each shown symbol (a folded folder's aren't), with the headers of
 /// the folders that start after it, and the folders that start before the first one.
 private struct FolderRows {
-    struct Row {
-        let symbol: CodeSymbol
-        var folders: [FolderGroup] = []
+    /// A folder's header, or (showing only the top folders) a top folder's.
+    enum Header: Identifiable {
+        case folder(FolderGroup)
+        case top(TopFolder)
+
+        var id: String {
+            switch self {
+            case .folder(let group): "folder:" + group.path
+            case .top(let top): "top:" + top.name
+            }
+        }
     }
 
-    private(set) var leading: [FolderGroup] = []
+    struct Row {
+        let symbol: CodeSymbol
+        var headers: [Header] = []
+    }
+
+    private(set) var leading: [Header] = []
     private(set) var rows: [Row] = []
 
-    /// - Parameter isShown: whether a symbol shows (not in a folded file).
-    init(groups: [FolderGroup], isFolded: (FolderGroup) -> Bool, isShown: (CodeSymbol) -> Bool) {
-        for group in groups {
-            if rows.isEmpty { leading.append(group) } else { rows[rows.count - 1].folders.append(group) }
-            guard !isFolded(group) else { continue }
+    /// - Parameters:
+    ///   - showsTops: only the top folders (`TopFolder`), each with its folders while it's open.
+    ///     The files at the project's top stay as they are.
+    ///   - isShown: whether a symbol shows (not in a folded file).
+    init(groups: [FolderGroup], showsTops: Bool, isTopOpen: (TopFolder) -> Bool,
+         isFolded: (FolderGroup) -> Bool, isShown: (CodeSymbol) -> Bool) {
+        func add(_ header: Header) {
+            if rows.isEmpty { leading.append(header) } else { rows[rows.count - 1].headers.append(header) }
+        }
+        func add(_ group: FolderGroup) {
+            add(.folder(group))
+            guard !isFolded(group) else { return }
             for symbol in group.symbols where isShown(symbol) { rows.append(Row(symbol: symbol)) }
+        }
+        guard showsTops else {
+            groups.forEach(add)
+            return
+        }
+        for top in TopFolder.tops(of: groups) {
+            guard !top.name.isEmpty else {
+                top.groups.forEach(add)
+                continue
+            }
+            add(.top(top))
+            if isTopOpen(top) { top.groups.forEach(add) }
         }
     }
 }
