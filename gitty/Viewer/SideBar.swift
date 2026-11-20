@@ -353,11 +353,16 @@ struct SideBarView: View {
     }
 
 
+    /// TEMPORARY, finding the sidebar's lag: the Code section is left out while this is false.
+    private static let showsCode = false
+
     var body: some View {
         List {
             filesAndProjects
             // Options: denser rows than the lists above.
-            codeSection
+            if Self.showsCode {
+                codeSection
+            }
             Section {
                 Picker("Comments", selection: $reviewFormat) {
                     Text("Compact").tag(ReviewFormat.compact)
