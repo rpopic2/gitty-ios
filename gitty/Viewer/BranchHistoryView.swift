@@ -41,7 +41,7 @@ struct BranchHistoryView: View {
             .refreshable {
                 guard let ref = model.clone?.ref else { return }
                 let projectID = model.projectID
-                await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID) }) {
+                await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID) }) { _ in
                     Task { await model.pull() }
                 }
             }
@@ -55,7 +55,7 @@ struct BranchHistoryView: View {
             if let progress = model.cloneProgress {
                 HStack {
                     ProgressView(value: progress.fraction)
-                    Text(Int64(progress.receivedBytes), format: .byteCount(style: .file))
+                    Text(DownloadGuard.progressText(progress, estimate: model.cloneEstimate))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                     Button("Cancel", systemImage: "xmark.circle.fill") { cloneTask?.cancel() }
@@ -70,8 +70,9 @@ struct BranchHistoryView: View {
                 Button {
                     let projectID = model.projectID
                     Task {
-                        await downloads.run(estimate: { await DownloadGuard.cloneEstimate(projectID: projectID) }) {
-                            cloneTask = Task { await model.cloneProject() }
+                        await downloads.run(estimate: { await DownloadGuard.cloneEstimate(projectID: projectID) },
+                                            isCheap: true) { estimate in
+                            cloneTask = Task { await model.cloneProject(estimate: estimate) }
                         }
                     }
                 } label: {
@@ -139,6 +140,8 @@ final class BranchHistoryModel {
     private(set) var hasLoaded = false
     private(set) var clone: CloneRecord?
     private(set) var cloneProgress: FetchProgress?
+    /// Roughly how much the clone downloads.
+    private(set) var cloneEstimate: Int64?
     private(set) var commits: [GitCommit] = []
     private(set) var canLoadMore = false
     private(set) var isLoading = false
@@ -164,9 +167,10 @@ final class BranchHistoryModel {
         if clone != nil { await loadLog(deepeningIfShallow: true) }
     }
 
-    func cloneProject() async {
+    func cloneProject(estimate: Int64? = nil) async {
         guard let project else { return }
         errorMessage = nil
+        cloneEstimate = estimate
         cloneProgress = .start
         let (updates, continuation) = AsyncStream.makeStream(of: FetchProgress.self, bufferingPolicy: .bufferingNewest(1))
         let listener = Task {

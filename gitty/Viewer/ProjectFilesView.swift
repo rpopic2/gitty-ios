@@ -57,6 +57,8 @@ struct ProjectFilesView: View {
     private struct GitDownload {
         let id = UUID()
         let title: String
+        /// Roughly how much it downloads, when known.
+        let estimate: Int64?
         var progress = FetchProgress.start
     }
 
@@ -428,7 +430,7 @@ struct ProjectFilesView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
-                Text(Int64(download.progress.receivedBytes), format: .byteCount(style: .file))
+                Text(DownloadGuard.progressText(download.progress, estimate: download.estimate))
                     .font(.footnote)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -494,11 +496,11 @@ struct ProjectFilesView: View {
 
     /// Runs a Git download, shown in the Pull row with Cancel. Cancelling isn't an error.
     @discardableResult
-    private func startDownload(_ title: String,
+    private func startDownload(_ title: String, estimate: Int64? = nil,
                                _ work: @escaping @MainActor (_ progress: @escaping @Sendable (FetchProgress) -> Void) async throws -> Void)
         -> Task<Void, Never> {
         downloadTask?.cancel()
-        let shown = GitDownload(title: title)
+        let shown = GitDownload(title: title, estimate: estimate)
         download = shown
         let (updates, continuation) = AsyncStream.makeStream(of: FetchProgress.self, bufferingPolicy: .bufferingNewest(1))
         Task {
@@ -538,14 +540,16 @@ struct ProjectFilesView: View {
     private func cloneTapped(_ project: ProjectInfo) {
         let bytes = repositoryBytes
         Task {
-            await downloads.run(estimate: { bytes > 0 ? bytes : nil }) { startClone(project) }
+            await downloads.run(estimate: { bytes > 0 ? bytes : nil }, isCheap: true) { estimate in
+                startClone(project, estimate: estimate)
+            }
         }
     }
 
     /// Clones the project (the latest commit). Its files then come from the clone, and the ones
     /// downloaded one by one are deleted.
-    private func startClone(_ project: ProjectInfo) {
-        startDownload(String(localized: "Cloning…")) { progress in
+    private func startClone(_ project: ProjectInfo, estimate: Int64?) {
+        startDownload(String(localized: "Cloning…"), estimate: estimate) { progress in
             try await CloneStore.shared.clone(project, progress: progress)
             clone = await CloneStore.shared.record(forProject: projectID)
             await loadRefs()  // the clone's, from now on
@@ -556,8 +560,8 @@ struct ProjectFilesView: View {
     /// on screen) and the remote's branches; Pull then shows how many are new.
     private func fetchClone() async {
         guard let ref = clone?.ref else { return }
-        await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID) }) {
-            startDownload(String(localized: "Fetching…")) { progress in
+        await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID) }) { estimate in
+            startDownload(String(localized: "Fetching…"), estimate: estimate) { progress in
                 try await CloneStore.shared.fetch(projectID: projectID, progress: progress)
                 clone = await CloneStore.shared.record(forProject: projectID)
                 await loadRefs()
@@ -574,14 +578,14 @@ struct ProjectFilesView: View {
             await downloads.run(estimate: {
                 if isFetched { return 0 }
                 return await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID)
-            }) { pull() }
+            }) { estimate in pull(estimate: estimate) }
         }
     }
 
     /// Pull: the branch's latest commit, checked out; the file list from the clone.
-    private func pull() {
+    private func pull(estimate: Int64?) {
         guard case .loaded(let project, _) = state, let ref = clone?.ref else { return }
-        startDownload(String(localized: "Pulling…")) { progress in
+        startDownload(String(localized: "Pulling…"), estimate: estimate) { progress in
             try await CloneStore.shared.pull(projectID: projectID, progress: progress)
             clone = await CloneStore.shared.record(forProject: projectID)
             if let tree = try? await CloneStore.shared.tree(projectID: projectID) {
@@ -732,8 +736,8 @@ struct ProjectFilesView: View {
         guard case .loaded(let project, _) = state else { return }
         let gitRef: GitRef = ref.isTag ? .tag(ref.name) : .branch(ref.name)
         Task {
-            await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: gitRef, projectID: projectID) }) {
-                startDownload(String(localized: "Pulling \(ref.name)…")) { progress in
+            await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: gitRef, projectID: projectID) }) { estimate in
+                startDownload(String(localized: "Pulling \(ref.name)…"), estimate: estimate) { progress in
                     try await switchClone(to: ref.name, isTag: ref.isTag, from: project, pulling: true, progress: progress)
                     fetchedRefs.insert(ref.name)
                 }

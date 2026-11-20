@@ -109,7 +109,7 @@ struct FileInfoView: View {
             if let progress = model.cloneProgress {
                 HStack {
                     ProgressView(value: progress.fraction)
-                    Text(Int64(progress.receivedBytes), format: .byteCount(style: .file))
+                    Text(DownloadGuard.progressText(progress, estimate: model.cloneEstimate))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                     Button("Cancel", systemImage: "xmark.circle.fill") { cloneTask?.cancel() }
@@ -124,8 +124,9 @@ struct FileInfoView: View {
                 Button {
                     let projectID = location.project.id
                     Task {
-                        await downloads.run(estimate: { await DownloadGuard.cloneEstimate(projectID: projectID) }) {
-                            cloneTask = Task { await model.clone() }
+                        await downloads.run(estimate: { await DownloadGuard.cloneEstimate(projectID: projectID) },
+                                            isCheap: true) { estimate in
+                            cloneTask = Task { await model.clone(estimate: estimate) }
                         }
                     }
                 } label: {
@@ -248,6 +249,8 @@ final class FileInfoModel {
     private(set) var sizeSummary: String?
     private(set) var clone: CloneRecord?
     private(set) var cloneProgress: FetchProgress?
+    /// Roughly how much the clone downloads.
+    private(set) var cloneEstimate: Int64?
     private(set) var history: [GitCommit] = []
     private(set) var canLoadMore = false
     private(set) var isLoading = false
@@ -286,9 +289,10 @@ final class FileInfoModel {
     }
 
     /// Clones the project, then shows the history.
-    func clone() async {
+    func clone(estimate: Int64? = nil) async {
         guard let project = location?.project else { return }
         errorMessage = nil
+        cloneEstimate = estimate
         cloneProgress = .start
         let (updates, continuation) = AsyncStream.makeStream(of: FetchProgress.self, bufferingPolicy: .bufferingNewest(1))
         let listener = Task {

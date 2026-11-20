@@ -11,23 +11,34 @@ final class DownloadGuard {
         let id = UUID()
         /// `nil`: couldn't be told.
         let bytes: Int64?
-        let action: @MainActor () -> Void
+        let action: @MainActor (_ estimate: Int64?) -> Void
     }
 
     var pending: Pending?
 
-    /// Runs `action` now, or asks first (see the type). On Wi-Fi it doesn't estimate at all.
-    func run(estimate: @escaping @MainActor () async -> Int64?, action: @escaping @MainActor () -> Void) async {
+    /// Runs `action` now, or asks first (see the type), passing it the estimate. On Wi-Fi it
+    /// estimates only when `isCheap` (no request needed), and doesn't ask.
+    func run(estimate: @escaping @MainActor () async -> Int64?, isCheap: Bool = false,
+             action: @escaping @MainActor (_ estimate: Int64?) -> Void) async {
         guard NetworkCost.shared.isExpensive else {
-            action()
+            let bytes: Int64? = if isCheap { await estimate() } else { nil }
+            action(bytes)
             return
         }
         let bytes = await estimate()
         if let bytes, bytes <= Self.limit {
-            action()
+            action(bytes)
         } else {
             pending = Pending(bytes: bytes, action: action)
         }
+    }
+
+    /// What's downloaded so far: "3.2 MB", or "3.2 MB / ~48 MB" with an estimate (the files'
+    /// size, so the download usually ends below it).
+    static func progressText(_ progress: FetchProgress, estimate: Int64?) -> String {
+        let received = Int64(progress.receivedBytes).formatted(.byteCount(style: .file))
+        guard let estimate, estimate > 0 else { return received }
+        return received + " / ~" + estimate.formatted(.byteCount(style: .file))
     }
 
     /// What Clone downloads, roughly: the whole repository's files, from the project's saved
@@ -55,7 +66,7 @@ private struct DownloadConfirmation: ViewModifier {
             isPresented: Binding(get: { downloads.pending != nil }, set: { if !$0 { downloads.pending = nil } }),
             titleVisibility: .visible, presenting: downloads.pending
         ) { pending in
-            Button("Download") { pending.action() }
+            Button("Download") { pending.action(pending.bytes) }
             Button("Cancel", role: .cancel) {}
         } message: { pending in
             if let bytes = pending.bytes {
