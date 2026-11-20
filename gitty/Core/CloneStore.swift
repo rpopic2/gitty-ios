@@ -17,8 +17,9 @@ nonisolated struct CloneRecord: Codable, Equatable, Sendable {
     var checkedOutAt: Date
     /// The clone's folder under `CloneIndex.directory`.
     let folderName: String
-    /// Cloned with only the project's files checked out (`nil`: every file of the repository).
-    var scope: CloneScope? = nil
+    /// Set on clones made when a clone could check out only the project's filtered files (an
+    /// option since removed): their other files are checked out once, by `restoreAllFiles()`.
+    var scope: LegacyCloneScope? = nil
     /// The remote's branches and tags, listed (not downloaded) when cloning and on each fetch:
     /// the project's branch menu, without GitHub's API.
     var remoteRefs: ProjectRefs? = nil
@@ -27,36 +28,8 @@ nonisolated struct CloneRecord: Codable, Equatable, Sendable {
     var newCommits: Int? = nil
 }
 
-/// A clone that keeps only the project's files on disk: those in its folder that its filter
-/// lets through (the filter as it was at the last checkout). Git still downloads every file
-/// (libgit2 can't leave any out of a fetch), but the others aren't written out.
-nonisolated struct CloneScope: Codable, Equatable, Sendable {
-    /// The project's folder in the repository ("" for all of it).
-    let folder: String
-    /// The project's filter (`FileFilter`'s text).
-    let filter: String
-
-    /// Whether a file (its path in the repository) is checked out.
-    var includes: @Sendable (String) -> Bool {
-        let prefix = folder.isEmpty ? "" : folder + "/"
-        let filter = FileFilter(filter)
-        return { path in
-            guard path.hasPrefix(prefix) else { return false }
-            return filter.matches(String(path.dropFirst(prefix.count)))
-        }
-    }
-
-    init(folder: String, filter: String) {
-        self.folder = folder
-        self.filter = filter
-    }
-
-    /// For a project, with its filter now.
-    init(project: ProjectInfo, filter: String) {
-        self.init(folder: (project.folder ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "/")),
-                  filter: filter)
-    }
-}
+/// What a filtered clone (an option since removed) recorded: only that it was one.
+nonisolated struct LegacyCloneScope: Codable, Equatable, Sendable {}
 
 /// Which projects are cloned, and their files: read by `DocumentStore` (from any thread) so a
 /// cloned project's files come from the clone.
@@ -261,12 +234,8 @@ actor CloneStore {
 
     /// Clones the project at its branch or tag, the latest commit only, then reads its files
     /// from the clone: the files downloaded one by one are deleted.
-    /// - Parameters:
-    ///   - filtered: check out only the project's files (see `CloneScope`), following its
-    ///     filter from then on.
-    ///   - progress: the fraction of objects received.
-    func clone(_ project: ProjectInfo, filtered: Bool = false,
-               progress: @escaping @Sendable (Double) -> Void) async throws {
+    /// - Parameter progress: the fraction of objects received.
+    func clone(_ project: ProjectInfo, progress: @escaping @Sendable (Double) -> Void) async throws {
         guard let refName = project.ref else { throw CloneError.notABranchOrTag("") }
         guard let remote = URL(string: "https://github.com/\(project.link.owner)/\(project.link.repo).git"),
               let rawPrefix = project.rawURL(for: "")?.absoluteString
@@ -275,8 +244,6 @@ actor CloneStore {
         let folderName = CloneIndex.folderName(for: project.id)
         let folder = index.directory.appending(path: folderName, directoryHint: .isDirectory)
         let depth = Self.initialDepth
-        let scope = filtered ? CloneScope(project: project, filter: ProjectFilterStore.standard.text(for: project.id)) : nil
-        let includes = scope?.includes
 
         // The remote's branches and tags, from Git itself: whether the project's is a branch
         // or a tag, and the branch menu from now on.
@@ -295,7 +262,7 @@ actor CloneStore {
                 }
                 try repository.fetch(ref, depth: depth, token: token, progress: progress,
                                      isCancelled: { Task.isCancelled })
-                return (ref, refs, try repository.checkout(ref, including: includes))
+                return (ref, refs, try repository.checkout(ref))
             } catch {
                 try? FileManager.default.removeItem(at: folder)
                 throw error
@@ -303,7 +270,7 @@ actor CloneStore {
         }
         await documents.deleteDownloads(under: rawPrefix)
         index.save(CloneRecord(projectID: project.id, ref: ref, commit: commit, depth: Self.initialDepth,
-                               rawPrefix: rawPrefix, checkedOutAt: .now, folderName: folderName, scope: scope,
+                               rawPrefix: rawPrefix, checkedOutAt: .now, folderName: folderName,
                                remoteRefs: refs))
         await documents.clonesChanged()
     }
@@ -328,7 +295,6 @@ actor CloneStore {
         let folder = index.folder(of: record)
         let token = pulling ? await GitHubAuth.shared.token() : nil
         let depth = Self.initialDepth
-        let includes = record.scope?.includes
         let (commit, tree, fetched) = try await serially(projectID) { () throws -> (String, ProjectTree, Bool) in
             let repository = try GitRepository(at: folder)
             var fetched = false
@@ -337,7 +303,7 @@ actor CloneStore {
                 try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
                 fetched = true
             }
-            let commit = try repository.checkout(ref, including: includes)
+            let commit = try repository.checkout(ref)
             return (commit, try repository.tree(of: ref), fetched)
         }
         record.ref = ref
@@ -403,11 +369,10 @@ actor CloneStore {
         let token = await GitHubAuth.shared.token()
         let ref = record.ref
         let depth = record.depth
-        let includes = record.scope?.includes
         let commit = try await serially(projectID) {
             let repository = try GitRepository(at: folder)
             try repository.fetch(ref, depth: depth, token: token, isCancelled: { Task.isCancelled })
-            return try repository.checkout(ref, including: includes)
+            return try repository.checkout(ref)
         }
         record.newCommits = nil
         guard commit != record.commit else {
@@ -421,25 +386,20 @@ actor CloneStore {
         return true
     }
 
-    /// The project's filter changed: a clone of only the project's files checks out the files
-    /// it lets through now (from what's already downloaded, no network). Returns whether it did.
-    @discardableResult
-    func applyFilter(_ filter: String, projectID: String) async throws -> Bool {
-        guard var record = index.record(forProject: projectID), let scope = record.scope,
-              scope.filter != filter
-        else { return false }
-        let newScope = CloneScope(folder: scope.folder, filter: filter)
-        let folder = index.folder(of: record)
-        let ref = record.ref
-        let includes = newScope.includes
-        _ = try await serially(projectID) {
-            try GitRepository(at: folder).checkout(ref, including: includes)
+    /// Clones made with only the filtered files checked out (an option since removed) get the
+    /// rest of their files, from what's already downloaded (no network).
+    func restoreAllFiles() async {
+        var restored = false
+        for var record in index.allRecords() where record.scope != nil {
+            let folder = index.folder(of: record)
+            guard (try? await serially(record.projectID, { try GitRepository(at: folder).checkOutHeadAgain() })) != nil
+            else { continue }
+            record.scope = nil
+            record.checkedOutAt = .now  // the files changed: index them again
+            index.save(record)
+            restored = true
         }
-        record.scope = newScope
-        record.checkedOutAt = .now  // the files changed: index them again
-        index.save(record)
-        await documents.clonesChanged()
-        return true
+        if restored { await documents.clonesChanged() }
     }
 
     // MARK: History

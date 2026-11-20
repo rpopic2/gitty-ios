@@ -284,82 +284,27 @@ nonisolated final class GitRepository {
 
     /// Puts `ref`'s files (once fetched) in the working directory, replacing what's there, and
     /// points HEAD at its commit. Returns the commit's hash.
-    /// - Parameter includes: only the files it lets through (paths in the repository) are
-    ///   written; the others are removed from the working directory. `nil`: every file.
     @discardableResult
-    func checkout(_ ref: GitRef, including includes: (@Sendable (String) -> Bool)? = nil) throws -> String {
+    func checkout(_ ref: GitRef) throws -> String {
         var object: OpaquePointer?
         try Git.check(git_revparse_single(&object, pointer, ref.localReference + "^{commit}"))
         defer { git_object_free(object) }
         var options = git_checkout_options()
         git_checkout_options_init(&options, UInt32(GIT_CHECKOUT_OPTIONS_VERSION))
         options.checkout_strategy = UInt32(truncatingIfNeeded: GIT_CHECKOUT_FORCE.rawValue)
-        if let includes {
-            let paths = try filePaths(in: object).filter(includes)
-            // No paths would mean every file to libgit2.
-            if !paths.isEmpty {
-                options.checkout_strategy |= UInt32(truncatingIfNeeded: GIT_CHECKOUT_DISABLE_PATHSPEC_MATCH.rawValue)
-                try Git.withStrArray(paths) { array in
-                    options.paths = array.pointee
-                    try Git.check(git_checkout_tree(pointer, object, &options))
-                }
-            }
-            removeWorkingFiles(keeping: Set(paths))
-        } else {
-            try Git.check(git_checkout_tree(pointer, object, &options))
-        }
+        try Git.check(git_checkout_tree(pointer, object, &options))
         let id = git_object_id(object)
         try Git.check(git_repository_set_head_detached(pointer, id))
         return Git.string(id)
     }
 
-    /// Every file's path in a commit's tree.
-    private func filePaths(in commit: OpaquePointer?) throws -> [String] {
-        var tree: OpaquePointer?
-        try Git.check(git_object_peel(&tree, commit, GIT_OBJECT_TREE))
-        defer { git_object_free(tree) }
-        let collector = PathCollector()
-        try withExtendedLifetime(collector) {
-            try Git.check(git_tree_walk(tree, GIT_TREEWALK_PRE, { root, entry, payload in
-                guard let entry, let payload, git_tree_entry_type(entry) == GIT_OBJECT_BLOB,
-                      let name = git_tree_entry_name(entry)
-                else { return 0 }
-                let collector = Unmanaged<PathCollector>.fromOpaque(payload).takeUnretainedValue()
-                collector.paths.append((root.map { String(cString: $0) } ?? "") + String(cString: name))
-                return 0
-            }, Unmanaged.passUnretained(collector).toOpaque()))
-        }
-        return collector.paths
-    }
-
-    /// Deletes the working directory's files that aren't in `keeping` (and the folders left
-    /// empty), leaving `.git` alone.
-    private func removeWorkingFiles(keeping: Set<String>) {
-        guard let workdir = git_repository_workdir(pointer).map({ String(cString: $0) }) else { return }
-        let root = URL(filePath: workdir, directoryHint: .isDirectory).standardizedFileURL
-        let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        let manager = FileManager.default
-        let keys: [URLResourceKey] = [.isDirectoryKey]
-        var folders: [URL] = []
-        let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: keys)
-        while let item = enumerator?.nextObject() as? URL {
-            if item.lastPathComponent == ".git", item.deletingLastPathComponent().standardizedFileURL == root {
-                enumerator?.skipDescendants()
-                continue
-            }
-            if (try? item.resourceValues(forKeys: Set(keys)))?.isDirectory == true {
-                folders.append(item)
-                continue
-            }
-            let path = String(item.standardizedFileURL.path.dropFirst(rootPath.count))
-            if !keeping.contains(path) { try? manager.removeItem(at: item) }
-        }
-        // Deepest first, so a folder's empty folders go before it.
-        for folder in folders.sorted(by: { $0.path.count > $1.path.count }) {
-            if (try? manager.contentsOfDirectory(atPath: folder.path))?.isEmpty == true {
-                try? manager.removeItem(at: folder)
-            }
-        }
+    /// Writes the checked-out commit's files to the working directory again, replacing what's
+    /// there (and putting back any that are missing).
+    func checkOutHeadAgain() throws {
+        var options = git_checkout_options()
+        git_checkout_options_init(&options, UInt32(GIT_CHECKOUT_OPTIONS_VERSION))
+        options.checkout_strategy = UInt32(truncatingIfNeeded: GIT_CHECKOUT_FORCE.rawValue)
+        try Git.check(git_checkout_head(pointer, &options))
     }
 
     // MARK: History
@@ -659,17 +604,12 @@ nonisolated final class GitRepository {
     }
 }
 
-/// The tree walk's paths, passed to its callback as the payload.
-nonisolated private final class PathCollector {
-    var paths: [String] = []
-}
-
-/// What the fetch callbacks need, passed to them as their payload.
 /// What `tree(of:)` walks into, from libgit2's callback.
 nonisolated private final class TreeCollector {
     var items: [(path: String, kind: ProjectTree.Entry.Kind, id: git_oid)] = []
 }
 
+/// What the fetch callbacks need, passed to them as their payload.
 nonisolated private final class FetchContext {
     let token: String?
     var triedToken = false
