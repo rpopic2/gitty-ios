@@ -46,9 +46,9 @@ struct CodeScreen: View {
     /// The search of the latest results page shown: the only one that keeps its results.
     @State private var stackSearch: StackSearch?
     /// Tapping the bar shows Project with a search field, like Safari's start page (`mode` is
-    /// `.project` while it's open): typing searches symbols, the results replacing Project.
+    /// `.project` while it's open): the first letters typed open a results page, as Search on
+    /// a card does, the typing going on in its field.
     @State private var browseQuery = ""
-    @State private var browseSearch: StackSearch?
     /// The symbol on screen in each card.
     @State private var cardPlaces = CardPlaces()
     /// The stack's symbols, in a sheet (tap a page's stack icon).
@@ -132,10 +132,7 @@ struct CodeScreen: View {
         }
         .onChange(of: mode) { old, _ in
             model.setBarCollapsed(false)
-            if mode != .project {
-                browseQuery = ""
-                browseSearch = nil
-            }
+            if mode != .project { browseQuery = "" }
             // Back from Project, where the filter may have changed: index again if it did.
             if mode.showsSymbols, model.symbolIndex.isReady { model.loadProjectSymbols() }
             // …and where files may have been added to the album.
@@ -154,13 +151,11 @@ struct CodeScreen: View {
         }
         .onChange(of: codeTextStyle) { Task { await model.restyle() } }
         .onChange(of: browseQuery) { _, query in
-            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                browseSearch = nil  // Project again
-            } else if let browseSearch {
-                browseSearch.query = query
-            } else {
-                browseSearch = StackSearch(query: query, source: Self.screenSourceID, model: model)
-            }
+            let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            // An address being typed (or pasted) stays here, for Return.
+            guard !text.isEmpty, !Self.mayBeAddress(text) else { return }
+            browseQuery = ""
+            searchFromBar(query)
         }
         .navigationDestination(for: CardRoute.self) { route in
             switch route {
@@ -213,7 +208,7 @@ struct CodeScreen: View {
             // Built on first use, then kept (hidden) like the symbols, so switching back is
             // instant: it doesn't read and group the project's files again.
             if hasShownProject {
-                let isShowingProject = mode == .project && browseSearch == nil
+                let isShowingProject = mode == .project
                 ProjectView(projectID: projectID, currentURL: model.url, isActive: isShowingProject,
                             currentAlbumID: albumID, onOpenAlbum: onOpenAlbum,
                             onShowProject: onShowProject) { url in
@@ -223,12 +218,6 @@ struct CodeScreen: View {
                 .opacity(isShowingProject ? 1 : 0)
                 .allowsHitTesting(isShowingProject)
                 .accessibilityHidden(!isShowingProject)
-            }
-            // Typing in the bar's field: the results, in place of Project.
-            if mode == .project, let search = browseSearch {
-                SearchResultsContent(search: search) { symbols, query in
-                    resultsList(search, symbols: symbols, query: query, bar: .none)
-                }
             }
         }
         // The source for pages opened at the lines tapped (see `screenSourceID`).
@@ -541,6 +530,22 @@ struct CodeScreen: View {
         cardPath = Array(cardPath.prefix(through: index))
     }
 
+    /// The bar's search (over Project): a results page, the first in the stack, zooming out of
+    /// the screen, its field focused with what was typed. Swipe down goes back to Project.
+    private func searchFromBar(_ query: String) {
+        let search = StackSearch(query: query, source: Self.screenSourceID, startsEditing: true, model: model)
+        stackedCards = [:]
+        stackedResults = [search.id: StackedResults(query: query, source: Self.screenSourceID, depth: 1)]
+        stackSearch = search
+        cardPath = [.results(search.id)]
+    }
+
+    /// The start of an https:// (or http://) address, or one.
+    private static func mayBeAddress(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return ["https://", "http://"].contains { $0.hasPrefix(lower) || lower.hasPrefix($0) }
+    }
+
     /// Search on a card: its results go on top of it. Older results pages stay where they are,
     /// keeping only their query.
     private func searchInStack(for query: String, from card: CardRoute) {
@@ -600,24 +605,25 @@ struct CodeScreen: View {
     }
 
     private func occurrencesView(_ search: OccurrenceSearch, route: CardRoute) -> some View {
-        OccurrencesPage(search: search, stackDepth: cardPath.firstIndex(of: route).map { $0 + 1 } ?? 1,
-                        stackActions: stackActions) { entries in
+        // The same page as a search's: the word in the capsule, edited there to look again.
+        StackResultsView(search: search, stackDepth: cardPath.firstIndex(of: route).map { $0 + 1 } ?? 1,
+                         stackActions: stackActions, shownCount: { _ in search.count }) { entries, query, bar in
             SymbolsView(
                 symbols: entries,
-                query: search.term,
+                query: query,
                 isActive: true,
                 ownText: ownText,
                 scrollRequest: nil,
                 collapseRequest: nil,
                 onCenteredSymbolChange: { _ in },
-                isBarCollapsed: { false },
+                isBarCollapsed: bar.isHidden,
                 barTapCount: 0,
                 openFile: model.url,
                 collapseScope: model.collapseScope,
                 rootFolderName: model.symbolsProjectTitle ?? model.fileName,
                 onOpen: { openOccurrence($0, anchor: nil, in: search, route: route) },
                 onOpenAt: { openOccurrence($0, anchor: $1, in: search, route: route) },
-                onBarCollapsedChange: { _ in },
+                onBarCollapsedChange: bar.setHidden,
                 albumContext: albumContext,
                 onShowHistory: {
                     historyDetent = .large
@@ -627,7 +633,7 @@ struct CodeScreen: View {
                 collapsed: search.collapsed
             )
             .equatable()
-            .environment(\.codeMark, search.term)  // what it found, marked
+            .environment(\.codeMark, query)  // what it found, marked
         }
         // Its cards zoom out of it; it zooms out of (and back into) its card.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
@@ -662,15 +668,9 @@ struct CodeScreen: View {
     /// A result's card, on top of the results, paging through them.
     private func openStackedCard(at symbol: CodeSymbol, anchor: PageAnchor?, from search: StackSearch) {
         pruneStack()
-        // From the bar's search (results in place of Project): the keyboard goes, and the card
-        // zooms out of the screen.
-        let isBrowsing = search === browseSearch
-        if isBrowsing {
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        }
         let id = UUID()
         stackedCards[id] = StackedCard(symbols: search.results, initialID: symbol.id, anchor: anchor,
-                                       zoomSource: isBrowsing ? Self.screenSourceID : AnyHashable(CardRoute.results(search.id)),
+                                       zoomSource: AnyHashable(CardRoute.results(search.id)),
                                        depth: cardPath.count + 1)
         cardPath.append(.card(id))
     }
@@ -751,7 +751,7 @@ struct CodeScreen: View {
         } else if mode == .project {
             // Like Safari's address field over its start page: Project shows until you type, then
             // the symbols found. Return opens an https:// address; Cancel or a swipe down goes back.
-            SymbolSearchEditor(query: $browseQuery, isSearching: browseSearch?.isPending ?? false,
+            SymbolSearchEditor(query: $browseQuery,
                                placeholder: String(localized: "Search or Enter Address"),
                                onClose: { mode = .code }, onSubmit: submitBrowse, onCancel: { mode = .code })
         } else {

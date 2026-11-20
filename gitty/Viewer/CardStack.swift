@@ -37,11 +37,32 @@ struct StackedCard {
     var pageAnchors: [Int: PageAnchor] = [:]
 }
 
+/// What a results page shows (a search, or occurrences): its text, edited in the capsule (it
+/// looks again as you type), and what it found so far.
+@MainActor
+protocol ResultsPageSearch: AnyObject, Observable {
+    var query: String { get set }
+    var results: [CodeSymbol] { get }
+    /// The text `results` are for.
+    var resultsQuery: String { get }
+    /// Up with each set of results: a fresh list for each.
+    var version: Int { get }
+    /// Still looking.
+    var isPending: Bool { get }
+    /// The page opens with the field focused.
+    var startsEditing: Bool { get }
+    /// The capsule's icon and the field's placeholder.
+    var symbolName: String { get }
+    var placeholder: String { get }
+    /// A line above the capsule (files left out, say).
+    var note: String? { get }
+}
+
 /// A search, for a results page: the files whose name contains it (each with all its symbols),
 /// then the symbols it matches (in the album, if one is shown). The Code list itself is never
 /// filtered.
 @MainActor @Observable
-final class StackSearch {
+final class StackSearch: ResultsPageSearch {
     /// Its results page's (`CardRoute.results`).
     let id: UUID
     /// What its results page zooms out of.
@@ -81,6 +102,10 @@ final class StackSearch {
     var isPending: Bool {
         isSearching || resultsQuery != query
     }
+
+    var symbolName: String { "magnifyingglass" }
+    var placeholder: String { String(localized: "Search Files and Symbols") }
+    var note: String? { nil }
 
     private func start() {
         task?.cancel()
@@ -124,12 +149,12 @@ final class StackSearch {
     }
 }
 
-/// A search's results, stacked over the card it was made from (or the Code level): the same code
-/// blocks as the Code level's, with the search in a capsule at the bottom (tap it to change the
-/// search; the results follow as you type). Tap a result's code for its card, stacked on top.
+/// A results page (a search's, or occurrences'), stacked over what it was made from: the same
+/// code blocks as the Code level's, with what it looks for in a capsule at the bottom (tap it to
+/// change it; the results follow as you type). Tap a result's code for its card, stacked on top.
 /// Swipe down to go back.
-struct StackResultsView<Results: View>: View {
-    @Bindable var search: StackSearch
+struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
+    @Bindable var search: Search
     /// Its place in the stack, shown before the search from 2 up.
     let stackDepth: Int
     let stackActions: StackActions?
@@ -142,13 +167,9 @@ struct StackResultsView<Results: View>: View {
     @State private var isEditing: Bool
     /// Scrolling down hides the capsule; scrolling up shows it.
     @State private var isBarHidden = false
-    /// The keyboard's top in the window (`nil`: hidden), and the page's bottom (above the home
-    /// indicator), for `keyboardOverlap`.
-    @State private var keyboardTop: CGFloat?
-    @State private var pageBottom: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
 
-    init(search: StackSearch, stackDepth: Int, stackActions: StackActions?,
+    init(search: Search, stackDepth: Int, stackActions: StackActions?,
          shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
          @ViewBuilder list: @escaping (_ symbols: [CodeSymbol], _ query: String,
                                        _ bar: ResultsBar) -> Results) {
@@ -163,41 +184,32 @@ struct StackResultsView<Results: View>: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             content
-            bottom
-                .animation(.smooth(duration: 0.25), value: isBarHidden)
-                .padding(.bottom, keyboardOverlap)
+            if !isEditing {
+                capsule
+                    .padding(.bottom, 8)
+                    .offset(y: isBarHidden ? 120 : 0)
+                    .opacity(isBarHidden ? 0 : 1)
+                    .allowsHitTesting(!isBarHidden)
+                    .animation(.smooth(duration: 0.25), value: isBarHidden)
+            }
         }
-        // On a pushed page, SwiftUI made room for the keyboard twice (the field floated far
-        // above it): the room is worked out here instead, from where the keyboard is.
-        .ignoresSafeArea(.keyboard)
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { pageBottom = $0 }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) {
-            keyboardMoved($0, hiding: false)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) {
-            keyboardMoved($0, hiding: true)
+        // The field sits right on the keyboard: UIKit's keyboard guide places it (SwiftUI's own
+        // keyboard room, on a pushed page, left it floating above it or under it).
+        .overlay {
+            if isEditing {
+                KeyboardDocked {
+                    SymbolSearchEditor(query: $search.query, isSearching: search.isPending,
+                                       placeholder: search.placeholder,
+                                       onClose: { isEditing = false })
+                }
+                .ignoresSafeArea(.keyboard)
+            }
         }
         .toolbar(.hidden, for: .navigationBar)
         // Closing the field before typing anything: nothing to show, so back to where it was.
         .onChange(of: isEditing) {
             if !isEditing, isQueryEmpty { dismiss() }
         }
-    }
-
-    /// How much of the page the keyboard covers: the field sits right on top of it.
-    private var keyboardOverlap: CGFloat {
-        guard let keyboardTop else { return 0 }
-        return max(0, pageBottom - keyboardTop)
-    }
-
-    /// The keyboard's new top (in the window), as it moves, with its own timing.
-    private func keyboardMoved(_ notification: Notification, hiding: Bool) {
-        let info = notification.userInfo
-        let frame = (info?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
-        let duration = (info?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
-        let top: CGFloat? = hiding ? nil : frame.map(\.minY)
-        guard top != keyboardTop else { return }
-        withAnimation(.smooth(duration: max(duration, 0.1))) { keyboardTop = top }
     }
 
     private var isQueryEmpty: Bool {
@@ -215,55 +227,101 @@ struct StackResultsView<Results: View>: View {
         }
     }
 
-    @ViewBuilder
-    private var bottom: some View {
-        if isEditing {
-            SymbolSearchEditor(query: $search.query, isSearching: search.isPending,
-                               placeholder: String(localized: "Search Files and Symbols"),
-                               onClose: { isEditing = false })
-        } else {
-            capsule
-                .padding(.bottom, 8)
-                .offset(y: isBarHidden ? 120 : 0)
-                .opacity(isBarHidden ? 0 : 1)
-                .allowsHitTesting(!isBarHidden)
-        }
-    }
-
     private var capsule: some View {
-        let label = HStack(spacing: 6) {
-            if stackDepth > 1 {
-                StackDepthLabel(depth: stackDepth, actions: stackActions)
-            }
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.tint)
-            Text(search.query)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            if search.isPending {
-                ProgressView().controlSize(.small)
-            } else {
-                Text(verbatim: "· \(shownCount(search.results))")
-                    .monospacedDigit()
+        VStack(spacing: 6) {
+            if let note = search.note {
+                Text(note)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        }
-        .font(.subheadline)
-        .padding(.horizontal, 16)
-        .frame(height: 36)
-        .contentShape(Capsule())
-        .onTapGesture { isEditing = true }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint(Text("Changes the search"))
-        return Group {
-            if #available(iOS 26.0, *) {
-                label.glassEffect(.regular.interactive(), in: Capsule())
-            } else {
-                label.background(.bar, in: Capsule())
+            let label = HStack(spacing: 6) {
+                if stackDepth > 1 {
+                    StackDepthLabel(depth: stackDepth, actions: stackActions)
+                }
+                Image(systemName: search.symbolName)
+                    .foregroundStyle(.tint)
+                Text(search.query)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if search.isPending {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text(verbatim: "· \(shownCount(search.results))")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
             }
+            .font(.subheadline)
+            .padding(.horizontal, 16)
+            .frame(height: 36)
+            .contentShape(Capsule())
+            .onTapGesture { isEditing = true }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(Text("Changes the search"))
+            Group {
+                if #available(iOS 26.0, *) {
+                    label.glassEffect(.regular.interactive(), in: Capsule())
+                } else {
+                    label.background(.bar, in: Capsule())
+                }
+            }
+            .padding(.horizontal, 24)
         }
-        .padding(.horizontal, 24)
+    }
+}
+
+/// Content docked right on top of the keyboard (or at the bottom without one), with UIKit's
+/// keyboard layout guide. The rest of it lets touches through.
+struct KeyboardDocked<Content: View>: UIViewControllerRepresentable {
+    @ViewBuilder let content: () -> Content
+
+    func makeUIViewController(context: Context) -> KeyboardDockController<Content> {
+        KeyboardDockController(rootView: content())
+    }
+
+    func updateUIViewController(_ controller: KeyboardDockController<Content>, context: Context) {
+        controller.host.rootView = content()
+    }
+}
+
+final class KeyboardDockController<Content: View>: UIViewController {
+    let host: UIHostingController<Content>
+
+    init(rootView: Content) {
+        host = UIHostingController(rootView: rootView)
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func loadView() {
+        view = PassThroughView()
+        view.backgroundColor = .clear
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        host.view.backgroundColor = .clear
+        host.sizingOptions = [.intrinsicContentSize]
+        host.safeAreaRegions = []  // the guide places it; no keyboard room inside too
+        addChild(host)
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            host.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
+        ])
+    }
+
+    /// Touches outside the docked content go to what's under it.
+    private final class PassThroughView: UIView {
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            let hit = super.hitTest(point, with: event)
+            return hit === self ? nil : hit
+        }
     }
 }
 
@@ -280,8 +338,8 @@ struct ResultsBar {
 /// A search's results so far, as a list (`list`): a spinner until the first come, and No
 /// Results if none do. Observes the search itself, so only this redraws as results come in.
 /// A fresh list for each set (see `StackSearch.version`).
-struct SearchResultsContent<Results: View>: View {
-    let search: StackSearch
+struct SearchResultsContent<Search: ResultsPageSearch, Results: View>: View {
+    let search: Search
     @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String) -> Results
 
     var body: some View {

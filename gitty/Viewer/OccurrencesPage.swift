@@ -14,11 +14,24 @@ nonisolated struct OccurrenceFile: Sendable {
 /// the two after it) under its file; tap one for its card at that line, paging through the
 /// others. Files that aren't downloaded are left out (`skippedFiles`).
 @MainActor @Observable
-final class OccurrenceSearch {
+final class OccurrenceSearch: ResultsPageSearch {
     let id = UUID()
     /// What it looks for (and, with Same Kind, the identifier's kind).
-    let query: OccurrenceTerm
-    var term: String { query.text }
+    private(set) var lookup: OccurrenceTerm
+    var term: String { lookup.text }
+    /// The text, edited in its page's capsule: it looks again (by the text alone, unless it's
+    /// back to the identifier it started with).
+    var query: String {
+        get { lookup.text }
+        set {
+            guard newValue != lookup.text else { return }
+            let identifier = lookup.identifier?.name == newValue ? lookup.identifier : nil
+            lookup = OccurrenceTerm(text: newValue, identifier: identifier)
+            restart()
+        }
+    }
+    /// The text `entries` are for.
+    private(set) var resultsQuery = ""
     /// What its page zooms out of: the card it was found from.
     let source: AnyHashable
     /// The list: each file with occurrences (its entry), then its occurrences' lines.
@@ -29,6 +42,17 @@ final class OccurrenceSearch {
     private(set) var isSearching = true
     let skippedFiles: Int
     @ObservationIgnored let collapsed = CollapsedCodeStore.temporary()
+    @ObservationIgnored private let files: [OccurrenceFile]
+
+    // As a results page (`ResultsPageSearch`).
+    var results: [CodeSymbol] { entries }
+    var isPending: Bool { isSearching || resultsQuery != lookup.text }
+    var startsEditing: Bool { false }
+    var symbolName: String { "text.magnifyingglass" }
+    var placeholder: String { String(localized: "Find Occurrences") }
+    var note: String? {
+        skippedFiles == 0 ? nil : String(localized: "\(skippedFiles) files that aren’t downloaded weren’t searched.")
+    }
 
     /// What an occurrence's line (by its id in `entries`) opens: its page among `pages` (the
     /// symbol it's in, or the lines around it), and its line there (0-based).
@@ -47,9 +71,30 @@ final class OccurrenceSearch {
     @ObservationIgnored private var nextPageID = 20_000_000
 
     init(query: OccurrenceTerm, source: AnyHashable, files: [OccurrenceFile], skippedFiles: Int) {
-        self.query = query
+        lookup = query
         self.source = source
+        self.files = files
         self.skippedFiles = skippedFiles
+        restart()
+    }
+
+    /// Looks again from the start, for `lookup`.
+    private func restart() {
+        task?.cancel()
+        entries = []
+        places = [:]
+        pages = []
+        pageLines = [:]
+        count = 0
+        version += 1
+        let text = lookup.text
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            resultsQuery = text
+            isSearching = false
+            return
+        }
+        isSearching = true
+        let files = files
         task = Task { [weak self] in await self?.search(files) }
     }
 
@@ -63,7 +108,7 @@ final class OccurrenceSearch {
     private func search(_ files: [OccurrenceFile]) async {
         var lastPublish = ContinuousClock.now
         var pending: [(OccurrenceFile, [Found])] = []
-        let query = query
+        let query = lookup
         let width = max(2, ProcessInfo.processInfo.activeProcessorCount)
         var start = 0
         while start < files.count {
@@ -81,6 +126,7 @@ final class OccurrenceSearch {
                 for await (index, result) in group { found[index] = result }
                 return found
             }
+            guard !Task.isCancelled else { return }  // a newer search has started
             for (file, result) in zip(chunk, found) where !result.isEmpty { pending.append((file, result)) }
             // A batch at a time, so the list isn't rebuilt for every file.
             if ContinuousClock.now - lastPublish > .milliseconds(250) {
@@ -89,7 +135,9 @@ final class OccurrenceSearch {
                 lastPublish = .now
             }
         }
+        guard !Task.isCancelled else { return }
         publish(pending)
+        resultsQuery = query.text
         isSearching = false
     }
 
@@ -109,6 +157,7 @@ final class OccurrenceSearch {
             }
         }
         self.entries = entries
+        resultsQuery = lookup.text
         version += 1
     }
 
@@ -155,92 +204,5 @@ final class OccurrenceSearch {
             found.append(Found(line: entry, page: page, lineInPage: line - pageStart))
         }
         return found
-    }
-}
-
-/// Occurrences' page in the stack: the lines, as code blocks like the Code level's, with what
-/// was looked for in a capsule at the bottom. Swipe down to go back to the card.
-struct OccurrencesPage<Results: View>: View {
-    let search: OccurrenceSearch
-    let stackDepth: Int
-    let stackActions: StackActions?
-    @ViewBuilder let list: (_ entries: [CodeSymbol]) -> Results
-
-    var body: some View {
-        ZStack(alignment: .bottom) {
-            content
-            capsule.padding(.bottom, 8)
-        }
-        .toolbar(.hidden, for: .navigationBar)
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        if search.entries.isEmpty && search.isSearching {
-            placeholder { ProgressView() }
-        } else if search.entries.isEmpty {
-            placeholder {
-                ContentUnavailableView {
-                    Label("No Occurrences", systemImage: "text.magnifyingglass")
-                } description: {
-                    Text(skippedNote ?? String(localized: "“\(search.term)” isn’t used anywhere else."))
-                }
-            }
-        } else {
-            list(search.entries)
-                .id(search.version)
-        }
-    }
-
-    /// Files left out because they aren't on the device.
-    private var skippedNote: String? {
-        search.skippedFiles == 0 ? nil
-            : String(localized: "\(search.skippedFiles) files that aren’t downloaded weren’t searched.")
-    }
-
-    private var capsule: some View {
-        VStack(spacing: 6) {
-            if let skippedNote, !search.entries.isEmpty {
-                Text(skippedNote)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            let label = HStack(spacing: 6) {
-                if stackDepth > 1 {
-                    StackDepthLabel(depth: stackDepth, actions: stackActions)
-                }
-                Image(systemName: "text.magnifyingglass")
-                    .foregroundStyle(.tint)
-                Text(search.term)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if search.isSearching {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text(verbatim: "· \(search.count)")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .font(.subheadline)
-            .padding(.horizontal, 16)
-            .frame(height: 36)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(Text("Occurrences of \(search.term): \(search.count)"))
-            Group {
-                if #available(iOS 26.0, *) {
-                    label.glassEffect(.regular, in: Capsule())
-                } else {
-                    label.background(.bar, in: Capsule())
-                }
-            }
-            .padding(.horizontal, 24)
-        }
-    }
-
-    private func placeholder<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        content()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(uiColor: .systemGroupedBackground))
     }
 }
