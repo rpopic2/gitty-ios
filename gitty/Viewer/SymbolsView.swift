@@ -445,16 +445,23 @@ struct SymbolsView: View, Equatable {
         let onOpen = onOpen
         let onOpenURL = onOpenURL
         let blocks = codeBlocks
+        // Typed first: as an untyped closure in a ternary, it was too much for the type checker.
+        var onExpandAll: (@MainActor () -> Void)?
+        if symbol.kind == .file, symbol.isDownloaded {
+            onExpandAll = { view.expandAll(inFile: symbol) }
+        }
+        let codeRange: @MainActor () -> NSRange = { blocks.shownRange(of: symbol) }
+        let open: @MainActor (CodeSymbol) -> Void = { symbol in
+            // Not downloaded: open the file itself, which downloads it.
+            if !symbol.isDownloaded, let url = symbol.fileURL, let onOpenURL { onOpenURL(url) } else { onOpen(symbol) }
+        }
         return CodeMenu(symbol: symbol, part: part, openFile: openFile, albumContext: albumContext,
-                        onOpen: { symbol in
-                            // Not downloaded: open the file itself, which downloads it.
-                            if !symbol.isDownloaded, let url = symbol.fileURL, let onOpenURL { onOpenURL(url) } else { onOpen(symbol) }
-                        },
+                        onOpen: open,
                         onShowHistory: onShowHistory,
                         textActions: textActions,
                         ownText: ownText,
-                        codeRange: { blocks.shownRange(of: symbol) },
-                        onExpandAll: symbol.kind == .file && symbol.isDownloaded ? { view.expandAll(inFile: symbol) } : nil)
+                        codeRange: codeRange,
+                        onExpandAll: onExpandAll)
     }
 
     /// A file title's Expand All: the file unfolded, and all its symbols' code showing.
