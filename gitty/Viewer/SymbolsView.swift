@@ -325,7 +325,12 @@ struct SymbolsView: View, Equatable {
             ForEach(layout.items) { item in
                 Section {
                     switch item.content {
-                    case .header(let folder): folderRowHeader(folder)
+                    case .header(let folder):
+                        if Self.dumbFolders {
+                            DumbFolderRow(name: folder.key)
+                        } else {
+                            folderRowHeader(folder)
+                        }
                     case .symbol(let symbol, _): code(for: symbol)
                     }
                 } header: {
@@ -377,6 +382,9 @@ struct SymbolsView: View, Equatable {
     /// the pinch and the peek beside the scroll, the bar's tracking (offset and phase), and the
     /// top symbol's tracking. With it off, the bar doesn't collapse and the place isn't saved.
     private static let scrollExtras = false
+    /// TEMPORARY: folder rows as plain text that does nothing (no button, no tap, nothing read),
+    /// to see whether the folder rows themselves make the list hitch.
+    private static let dumbFolders = true
 
     /// - Parameter label: its path from the group it's in ("" for the project's top files).
     @ViewBuilder
@@ -1825,5 +1833,17 @@ extension View {
     @ViewBuilder
     fileprivate func temporarily<Modified: View>(_ isOn: Bool, _ transform: (Self) -> Modified) -> some View {
         if isOn { transform(self) } else { self }
+    }
+}
+
+/// TEMPORARY (with `SymbolsView.dumbFolders`): a folder row that's only its name.
+private struct DumbFolderRow: View {
+    let name: String
+
+    var body: some View {
+        Text(verbatim: name)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+            .padding(.horizontal, 16)
     }
 }
