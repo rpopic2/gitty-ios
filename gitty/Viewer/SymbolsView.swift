@@ -176,6 +176,37 @@ struct SymbolsView: View, Equatable {
     }
 
     var body: some View {
+        if Self.bareList, collapsed.areAllFilesFolded(scope: collapseScope) {
+            bareFolderList
+        } else {
+            list
+        }
+    }
+
+    /// TEMPORARY (with `bareList`): the folder view as nothing but a scroll view and a lazy stack of
+    /// plain rows, without pinned sections or anything else of the list's around it.
+    private var bareFolderList: some View {
+        let groups = folders ?? folderGroups.groups(of: symbols, openFile: openFile, scope: collapseScope)
+        let collapsed = collapsed
+        let scope = collapseScope
+        let openFile = openFile
+        let layout = FolderRows(groups: groups, tree: folderTrees.tree(of: groups),
+                                isGroupOpen: { collapsed.isGroupOpen($0, scope: scope) },
+                                isFolded: { collapsed.isFolderFolded($0.path, scope: scope) },
+                                isShown: { !collapsed.isHidden($0, openFile: openFile, scope: scope) })
+        return ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(layout.items) { item in
+                    switch item.content {
+                    case .header(let folder): DumbFolderRow(name: folder.key)
+                    case .symbol(let symbol, _): DumbFolderRow(name: symbol.name)
+                    }
+                }
+            }
+        }
+    }
+
+    private var list: some View {
         ScrollViewReader { reader in
             scrollContainer { fullCode }
                 .overlay(alignment: .leading) {
@@ -385,6 +416,9 @@ struct SymbolsView: View, Equatable {
     /// TEMPORARY: folder rows as plain text that does nothing (no button, no tap, nothing read),
     /// to see whether the folder rows themselves make the list hitch.
     private static let dumbFolders = true
+    /// TEMPORARY: the folder view as a bare scroll view of plain rows (`bareFolderList`), to see
+    /// whether the list's setup or the screen around it makes it hitch.
+    private static let bareList = true
 
     /// - Parameter label: its path from the group it's in ("" for the project's top files).
     @ViewBuilder
