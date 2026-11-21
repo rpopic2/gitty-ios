@@ -324,6 +324,13 @@ final class CollapsedCodeStore {
         save()
     }
 
+    /// Expand All in a file (its title's menu): the file unfolded (a file without symbols shows
+    /// its text), and every one of its symbols showing its code.
+    func expandAll(in file: URL, _ symbols: [CodeSymbol], openFile: URL, scope: String) {
+        setFolded(false, file, scope: scope)
+        setCollapsed(false, symbols, openFile: openFile, scope: scope)  // saves
+    }
+
     /// Collapse All (or Expand All) in a scope: every symbol's code, and no file folded.
     func setAllCollapsed(_ isCollapsed: Bool, scope: String) {
         if isCollapsed { collapsedScopes.insert(scope) } else { collapsedScopes.remove(scope) }

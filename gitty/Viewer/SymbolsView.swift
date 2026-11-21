@@ -441,6 +441,7 @@ struct SymbolsView: View, Equatable {
     /// may be hundreds of lines), Open, Show History, the text items (see `CodeMenu`) and Add
     /// to Album.
     private func contextMenu(for symbol: CodeSymbol, part: CodeMenu.Part) -> CodeMenu {
+        let view = self
         let onOpen = onOpen
         let onOpenURL = onOpenURL
         let blocks = codeBlocks
@@ -452,7 +453,17 @@ struct SymbolsView: View, Equatable {
                         onShowHistory: onShowHistory,
                         textActions: textActions,
                         ownText: ownText,
-                        codeRange: { blocks.shownRange(of: symbol) })
+                        codeRange: { blocks.shownRange(of: symbol) },
+                        onExpandAll: symbol.kind == .file && symbol.isDownloaded ? { view.expandAll(inFile: symbol) } : nil)
+    }
+
+    /// A file title's Expand All: the file unfolded, and all its symbols' code showing.
+    private func expandAll(inFile entry: CodeSymbol) {
+        let file = entry.fileURL ?? openFile
+        let inFile = symbols.filter { $0.kind != .file && ($0.fileURL ?? openFile) == file }
+        withAnimation(.smooth(duration: 0.25)) {
+            collapsed.expandAll(in: file, inFile, openFile: openFile, scope: collapseScope)
+        }
     }
 
     // MARK: Gestures
@@ -1436,6 +1447,8 @@ private struct CodeMenu: ViewModifier {
     let ownText: NSString?
     /// The code's range in its file (what its block shows), worked out when an item is chosen.
     let codeRange: @MainActor () -> NSRange
+    /// A file's title: Expand All in it.
+    let onExpandAll: (@MainActor () -> Void)?
 
     func body(content: Content) -> some View {
         let file = symbol.fileURL ?? openFile
@@ -1446,6 +1459,9 @@ private struct CodeMenu: ViewModifier {
                     Button("Show History", systemImage: "clock.arrow.circlepath") {
                         onShowHistory(file, symbol.kind == .file ? nil : symbol)
                     }
+                }
+                if part == .title, let onExpandAll {
+                    Button("Expand All", systemImage: "chevron.down.2", action: onExpandAll)
                 }
             }
             Section { textItems }

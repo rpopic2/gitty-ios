@@ -111,6 +111,21 @@ struct CollapsedCodeStoreTests {
         #expect(store.flipped.isEmpty)
     }
 
+    @Test func expandAllInAFileUnfoldsItAndShowsItsCode() throws {
+        let (store, _) = try store()
+        store.setAllCollapsed(true, scope: scope)
+        store.setAllFilesFolded(true, scope: scope)
+        let symbols = [symbol("b1", in: other), symbol("b2", in: other)]
+        store.expandAll(in: other, symbols, openFile: open, scope: scope)
+        #expect(!store.isFileCollapsed(other, scope: scope))
+        #expect(symbols.allSatisfy { !store.isCollapsed($0, openFile: open, scope: scope) })
+        #expect(store.isFileCollapsed(open, scope: scope))  // the other files stay folded
+        // A file without symbols just unfolds (its text shows).
+        let readme = URL(string: "https://raw.githubusercontent.com/o/r/main/README.md")!
+        store.expandAll(in: readme, [], openFile: open, scope: scope)
+        #expect(!store.isFileCollapsed(readme, scope: scope))
+    }
+
     @Test func pinchingInOnTheOutlineFoldsEveryFile() throws {
         let (store, defaults) = try store()
         store.setAllCollapsed(true, scope: scope)
