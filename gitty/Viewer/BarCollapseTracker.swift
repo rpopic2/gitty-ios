@@ -6,7 +6,9 @@ import CoreGraphics
 /// - It is always expanded at the top and at the end of the content.
 /// - After the reader taps it open, it stays open until the next drag, even while a fling goes on.
 /// - While a fling coasts, it only follows the fling's direction: the list moving the other way
-///   then is the list correcting its offset (content above changing size), not the reader.
+///   then is the list correcting its offset (content above changing size), not the reader. While
+///   dragging too, when the content's height changed at the same time (rows above coming in at
+///   another height than the list guessed, scrolling up).
 ///
 /// Shared by the file text view and the Symbols list so both behave the same.
 nonisolated struct BarCollapseTracker {
@@ -15,6 +17,7 @@ nonisolated struct BarCollapseTracker {
     var isCollapsed = false
 
     private var lastOffset: CGFloat = 0
+    private var lastContentHeight: CGFloat?
     private var accumulated: CGFloat = 0
     private var holdsOpen = false
     /// The way the finger last moved the content (positive: down the list), for coasting.
@@ -38,12 +41,17 @@ nonisolated struct BarCollapseTracker {
     ///   - bottom: the offset at the very end of the content.
     ///   - isUserScrolling: dragging or decelerating, as opposed to a programmatic scroll.
     ///   - isCoasting: decelerating after a fling (the finger is off the screen).
+    ///   - contentHeight: the content's height, to tell the list's own corrections (see the type).
     mutating func scrolled(to offset: CGFloat, top: CGFloat, bottom: CGFloat, isUserScrolling: Bool,
-                           isCoasting: Bool = false) -> Bool? {
+                           isCoasting: Bool = false, contentHeight: CGFloat? = nil) -> Bool? {
         let delta = offset - lastOffset
         lastOffset = offset
-        if isUserScrolling, !isCoasting, delta != 0 { dragDirection = delta }
-        let isCorrection = isCoasting && dragDirection != 0 && delta != 0 && (delta > 0) != (dragDirection > 0)
+        let resized = contentHeight != nil && lastContentHeight != nil
+            && abs(contentHeight! - lastContentHeight!) > 0.5
+        lastContentHeight = contentHeight
+        let against = dragDirection != 0 && delta != 0 && (delta > 0) != (dragDirection > 0)
+        let isCorrection = against && (isCoasting || resized)
+        if isUserScrolling, !isCoasting, delta != 0, !isCorrection { dragDirection = delta }
 
         var wanted = isCollapsed
         if offset <= top + 1 || offset >= bottom - 1 {

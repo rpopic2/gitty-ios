@@ -30,6 +30,22 @@ struct BarCollapseTrackerTests {
         #expect(tracker.isCollapsed)
     }
 
+    @Test func draggingUpIgnoresRowsAboveGrowing() {
+        var tracker = BarCollapseTracker()
+        tracker.beginDrag(at: 1000)
+        // Dragging up the list, the bar expanded.
+        for (offset, height) in [(CGFloat(990), CGFloat(5000)), (970, 5000), (950, 5000)] {
+            _ = tracker.scrolled(to: offset, top: 0, bottom: 10_000, isUserScrolling: true, contentHeight: height)
+        }
+        #expect(!tracker.isCollapsed)
+        // A row above came in 60pt taller than guessed: the list moved down by as much.
+        #expect(tracker.scrolled(to: 1010, top: 0, bottom: 10_000, isUserScrolling: true,
+                                 contentHeight: 5060) == nil)
+        #expect(tracker.scrolled(to: 990, top: 0, bottom: 10_000, isUserScrolling: true,
+                                 contentHeight: 5060) == nil)
+        #expect(!tracker.isCollapsed)
+    }
+
     @Test func draggingBackStillExpands() {
         var tracker = BarCollapseTracker()
         tracker.beginDrag(at: 100)

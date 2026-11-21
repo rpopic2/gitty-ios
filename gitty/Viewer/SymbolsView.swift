@@ -564,7 +564,8 @@ struct SymbolsView: View, Equatable {
                 top: -geometry.contentInsets.top,
                 bottom: geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom,
                 isUserScrolling: scroll.isUserScrolling,
-                isCoasting: scroll.isCoasting
+                isCoasting: scroll.isCoasting,
+                contentHeight: geometry.contentSize.height
             )
             if isActive, let change { onBarCollapsedChange(change) }
         }
@@ -1066,10 +1067,14 @@ private final class CodeBlock {
     @ObservationIgnored private(set) var layoutKey: CodeLayoutKey?
     @ObservationIgnored private var task: Task<Void, Never>?
 
+    /// Roughly how many lines it shows, known before its text is read (`nil`: not known).
+    let estimatedLines: Int?
+
     init(symbol: CodeSymbol, range: NSRange, ownText: NSString?, ownFirstLine: Int?, fileExtension: String,
-         theme: SyntaxTheme) {
+         theme: SyntaxTheme, estimatedLines: Int? = nil) {
         self.symbol = symbol
         self.range = range
+        self.estimatedLines = estimatedLines
         self.fileExtension = fileExtension
         self.theme = theme
         if symbol.fileURL == nil, let ownText, NSMaxRange(range) <= ownText.length {
@@ -1222,9 +1227,22 @@ private final class CodeBlockStore {
         if let block = blocks[key] { return block }
         let block = CodeBlock(symbol: symbol, range: range, ownText: ownText,
                               ownFirstLine: symbol.fileURL == nil ? ownLine(at: range.location) : nil,
-                              fileExtension: symbol.fileURL?.pathExtension ?? openFileExtension, theme: theme)
+                              fileExtension: symbol.fileURL?.pathExtension ?? openFileExtension, theme: theme,
+                              estimatedLines: estimatedLines(of: symbol))
         blocks[key] = block
         return block
+    }
+
+    /// Roughly how many lines a symbol's block shows, before its text is read: up to the next
+    /// symbol of its file, whose declaration's line is known, less its own declaration (the
+    /// title shows it) and a blank line. `nil` for the last in its file, which nothing bounds.
+    private func estimatedLines(of symbol: CodeSymbol) -> Int? {
+        guard symbol.kind != .file, symbol.kind != .lines,
+              let position = positions[symbol.id], position + 1 < symbols.count else { return nil }
+        let next = symbols[position + 1]
+        guard next.kind != .file, next.kind != .lines, next.fileURL == symbol.fileURL, next.line > symbol.line
+        else { return nil }
+        return max(0, next.line - symbol.line - 2)
     }
 
     /// What a symbol's block shows. A type (a class and its members) stops where its first
@@ -1643,6 +1661,13 @@ private struct SymbolCodeText: View {
             // Laid out before: as tall as it was, so it doesn't grow once it's laid out again.
             Text(verbatim: block.placeholder)
                 .frame(height: remembered.height, alignment: .topLeading)
+                .clipped()
+        } else if let lines = block.estimatedLines, lines > 0, let layoutKey {
+            // About as tall as it'll be (lines that wrap aside): it came in at its first few
+            // lines' height and grew once laid out, so scrolling up, the list kept moving to
+            // make up for the rows above growing.
+            Text(verbatim: block.placeholder)
+                .frame(height: CGFloat(lines) * layoutKey.style.uiFont.lineHeight, alignment: .topLeading)
                 .clipped()
         } else {
             Text(verbatim: block.placeholder)
