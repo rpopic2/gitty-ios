@@ -176,37 +176,6 @@ struct SymbolsView: View, Equatable {
     }
 
     var body: some View {
-        if Self.bareList, collapsed.areAllFilesFolded(scope: collapseScope) {
-            bareFolderList
-        } else {
-            list
-        }
-    }
-
-    /// TEMPORARY (with `bareList`): the folder view as nothing but a scroll view and a lazy stack of
-    /// plain rows, without pinned sections or anything else of the list's around it.
-    private var bareFolderList: some View {
-        let groups = folders ?? folderGroups.groups(of: symbols, openFile: openFile, scope: collapseScope)
-        let collapsed = collapsed
-        let scope = collapseScope
-        let openFile = openFile
-        let layout = FolderRows(groups: groups, tree: folderTrees.tree(of: groups),
-                                isGroupOpen: { collapsed.isGroupOpen($0, scope: scope) },
-                                isFolded: { collapsed.isFolderFolded($0.path, scope: scope) },
-                                isShown: { !collapsed.isHidden($0, openFile: openFile, scope: scope) })
-        return ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(layout.items) { item in
-                    switch item.content {
-                    case .header(let folder): DumbFolderRow(name: folder.key)
-                    case .symbol(let symbol, _): DumbFolderRow(name: symbol.name)
-                    }
-                }
-            }
-        }
-    }
-
-    private var list: some View {
         ScrollViewReader { reader in
             scrollContainer { fullCode }
                 .overlay(alignment: .leading) {
@@ -215,7 +184,7 @@ struct SymbolsView: View, Equatable {
                 }
                 .modifier(PinchScale(zoom: pinchZoom))
                 .onAppear { moveToStart(reader) }
-                .simultaneousGesture(pinch(reader), including: Self.scrollExtras && isActive ? .all : .subviews)
+                .simultaneousGesture(pinch(reader), including: isActive ? .all : .subviews)
                 .onChange(of: scrollRequest) { _, request in
                     guard let request else { return }
                     reader.scrollTo(request.id, anchor: .top)
@@ -356,12 +325,7 @@ struct SymbolsView: View, Equatable {
             ForEach(layout.items) { item in
                 Section {
                     switch item.content {
-                    case .header(let folder):
-                        if Self.dumbFolders {
-                            DumbFolderRow(name: folder.key)
-                        } else {
-                            folderRowHeader(folder)
-                        }
+                    case .header(let folder): folderRowHeader(folder)
                     case .symbol(let symbol, _): code(for: symbol)
                     }
                 } header: {
@@ -385,61 +349,35 @@ struct SymbolsView: View, Equatable {
     }
 
     /// A group's header (a folder with many folders under it): tap it for its folders.
-    @ViewBuilder
     private func groupHeader(_ node: FolderTree.Node, label: String, indent: Int) -> some View {
         let collapsed = collapsed
         let scope = collapseScope
         let isOpen = collapsed.isGroupOpen(node.path, scope: scope)
         let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleGroup(node.path, scope: scope) } }
-        let header = FolderHeader(path: label, fileCount: node.fileCount, isFolded: !isOpen, indent: indent,
-                                  onToggle: toggle)
-        if !Self.foldersHaveMenus {
-            header
-        } else {
-            header
-                .contextMenu {
-                    Button(isOpen ? "Fold Folder" : "Unfold Folder",
-                           systemImage: isOpen ? "chevron.right" : "chevron.down", action: toggle)
-                    commentOnFolder(node.path)
-                } preview: {
-                    FolderPathPreview(path: rootFolderName + "/" + node.path, fileCount: node.fileCount)
-                }
-        }
+        return FolderHeader(path: label, fileCount: node.fileCount, isFolded: !isOpen, indent: indent, onToggle: toggle)
+            .contextMenu {
+                Button(isOpen ? "Fold Folder" : "Unfold Folder",
+                       systemImage: isOpen ? "chevron.right" : "chevron.down", action: toggle)
+                commentOnFolder(node.path)
+            } preview: {
+                FolderPathPreview(path: rootFolderName + "/" + node.path, fileCount: node.fileCount)
+            }
     }
 
-    /// TEMPORARY: off to see whether the folder rows' hold menus make the folder list hitch.
-    private static let foldersHaveMenus = false
-    /// TEMPORARY: off to see whether what runs on each frame of a scroll makes the list hitch:
-    /// the pinch and the peek beside the scroll, the bar's tracking (offset and phase), and the
-    /// top symbol's tracking. With it off, the bar doesn't collapse and the place isn't saved.
-    private static let scrollExtras = false
-    /// TEMPORARY: folder rows as plain text that does nothing (no button, no tap, nothing read),
-    /// to see whether the folder rows themselves make the list hitch.
-    private static let dumbFolders = true
-    /// TEMPORARY: the folder view as a bare scroll view of plain rows (`bareFolderList`), to see
-    /// whether the list's setup or the screen around it makes it hitch.
-    private static let bareList = true
-
     /// - Parameter label: its path from the group it's in ("" for the project's top files).
-    @ViewBuilder
     private func folderHeader(_ group: FolderGroup, label: String, indent: Int) -> some View {
         let collapsed = collapsed
         let scope = collapseScope
         let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
         let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) } }
         let fullPath = group.path.isEmpty ? rootFolderName : rootFolderName + "/" + group.path
-        let header = FolderHeader(path: label.isEmpty ? rootFolderName : label, fileCount: group.fileCount,
-                                  isFolded: isFolded, indent: indent, onToggle: toggle)
-        if !Self.foldersHaveMenus {
-            header
-        } else {
-            header
-                .contextMenu {
-                    folderMenu(group, isFolded: isFolded, toggle: toggle)
-                } preview: {
-                    FolderPathPreview(path: fullPath, fileCount: group.fileCount)
-                }
-        }
+        return FolderHeader(path: label.isEmpty ? rootFolderName : label, fileCount: group.fileCount,
+                            isFolded: isFolded, indent: indent, onToggle: toggle)
+            .contextMenu {
+                folderMenu(group, isFolded: isFolded, toggle: toggle)
+            } preview: {
+                FolderPathPreview(path: fullPath, fileCount: group.fileCount)
+            }
     }
 
     /// Comment on a folder (its path in the project): adds its path to the review.
@@ -604,7 +542,7 @@ struct SymbolsView: View, Equatable {
         ScrollView {
             content()
         }
-        .temporarily(Self.scrollExtras) { $0.modifier(PositionTracking(position: centeredID)) }
+        .modifier(PositionTracking(position: centeredID))
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe that
         // closes the search mustn't scroll; scrolling comes back for the next swipe.
@@ -617,38 +555,34 @@ struct SymbolsView: View, Equatable {
             },
             including: closesSearchOnSwipe ? .all : .subviews
         )
-        .simultaneousGesture(peekGesture, including: Self.scrollExtras && isActive ? .all : .subviews)
+        .simultaneousGesture(peekGesture, including: isActive ? .all : .subviews)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
             if width != codeWidth { codeWidth = width }
         }
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         // The strip a peek uncovers is the code's background.
         .background(Color(uiColor: RawTextStyle.backgroundColor))
-        .temporarily(Self.scrollExtras) { list in
-            list.onScrollPhaseChange { _, phase, context in
-                scroll.isUserScrolling = phase == .interacting || phase == .decelerating
-                scroll.isCoasting = phase == .decelerating
-                onScrollingChange?(phase != .idle)
-                if phase == .interacting {
-                    scroll.tracker.beginDrag(at: context.geometry.contentOffset.y)
-                }
+        .onScrollPhaseChange { _, phase, context in
+            scroll.isUserScrolling = phase == .interacting || phase == .decelerating
+            scroll.isCoasting = phase == .decelerating
+            onScrollingChange?(phase != .idle)
+            if phase == .interacting {
+                scroll.tracker.beginDrag(at: context.geometry.contentOffset.y)
             }
         }
         // Gone mid-scroll, it never says it stopped: new lists would wait for good.
         .onDisappear { onScrollingChange?(false) }
-        .temporarily(Self.scrollExtras) { list in
-            list.onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
-                scroll.tracker.isCollapsed = isBarCollapsed()
-                let change = scroll.tracker.scrolled(
-                    to: geometry.contentOffset.y,
-                    top: -geometry.contentInsets.top,
-                    bottom: geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom,
-                    isUserScrolling: scroll.isUserScrolling,
-                    isCoasting: scroll.isCoasting,
-                    contentHeight: geometry.contentSize.height
-                )
-                if isActive, let change { onBarCollapsedChange(change) }
-            }
+        .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
+            scroll.tracker.isCollapsed = isBarCollapsed()
+            let change = scroll.tracker.scrolled(
+                to: geometry.contentOffset.y,
+                top: -geometry.contentInsets.top,
+                bottom: geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom,
+                isUserScrolling: scroll.isUserScrolling,
+                isCoasting: scroll.isCoasting,
+                contentHeight: geometry.contentSize.height
+            )
+            if isActive, let change { onBarCollapsedChange(change) }
         }
         .onChange(of: barTapCount) {
             scroll.tracker.holdOpen()
@@ -1859,25 +1793,5 @@ private struct BlameStrip: View {
             .frame(maxHeight: .infinity)
             .transition(.opacity)
         }
-    }
-}
-
-extension View {
-    /// TEMPORARY (with `SymbolsView.scrollExtras`): `transform` only when `isOn`.
-    @ViewBuilder
-    fileprivate func temporarily<Modified: View>(_ isOn: Bool, _ transform: (Self) -> Modified) -> some View {
-        if isOn { transform(self) } else { self }
-    }
-}
-
-/// TEMPORARY (with `SymbolsView.dumbFolders`): a folder row that's only its name.
-private struct DumbFolderRow: View {
-    let name: String
-
-    var body: some View {
-        Text(verbatim: name)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
-            .padding(.horizontal, 16)
     }
 }
