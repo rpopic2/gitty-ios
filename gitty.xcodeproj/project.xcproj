@@ -35,6 +35,12 @@
       "version": {
         "version": "0.7.4-with-generated-files",
       },
+    }, {
+      "kind": "remote",
+      "repository": "https://github.com/ibrahimcetin/libgit2",
+      "version": {
+        "version": "1.9.2",
+      },
     },
   ],
   "files": [
@@ -96,6 +102,10 @@
       ],
       "package-product-members": [
         {
+          "package": "libgit2",
+          "product-name": "libgit2",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
           "package": "swift-tree-sitter",
           "product-name": "SwiftTreeSitter",
           "build-phase": { "build-phase": "frameworks" },
