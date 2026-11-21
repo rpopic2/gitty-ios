@@ -498,7 +498,12 @@ struct CodeScreen: View {
     private func codeTextActions(from page: CardRoute?) -> CodeTextActions {
         CodeTextActions(onSearch: { searchInStack(for: $0, from: page) },
                         onFindOccurrences: { findOccurrences(of: $0, from: page) },
-                        onComment: { range, file, text in comment(on: range, inFile: file, text: text) })
+                        onComment: { range, file, text in comment(on: range, inFile: file, text: text) },
+                        onCommentOnFile: { comment(onPathOf: $0, folder: nil) },
+                        onCommentOnFolder: { path in
+                            // Folders are named from where the project's files start.
+                            if let scope = URL(string: model.collapseScope) { comment(onPathOf: scope, folder: path) }
+                        })
     }
 
     /// The stack's symbols, as code blocks: tap one to go back to its card.
@@ -873,6 +878,31 @@ struct CodeScreen: View {
     /// Search in the text menu: what to search for, for any selection.
     private func symbolSearchTerm(forSelection selection: String) -> String? {
         SymbolSearch.query(fromSelection: selection)
+    }
+
+    /// Comment on a whole file or folder: its path (as the review names files) at the end of the
+    /// review, without its code, and open the review.
+    /// - Parameters:
+    ///   - url: the file; for a folder, where the project's files start.
+    ///   - folder: the folder's path from there ("" for the top), or `nil` for the file.
+    private func comment(onPathOf url: URL, folder: String?) {
+        let format = reviewFormat
+        let review = review
+        Task {
+            let projects = await ProjectStore.shared.projects()
+            var path = ReviewText.location(for: url, projects: projects)
+            if let folder {
+                if !path.isEmpty, !path.hasSuffix("/") { path += "/" }
+                path += folder.isEmpty ? "" : folder + "/"
+                if path.isEmpty { path = "/" }  // the repository's top
+            }
+            let project = ProjectSymbolIndex.project(containing: url, in: projects)
+            let commit = project.flatMap { CloneIndex.shared.record(forProject: $0.id)?.commit }
+            let repository = project.map { project in
+                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref, commit: commit)
+            }
+            review.add(path: path, format: format, repository: repository, projectID: project?.id ?? "")
+        }
     }
 
     /// Comment on a range of the file: add it to the end of the review and open the review.

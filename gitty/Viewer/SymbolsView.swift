@@ -351,6 +351,7 @@ struct SymbolsView: View, Equatable {
             .contextMenu {
                 Button(isOpen ? "Fold Folder" : "Unfold Folder",
                        systemImage: isOpen ? "chevron.right" : "chevron.down", action: toggle)
+                commentOnFolder(node.path)
             } preview: {
                 FolderPathPreview(path: rootFolderName + "/" + node.path, fileCount: node.fileCount)
             }
@@ -372,14 +373,23 @@ struct SymbolsView: View, Equatable {
             }
     }
 
-    /// A folder's long-press menu: fold or unfold it (or all of them), and add its files to an
-    /// album.
+    /// Comment on a folder (its path in the project): adds its path to the review.
+    @ViewBuilder
+    private func commentOnFolder(_ path: String) -> some View {
+        if let onCommentOnFolder = textActions?.onCommentOnFolder {
+            Button("Comment", systemImage: "text.bubble") { onCommentOnFolder(path) }
+        }
+    }
+
+    /// A folder's long-press menu: fold or unfold it (or all of them), comment on it, and add
+    /// its files to an album.
     @ViewBuilder
     private func folderMenu(_ group: FolderGroup, isFolded: Bool, toggle: @escaping () -> Void) -> some View {
         let collapsed = collapsed
         let scope = collapseScope
         Button(isFolded ? "Unfold Folder" : "Fold Folder",
                systemImage: isFolded ? "chevron.down" : "chevron.right", action: toggle)
+        commentOnFolder(group.path)
         if let albumContext {
             let files = group.symbols.compactMap { symbol -> AlbumItem? in
                 symbol.kind == .file ? AlbumItem(symbol, openFile: openFile) : nil
@@ -1342,6 +1352,10 @@ struct CodeTextActions {
     let onFindOccurrences: (@MainActor (OccurrenceTerm) -> Void)?
     /// A range of a file (`nil`: the open file), and the file's text the range is in.
     let onComment: (@MainActor (NSRange, URL?, NSString) -> Void)?
+    /// A whole file (a file's title) or folder (its path in the project, "" for its top): just
+    /// its path.
+    var onCommentOnFile: (@MainActor (URL) -> Void)? = nil
+    var onCommentOnFolder: (@MainActor (String) -> Void)? = nil
 }
 
 /// The long-press menu of a symbol's title and code: a small preview, then Open (its page) and
@@ -1391,6 +1405,9 @@ private struct CodeMenu: ViewModifier {
         switch part {
         case .title:
             let text = symbol.kind == .file ? symbol.name : CodeHeader.declaration(of: symbol)
+            if symbol.kind == .file, let onCommentOnFile = textActions?.onCommentOnFile {
+                Button("Comment", systemImage: "text.bubble") { onCommentOnFile(symbol.fileURL ?? openFile) }
+            }
             if symbol.kind != .file, symbol.isDownloaded, let onComment = textActions?.onComment {
                 Button("Comment", systemImage: "text.bubble") {
                     withFileText { fileText in

@@ -18,6 +18,11 @@ struct ReviewTextTests {
                 == "### alc/main.c:12-14\n\n```c\nint a;\nint b;\nint c;\n```\n\n")
     }
 
+    @Test func aFileOrFolderIsJustItsPath() {
+        #expect(ReviewText.block(forPath: "alc/main.c", format: .compact) == "alc/main.c: ")
+        #expect(ReviewText.block(forPath: "alc/", format: .markdown) == "### alc/\n\n")
+    }
+
     @Test func commentsAppendAtTheEnd() {
         #expect(ReviewText.appending("b.c:1: ", to: "", format: .compact) == "b.c:1: ")
         #expect(ReviewText.appending("b.c:1: ", to: "a.c:3: Typo.\n\n", format: .compact) == "a.c:3: Typo.\nb.c:1: ")

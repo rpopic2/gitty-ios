@@ -100,6 +100,14 @@ nonisolated enum ReviewText {
         }
     }
 
+    /// A comment on a whole file or folder: just its path (a folder's ends with `/`), no code.
+    static func block(forPath path: String, format: ReviewFormat) -> String {
+        switch format {
+        case .compact: return "\(path): "
+        case .markdown: return "### \(path)\n\n"
+        }
+    }
+
     /// A comment on lines of a diff: compact, the label alone; Markdown, the label, the commit
     /// (full hash and message), and the selected change in a `diff` fence.
     static func block(for selection: ReviewDiffSelection, format: ReviewFormat) -> String {

@@ -104,6 +104,12 @@ final class ReviewDraft {
             projectID: projectID, overSheet: false)
     }
 
+    /// A comment on a whole file or folder: just its path.
+    func add(path: String, format: ReviewFormat, repository: ReviewRepository?, projectID: String) {
+        add(block: ReviewText.block(forPath: path, format: format), format: format, repository: repository,
+            projectID: projectID, overSheet: false)
+    }
+
     /// A comment on lines of a diff, from the file info sheet.
     func add(_ selection: ReviewDiffSelection, format: ReviewFormat, repository: ReviewRepository?,
              projectID: String) {
