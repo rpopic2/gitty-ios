@@ -1683,7 +1683,7 @@ private struct SymbolCodeText: View {
             // lines' height and grew once laid out, so scrolling up, the list kept moving to
             // make up for the rows above growing.
             Text(verbatim: block.placeholder)
-                .frame(height: CGFloat(lines) * layoutKey.style.uiFont.lineHeight, alignment: .topLeading)
+                .frame(height: CGFloat(lines) * layoutKey.style.lineHeight, alignment: .topLeading)
                 .clipped()
         } else {
             Text(verbatim: block.placeholder)

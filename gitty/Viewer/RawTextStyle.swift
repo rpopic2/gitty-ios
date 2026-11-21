@@ -217,12 +217,25 @@ nonisolated struct CodeTextStyle: Equatable, Hashable, Sendable {
         uiFont(size: size)
     }
 
+    /// `uiFont`'s line height.
+    var lineHeight: CGFloat {
+        uiFont.lineHeight
+    }
+
     /// The font at `size`, without ligatures or contextual alternates. JetBrains Mono's
     /// (`->` as an arrow and the like) are hundreds of OpenType substitutions that Core Text
     /// runs on every glyph each time text is laid out and again when it's drawn: in hang reports
     /// from scrolling the Code level, that shaping was almost all of the main thread's time.
     /// Code reads the same without them, every character as typed.
     func uiFont(size: CGFloat) -> UIFont {
+        let key = FontCache.Key(font: font, size: size)
+        if let known = FontCache.shared.font(for: key) { return known }
+        let made = makeFont(size: size)
+        FontCache.shared.keep(made, for: key)
+        return made
+    }
+
+    private func makeFont(size: CGFloat) -> UIFont {
         guard let base = UIFont(name: font.postScriptName, size: size) else {
             return .monospacedSystemFont(ofSize: size, weight: .regular)
         }
@@ -247,5 +260,28 @@ nonisolated struct CodeTextStyle: Equatable, Hashable, Sendable {
         for url in urls {
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
         }
+    }
+}
+
+/// The code fonts made so far, by font and size: making one (finding the font, then turning its
+/// features off) each time a title or block was drawn showed as hitches while scrolling. Used from
+/// any thread (blocks are laid out in the background).
+nonisolated final class FontCache: @unchecked Sendable {
+    static let shared = FontCache()
+
+    struct Key: Hashable {
+        let font: CodeFont
+        let size: CGFloat
+    }
+
+    private let lock = NSLock()
+    private var fonts: [Key: UIFont] = [:]
+
+    func font(for key: Key) -> UIFont? {
+        lock.withLock { fonts[key] }
+    }
+
+    func keep(_ font: UIFont, for key: Key) {
+        lock.withLock { fonts[key] = font }
     }
 }
