@@ -277,13 +277,17 @@ struct ProjectFilesView: View {
 
     /// The project's review: the one in progress (tap to write, swipe to delete) and the last
     /// one shared (tap to read, copy or share again). Closing the composer with its X keeps it
-    /// here.
+    /// here. Always shown: with neither, how to start one.
     @ViewBuilder
     private func reviewSection(project: ProjectInfo) -> some View {
         if let review {
             let state = review.review(for: project.id)
-            if state.hasDraft || state.shared != nil {
-                Section("Review") {
+            Section("Review") {
+                if !state.hasDraft, state.shared == nil {
+                    reviewRow(title: String(localized: "No Review Yet"), systemImage: "text.bubble",
+                              detail: String(localized: "Hold code, a file or a folder, or select text, and choose Comment."))
+                        .accessibilityElement(children: .combine)
+                } else {
                     if state.hasDraft {
                         Button { review.open(projectID: project.id) } label: {
                             reviewRow(title: String(localized: "In Progress"), systemImage: "text.bubble",
