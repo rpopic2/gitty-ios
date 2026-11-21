@@ -184,7 +184,7 @@ struct SymbolsView: View, Equatable {
                 }
                 .modifier(PinchScale(zoom: pinchZoom))
                 .onAppear { moveToStart(reader) }
-                .simultaneousGesture(pinch(reader), including: isActive ? .all : .subviews)
+                .simultaneousGesture(pinch(reader), including: Self.scrollExtras && isActive ? .all : .subviews)
                 .onChange(of: scrollRequest) { _, request in
                     guard let request else { return }
                     reader.scrollTo(request.id, anchor: .top)
@@ -373,6 +373,10 @@ struct SymbolsView: View, Equatable {
 
     /// TEMPORARY: off to see whether the folder rows' hold menus make the folder list hitch.
     private static let foldersHaveMenus = false
+    /// TEMPORARY: off to see whether what runs on each frame of a scroll makes the list hitch:
+    /// the pinch and the peek beside the scroll, the bar's tracking (offset and phase), and the
+    /// top symbol's tracking. With it off, the bar doesn't collapse and the place isn't saved.
+    private static let scrollExtras = false
 
     /// - Parameter label: its path from the group it's in ("" for the project's top files).
     @ViewBuilder
@@ -558,7 +562,7 @@ struct SymbolsView: View, Equatable {
         ScrollView {
             content()
         }
-        .modifier(PositionTracking(position: centeredID))
+        .temporarily(Self.scrollExtras) { $0.modifier(PositionTracking(position: centeredID)) }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe that
         // closes the search mustn't scroll; scrolling comes back for the next swipe.
@@ -571,34 +575,38 @@ struct SymbolsView: View, Equatable {
             },
             including: closesSearchOnSwipe ? .all : .subviews
         )
-        .simultaneousGesture(peekGesture, including: isActive ? .all : .subviews)
+        .simultaneousGesture(peekGesture, including: Self.scrollExtras && isActive ? .all : .subviews)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
             if width != codeWidth { codeWidth = width }
         }
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
         // The strip a peek uncovers is the code's background.
         .background(Color(uiColor: RawTextStyle.backgroundColor))
-        .onScrollPhaseChange { _, phase, context in
-            scroll.isUserScrolling = phase == .interacting || phase == .decelerating
-            scroll.isCoasting = phase == .decelerating
-            onScrollingChange?(phase != .idle)
-            if phase == .interacting {
-                scroll.tracker.beginDrag(at: context.geometry.contentOffset.y)
+        .temporarily(Self.scrollExtras) { list in
+            list.onScrollPhaseChange { _, phase, context in
+                scroll.isUserScrolling = phase == .interacting || phase == .decelerating
+                scroll.isCoasting = phase == .decelerating
+                onScrollingChange?(phase != .idle)
+                if phase == .interacting {
+                    scroll.tracker.beginDrag(at: context.geometry.contentOffset.y)
+                }
             }
         }
         // Gone mid-scroll, it never says it stopped: new lists would wait for good.
         .onDisappear { onScrollingChange?(false) }
-        .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
-            scroll.tracker.isCollapsed = isBarCollapsed()
-            let change = scroll.tracker.scrolled(
-                to: geometry.contentOffset.y,
-                top: -geometry.contentInsets.top,
-                bottom: geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom,
-                isUserScrolling: scroll.isUserScrolling,
-                isCoasting: scroll.isCoasting,
-                contentHeight: geometry.contentSize.height
-            )
-            if isActive, let change { onBarCollapsedChange(change) }
+        .temporarily(Self.scrollExtras) { list in
+            list.onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
+                scroll.tracker.isCollapsed = isBarCollapsed()
+                let change = scroll.tracker.scrolled(
+                    to: geometry.contentOffset.y,
+                    top: -geometry.contentInsets.top,
+                    bottom: geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom,
+                    isUserScrolling: scroll.isUserScrolling,
+                    isCoasting: scroll.isCoasting,
+                    contentHeight: geometry.contentSize.height
+                )
+                if isActive, let change { onBarCollapsedChange(change) }
+            }
         }
         .onChange(of: barTapCount) {
             scroll.tracker.holdOpen()
@@ -1809,5 +1817,13 @@ private struct BlameStrip: View {
             .frame(maxHeight: .infinity)
             .transition(.opacity)
         }
+    }
+}
+
+extension View {
+    /// TEMPORARY (with `SymbolsView.scrollExtras`): `transform` only when `isOn`.
+    @ViewBuilder
+    fileprivate func temporarily<Modified: View>(_ isOn: Bool, _ transform: (Self) -> Modified) -> some View {
+        if isOn { transform(self) } else { self }
     }
 }
