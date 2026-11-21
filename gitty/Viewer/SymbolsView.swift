@@ -398,10 +398,7 @@ struct SymbolsView: View, Equatable {
                systemImage: isFolded ? "chevron.down" : "chevron.right", action: toggle)
         commentOnFolder(group.path)
         if let albumContext {
-            let files = group.symbols.compactMap { symbol -> AlbumItem? in
-                symbol.kind == .file ? AlbumItem(symbol, openFile: openFile) : nil
-            }
-            AlbumMenuItems(items: files, context: albumContext)
+            AlbumMenuItems(items: group.files.map { AlbumItem.file($0) }, context: albumContext)
         }
         Section {
             Button("Fold All Folders", systemImage: "chevron.right.2") {

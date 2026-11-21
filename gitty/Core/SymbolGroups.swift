@@ -42,6 +42,9 @@ nonisolated struct FolderGroup: Identifiable, Sendable {
     /// Its files' entries and symbols, in list order.
     let symbols: [CodeSymbol]
     let fileCount: Int
+    /// Its files, in list order: for its menu's Add to Album (which is made with each row, as
+    /// it scrolls in: going through all its symbols for them then made scrolling hitch).
+    var files: [URL] = []
 
     var id: String { path }
 
@@ -54,7 +57,7 @@ nonisolated struct FolderGroup: Identifiable, Sendable {
     static func groups(of symbols: [CodeSymbol], openFile: URL, scope: String) -> [FolderGroup] {
         var order: [String] = []
         var byFolder: [String: [CodeSymbol]] = [:]
-        var files: [String: Int] = [:]
+        var files: [String: [URL]] = [:]
         var folder = ""
         var current: URL?
         for symbol in symbols {
@@ -67,9 +70,11 @@ nonisolated struct FolderGroup: Identifiable, Sendable {
             }
             if byFolder[folder] == nil { order.append(folder) }
             byFolder[folder, default: []].append(symbol)
-            if symbol.kind == .file { files[folder, default: 0] += 1 }
+            if symbol.kind == .file { files[folder, default: []].append(file) }
         }
-        return order.map { FolderGroup(path: $0, symbols: byFolder[$0] ?? [], fileCount: files[$0] ?? 0) }
+        return order.map {
+            FolderGroup(path: $0, symbols: byFolder[$0] ?? [], fileCount: files[$0]?.count ?? 0, files: files[$0] ?? [])
+        }
     }
 
     /// The folder a file is in, inside the project: "" at its top.
