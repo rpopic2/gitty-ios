@@ -128,7 +128,7 @@ nonisolated enum SymbolSearch {
                                                           into found: inout [Ranked]) {
         for position in positions {
             if let rank = rank(query, index.entries[position]) {
-                found.append(Ranked(symbol: index.symbols[position], rank: rank))
+                found.append(Ranked(symbol: index.symbols[position], rank: rank, position: position))
             }
         }
     }
@@ -142,11 +142,13 @@ nonisolated enum SymbolSearch {
     nonisolated private struct Ranked: Sendable {
         let symbol: CodeSymbol
         let rank: Int
+        /// Its place in the list (ids don't follow it).
+        let position: Int
 
         /// Better rank first; equal ranks keep file order.
         static func isBetter(_ lhs: Ranked, _ rhs: Ranked) -> Bool {
             if lhs.rank != rhs.rank { return lhs.rank < rhs.rank }
-            return lhs.symbol.id < rhs.symbol.id
+            return lhs.position < rhs.position
         }
     }
 

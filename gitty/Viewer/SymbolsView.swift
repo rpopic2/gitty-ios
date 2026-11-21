@@ -31,7 +31,7 @@ struct SymbolsView: View, Equatable {
     let initialID: @MainActor () -> Int?
     /// Another symbol reached the top of the screen (to save the place). It's reported without
     /// redrawing anything, here or in the screen around it: that happens many times a second.
-    let onCenteredSymbolChange: @MainActor (Int) -> Void
+    let onCenteredSymbolChange: @MainActor (CodeSymbol) -> Void
     /// Whether the bar is collapsed now. Read as the list scrolls rather than passed in, so the
     /// bar changing doesn't redraw the list.
     let isBarCollapsed: @MainActor () -> Bool
@@ -107,7 +107,7 @@ struct SymbolsView: View, Equatable {
          scrollRequest: SymbolScrollRequest?,
          collapseRequest: CollapseRequest?,
          initialID: @escaping @MainActor () -> Int? = { nil },
-         onCenteredSymbolChange: @escaping @MainActor (Int) -> Void,
+         onCenteredSymbolChange: @escaping @MainActor (CodeSymbol) -> Void,
          isBarCollapsed: @escaping @MainActor () -> Bool, barTapCount: Int, openFile: URL,
          collapseScope: String,
          rootFolderName: String = "",
@@ -210,7 +210,10 @@ struct SymbolsView: View, Equatable {
     /// redraws nothing, and reported to `onCenteredSymbolChange` once the list has moved to
     /// where it starts (its first layout, on the first symbol, isn't).
     private var centeredID: Binding<Int?> {
-        scroll.report = onCenteredSymbolChange
+        let report = onCenteredSymbolChange
+        let blocks = codeBlocks
+        // The symbol, found from its id with the list's own map (not by looking through it).
+        scroll.report = { id in if let symbol = blocks.symbol(withID: id) { report(symbol) } }
         return scroll.centeredBinding
     }
 
@@ -832,8 +835,7 @@ private struct FolderRows {
             case symbol(CodeSymbol, indent: Int)
         }
 
-        /// A symbol's is its id (its place in the list, which the list's position goes by); a
-        /// header's is negative, so it never meets one, and the position passes over it.
+        /// A symbol's is its id (which the list's position goes by); a header's is negative, so it never meets one, and the position passes over it.
         let id: Int
         let content: Content
     }
@@ -927,7 +929,9 @@ private final class FileSymbolCounts {
 
     /// A file entry's count: the symbols after it, up to the next file.
     func count(of entry: CodeSymbol, in symbols: [CodeSymbol]) -> Int {
-        let key: [Int?] = [symbols.count, symbols.first?.id, symbols.last?.id]
+        // A new list is a new array (ids stay the same from one list to the next).
+        let buffer = symbols.withUnsafeBufferPointer { Int(bitPattern: $0.baseAddress) }
+        let key: [Int?] = [buffer, symbols.count, symbols.first?.id, symbols.last?.id]
         if key != self.key {
             self.key = key
             counts = [:]
@@ -1264,8 +1268,16 @@ private final class CodeBlockStore {
         return max(1, low)
     }
 
+    /// The list's symbol with this id.
+    func symbol(withID id: Int) -> CodeSymbol? {
+        updatePositions()
+        return positions[id].map { symbols[$0] }
+    }
+
     private func updatePositions() {
-        let key: [Int?] = [symbols.count, symbols.first?.id, symbols.last?.id]
+        // A new list is a new array (ids alone don't tell: they stay the same from one to the next).
+        let buffer = symbols.withUnsafeBufferPointer { Int(bitPattern: $0.baseAddress) }
+        let key: [Int?] = [buffer, symbols.count, symbols.first?.id, symbols.last?.id]
         guard key != positionsKey else { return }
         positionsKey = key
         positions = Dictionary(symbols.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })

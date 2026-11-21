@@ -27,6 +27,15 @@ struct ProjectSymbolIndexTests {
         #expect(ProjectSymbolIndex.project(containing: lookalike, in: [folder]) == nil)
     }
 
+    @Test func stableIDsDependOnTheFileAndThePlaceInIt() {
+        let a = CodeSymbol.fileHash("https://raw.githubusercontent.com/o/r/main/a.c")
+        let b = CodeSymbol.fileHash("https://raw.githubusercontent.com/o/r/main/b.c")
+        #expect(CodeSymbol.stableID(fileHash: a, index: 3) == CodeSymbol.stableID(fileHash: a, index: 3))
+        #expect(CodeSymbol.stableID(fileHash: a, index: 3) != CodeSymbol.stableID(fileHash: a, index: 4))
+        #expect(CodeSymbol.stableID(fileHash: a, index: 0) != CodeSymbol.stableID(fileHash: b, index: 0))
+        #expect(CodeSymbol.stableID(fileHash: a, index: 0) >= 0)  // the list's folder headers are negative
+    }
+
     @Test func movedSymbolsKeepEverythingButTheirPlace() {
         let symbol = CodeSymbol(id: 0, name: "draw", kind: .function, range: NSRange(location: 5, length: 9),
                                 line: 3, preview: "void draw()")

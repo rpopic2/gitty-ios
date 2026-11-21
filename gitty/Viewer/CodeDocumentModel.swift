@@ -452,7 +452,8 @@ final class CodeDocumentModel {
     }
 
     /// One flat list, in path order, the open file in its place among the project's: each
-    /// file's entry, then its symbols in file order. Ids are positions in this list.
+    /// file's entry, then its symbols in file order. Ids come from each file and the place in it
+    /// (`CodeSymbol.stableID`), so they stay the same from one list to the next.
     /// Builds the list, and its folders for the Code level, away from the main thread (a big
     /// project has tens of thousands of files), then shows both at once. A newer one wins.
     /// - Parameter then: once it's showing (the project's files being in, say).
@@ -526,15 +527,22 @@ final class CodeDocumentModel {
         let ownPlace = min(place ?? others.firstIndex {
             ownAddress.localizedStandardCompare($0.url.absoluteString) == .orderedAscending
         } ?? others.count, others.count)
+        // Ids from each file and the place in it (`CodeSymbol.stableID`): a new list, with more
+        // of the project's files read, keeps every symbol's id.
         func appendOwn() {
-            for symbol in ownEntries { combined.append(symbol.moved(to: combined.count, file: nil)) }
+            let fileHash = CodeSymbol.fileHash(ownAddress)
+            for (place, symbol) in ownEntries.enumerated() {
+                combined.append(symbol.moved(to: CodeSymbol.stableID(fileHash: fileHash, index: place), file: nil))
+            }
         }
         for (index, file) in others.enumerated() {
             if index == ownPlace { appendOwn() }
             if !notText.isEmpty, notText.contains(file.url) { continue }
-            combined.append(file.file.moved(to: combined.count, file: file.url))
-            for symbol in file.symbols {
-                combined.append(symbol.moved(to: combined.count, file: file.url))
+            let fileHash = CodeSymbol.fileHash(file.url.absoluteString)
+            combined.append(file.file.moved(to: CodeSymbol.stableID(fileHash: fileHash, index: 0), file: file.url))
+            for (place, symbol) in file.symbols.enumerated() {
+                combined.append(symbol.moved(to: CodeSymbol.stableID(fileHash: fileHash, index: place + 1),
+                                             file: file.url))
             }
         }
         if ownPlace == others.count { appendOwn() }

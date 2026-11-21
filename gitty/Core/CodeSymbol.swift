@@ -42,8 +42,9 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// Position in the list: file order, the open file first, then the project's other files.
-    /// Stable for one version of the list.
+    /// In the Code level's list: from its file and its place in the file (`stableID`), so the
+    /// list getting more of the project's files doesn't change it. Other lists (an album, an
+    /// occurrences page) number theirs. Not kept across launches.
     let id: Int
     let name: String
     let kind: Kind
@@ -84,6 +85,28 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
 
     static func linesLabel(_ start: Int, _ end: Int) -> String {
         start == end ? String(localized: "Line \(start)") : String(localized: "Lines \(start)–\(end)")
+    }
+
+    /// A symbol's id in the Code level's list: its file's address and its place in the file
+    /// (0 for the file's entry, then its symbols in order), hashed. Not negative (the list's
+    /// folder headers are). The same in every version of the list while the file doesn't change.
+    static func stableID(fileHash: UInt64, index: Int) -> Int {
+        var value = fileHash ^ (UInt64(truncatingIfNeeded: index) &* 0x9E37_79B9_7F4A_7C15)
+        // splitmix64's finish: every bit of both counts.
+        value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
+        value ^= value >> 31
+        return Int(truncatingIfNeeded: value >> 1)
+    }
+
+    /// The file part of `stableID`: FNV-1a of its address (the same on every launch, unlike
+    /// `Hasher`).
+    static func fileHash(_ address: String) -> UInt64 {
+        var hash: UInt64 = 0xCBF2_9CE4_8422_2325
+        for byte in address.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01B3
+        }
+        return hash
     }
 
     /// The same symbol at another place in a combined list, from `file`.

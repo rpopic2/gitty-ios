@@ -124,7 +124,6 @@ nonisolated enum AlbumContents {
 
         var result: [CodeSymbol] = []
         var shown: Set<Int> = []
-        var nextID = symbols.count
         var lineStartsByFile: [URL: [Int]] = [:]
         for item in album.items {
             switch item {
@@ -146,9 +145,13 @@ nonisolated enum AlbumContents {
                 guard let run = runs[lines.file], let text = texts[lines.file] else { continue }
                 let starts = lineStartsByFile[lines.file] ?? lineStarts(of: text)
                 lineStartsByFile[lines.file] = starts
-                guard let entry = entry(for: lines, in: text, lineStarts: starts, id: nextID,
+                // From its file and lines, like the list's ids (`CodeSymbol.stableID`): the same in
+                // the next list, and not one of the list's.
+                let id = CodeSymbol.stableID(fileHash: CodeSymbol.fileHash("lines:" + lines.file.absoluteString),
+                                             index: lines.start &* 1_000_003 &+ lines.end)
+                guard shown.insert(id).inserted,
+                      let entry = entry(for: lines, in: text, lineStarts: starts, id: id,
                                         fileURL: symbols[run.lowerBound].fileURL) else { continue }
-                nextID += 1
                 result.append(entry)
             }
         }

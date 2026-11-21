@@ -70,7 +70,7 @@ struct AlbumTests {
         #expect(shown.count == 2)
         let excerpt = shown[0]
         #expect(excerpt.kind == .lines)
-        #expect(excerpt.id >= list.count)  // not a place in the full list
+        #expect(!list.contains { $0.id == excerpt.id })  // not one of the list's
         #expect(excerpt.line == 2 && excerpt.endLine == 4)
         #expect(excerpt.name == "int b = 1;")  // its first line that isn't blank
         #expect(text.substring(with: excerpt.range) == "\n  int b = 1;\nint c;")

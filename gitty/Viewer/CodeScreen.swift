@@ -315,8 +315,7 @@ struct CodeScreen: View {
             // The bar collapsing redraws this screen, not the list.
             .equatable()
             // A fresh list for each album, and once the project's files are in, when the open file
-            // showed alone before them (ids are places in the list, so they move; the list finds
-            // its symbol by name). Searches go on results pages: this list is never filtered.
+            // showed alone before them (the list finds its symbol by name). Searches go on results pages: this list is never filtered.
             .id([model.activeAlbum?.id.uuidString ?? "", model.projectSymbolsLoaded ? "project" : "file"])
         case .unsupportedLanguage:
             placeholder {
@@ -774,11 +773,8 @@ struct CodeScreen: View {
     /// Saves the card in the middle of the Symbols list, like File saves its place. It changes
     /// only when another card reaches the middle (a few times a second at most), and the save is
     /// a few bytes. (Searches go on results pages, so this list is always the whole one.)
-    private func saveListPosition(_ id: Int) {
-        // Ids are places in the full list, so no need to look through it.
-        let symbols = indexedSymbols
-        guard symbols.indices.contains(id), symbols[id].id == id else { return }
-        ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbols[id]), for: model.url)
+    private func saveListPosition(_ symbol: CodeSymbol) {
+        ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), for: model.url)
     }
 
     /// Full-screen, opaque, so the hidden file text never shows through.
