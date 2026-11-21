@@ -349,35 +349,51 @@ struct SymbolsView: View, Equatable {
     }
 
     /// A group's header (a folder with many folders under it): tap it for its folders.
+    @ViewBuilder
     private func groupHeader(_ node: FolderTree.Node, label: String, indent: Int) -> some View {
         let collapsed = collapsed
         let scope = collapseScope
         let isOpen = collapsed.isGroupOpen(node.path, scope: scope)
         let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleGroup(node.path, scope: scope) } }
-        return FolderHeader(path: label, fileCount: node.fileCount, isFolded: !isOpen, indent: indent, onToggle: toggle)
-            .contextMenu {
-                Button(isOpen ? "Fold Folder" : "Unfold Folder",
-                       systemImage: isOpen ? "chevron.right" : "chevron.down", action: toggle)
-                commentOnFolder(node.path)
-            } preview: {
-                FolderPathPreview(path: rootFolderName + "/" + node.path, fileCount: node.fileCount)
-            }
+        let header = FolderHeader(path: label, fileCount: node.fileCount, isFolded: !isOpen, indent: indent,
+                                  onToggle: toggle)
+        if !Self.foldersHaveMenus {
+            header
+        } else {
+            header
+                .contextMenu {
+                    Button(isOpen ? "Fold Folder" : "Unfold Folder",
+                           systemImage: isOpen ? "chevron.right" : "chevron.down", action: toggle)
+                    commentOnFolder(node.path)
+                } preview: {
+                    FolderPathPreview(path: rootFolderName + "/" + node.path, fileCount: node.fileCount)
+                }
+        }
     }
 
+    /// TEMPORARY: off to see whether the folder rows' hold menus make the folder list hitch.
+    private static let foldersHaveMenus = false
+
     /// - Parameter label: its path from the group it's in ("" for the project's top files).
+    @ViewBuilder
     private func folderHeader(_ group: FolderGroup, label: String, indent: Int) -> some View {
         let collapsed = collapsed
         let scope = collapseScope
         let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
         let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) } }
         let fullPath = group.path.isEmpty ? rootFolderName : rootFolderName + "/" + group.path
-        return FolderHeader(path: label.isEmpty ? rootFolderName : label, fileCount: group.fileCount,
-                            isFolded: isFolded, indent: indent, onToggle: toggle)
-            .contextMenu {
-                folderMenu(group, isFolded: isFolded, toggle: toggle)
-            } preview: {
-                FolderPathPreview(path: fullPath, fileCount: group.fileCount)
-            }
+        let header = FolderHeader(path: label.isEmpty ? rootFolderName : label, fileCount: group.fileCount,
+                                  isFolded: isFolded, indent: indent, onToggle: toggle)
+        if !Self.foldersHaveMenus {
+            header
+        } else {
+            header
+                .contextMenu {
+                    folderMenu(group, isFolded: isFolded, toggle: toggle)
+                } preview: {
+                    FolderPathPreview(path: fullPath, fileCount: group.fileCount)
+                }
+        }
     }
 
     /// Comment on a folder (its path in the project): adds its path to the review.
