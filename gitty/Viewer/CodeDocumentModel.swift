@@ -475,20 +475,42 @@ final class CodeDocumentModel {
             }.value
             // A newer list is on its way: what was waiting for this one waits for it.
             guard version == publishVersion else { return }
-            symbolIndex = .ready(combined)
-            folderGroups = groups
-            let completions = publishCompletions
-            publishCompletions = []
-            for completion in completions { completion() }
-            // Building the search index takes a while for a big project: while its files are
-            // being read, not for every new list.
-            if indexingTask == nil || ContinuousClock.now - lastSearchPrepare > .seconds(6) {
-                lastSearchPrepare = .now
-                prepareSearch(for: combined)
+            // Not while the list scrolls (unless something waits for it): a new list redraws the
+            // whole list, which made scrolling stutter while the project's symbols were read.
+            if isListScrolling, publishCompletions.isEmpty {
+                heldList = (combined, groups)
+                return
             }
-            publishAlbum()
-            indexAlbumFilesIfNeeded()
+            show(combined, groups: groups)
         }
+    }
+
+    private func show(_ combined: [CodeSymbol], groups: [FolderGroup]) {
+        heldList = nil
+        symbolIndex = .ready(combined)
+        folderGroups = groups
+        let completions = publishCompletions
+        publishCompletions = []
+        for completion in completions { completion() }
+        // Building the search index takes a while for a big project: while its files are
+        // being read, not for every new list.
+        if indexingTask == nil || ContinuousClock.now - lastSearchPrepare > .seconds(6) {
+            lastSearchPrepare = .now
+            prepareSearch(for: combined)
+        }
+        publishAlbum()
+        indexAlbumFilesIfNeeded()
+    }
+
+    /// The Code level's list is scrolling (dragged, coasting or moved): new lists wait until it
+    /// stops, then the latest shows.
+    @ObservationIgnored private var isListScrolling = false
+    @ObservationIgnored private var heldList: (symbols: [CodeSymbol], groups: [FolderGroup])?
+
+    func setListScrolling(_ scrolling: Bool) {
+        guard scrolling != isListScrolling else { return }
+        isListScrolling = scrolling
+        if !scrolling, let heldList { show(heldList.symbols, groups: heldList.groups) }
     }
 
     /// Each file's entry, then its symbols, the open file in its place. A file without symbols

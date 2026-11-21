@@ -308,7 +308,9 @@ struct CodeScreen: View {
                 onOpenURL: { onOpen($0) },
                 onShowCommit: { showBlameCommit(projectID: $0, id: $1) },
                 showsWholeFiles: true,
-                textActions: codeTextActions(from: nil)
+                textActions: codeTextActions(from: nil),
+                // New lists (the project's symbols being read) wait until it stops.
+                onScrollingChange: { model.setListScrolling($0) }
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()

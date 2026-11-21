@@ -73,6 +73,8 @@ struct SymbolsView: View, Equatable {
     /// The hold menu's text items (Comment, Search, Occurrences, Copy, Share, as when selecting
     /// text on a page): what Search, Occurrences and Comment do. `nil`: just Copy and Share.
     let textActions: CodeTextActions?
+    /// The list started or stopped scrolling (dragged, coasting, or moved to a symbol).
+    let onScrollingChange: (@MainActor (Bool) -> Void)?
 
     /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
@@ -123,7 +125,9 @@ struct SymbolsView: View, Equatable {
          collapsed: CollapsedCodeStore = .shared,
          onShowCommit: (@MainActor (String, String) -> Void)? = nil,
          showsWholeFiles: Bool = false,
-         textActions: CodeTextActions? = nil) {
+         textActions: CodeTextActions? = nil,
+         onScrollingChange: (@MainActor (Bool) -> Void)? = nil) {
+        self.onScrollingChange = onScrollingChange
         self.showsWholeFiles = showsWholeFiles
         self.textActions = textActions
         self.collapsed = collapsed
@@ -543,10 +547,13 @@ struct SymbolsView: View, Equatable {
         .onScrollPhaseChange { _, phase, context in
             scroll.isUserScrolling = phase == .interacting || phase == .decelerating
             scroll.isCoasting = phase == .decelerating
+            onScrollingChange?(phase != .idle)
             if phase == .interacting {
                 scroll.tracker.beginDrag(at: context.geometry.contentOffset.y)
             }
         }
+        // Gone mid-scroll, it never says it stopped: new lists would wait for good.
+        .onDisappear { onScrollingChange?(false) }
         .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
             scroll.tracker.isCollapsed = isBarCollapsed()
             let change = scroll.tracker.scrolled(
@@ -1165,11 +1172,23 @@ private final class CodeBlock {
 }
 
 /// The Code level's blocks, made as symbols scroll in and kept for this list. Not observed.
+///
+/// Kept by what they show (the file, the part of it, and how), not by the symbol's id: ids are
+/// places in the list, and a new list (more of the project's symbols read) moves them, which
+/// gave a row another symbol's block. This way the blocks still match, and stay ready.
 private final class CodeBlockStore {
+    private struct Key: Hashable {
+        let file: URL?
+        let range: NSRange
+        let kind: CodeSymbol.Kind
+        /// The declaration's, which a symbol's block leaves out (the title shows it).
+        let line: Int
+    }
+
     /// The list's symbols and the open file's text, set as the list is drawn.
     var symbols: [CodeSymbol] = []
     var ownText: NSString?
-    private var blocks: [Int: CodeBlock] = [:]
+    private var blocks: [Key: CodeBlock] = [:]
     private var theme = SyntaxTheme.none
     private var openFileExtension = ""
     /// Where each symbol is in `symbols`, for loading ahead (worked out when `symbols` changes).
@@ -1184,18 +1203,23 @@ private final class CodeBlockStore {
     /// The colors, and the open file (whose symbols have no `fileURL`). Another theme starts
     /// the blocks over.
     func use(theme: SyntaxTheme, openFile: URL) {
-        if theme != self.theme { blocks.removeAll() }
+        if theme != self.theme {
+            blocks.removeAll()
+            laidOut.removeAll()
+            laidOutOrder.removeAll()
+        }
         self.theme = theme
         openFileExtension = openFile.pathExtension
     }
 
     func block(for symbol: CodeSymbol) -> CodeBlock {
-        if let block = blocks[symbol.id] { return block }
         let range = shownRange(of: symbol)
+        let key = Key(file: symbol.fileURL, range: range, kind: symbol.kind, line: symbol.line)
+        if let block = blocks[key] { return block }
         let block = CodeBlock(symbol: symbol, range: range, ownText: ownText,
                               ownFirstLine: symbol.fileURL == nil ? ownLine(at: range.location) : nil,
                               fileExtension: symbol.fileURL?.pathExtension ?? openFileExtension, theme: theme)
-        blocks[symbol.id] = block
+        blocks[key] = block
         return block
     }
 
@@ -1253,7 +1277,9 @@ private final class CodeBlockStore {
 
     /// The most blocks kept laid out; the ones used longest ago let theirs go.
     static let laidOutLimit = 120
-    private var laidOut: [Int] = []
+    private var laidOut: [ObjectIdentifier: CodeBlock] = [:]
+    /// The laid-out blocks, the one used longest ago first.
+    private var laidOutOrder: [ObjectIdentifier] = []
 
     /// A symbol came into view: prepare it first, then the next few below it and above it, so
     /// they're usually ready (at their final height) before they're on screen whichever way the
@@ -1275,11 +1301,14 @@ private final class CodeBlockStore {
     }
 
     func prepare(_ symbol: CodeSymbol, for key: CodeLayoutKey, isVisible: Bool) {
-        block(for: symbol).prepare(for: key, isVisible: isVisible)
-        laidOut.removeAll { $0 == symbol.id }
-        laidOut.append(symbol.id)
-        while laidOut.count > Self.laidOutLimit {
-            blocks[laidOut.removeFirst()]?.discardLayout()
+        let block = block(for: symbol)
+        block.prepare(for: key, isVisible: isVisible)
+        let id = ObjectIdentifier(block)
+        laidOutOrder.removeAll { $0 == id }
+        laidOutOrder.append(id)
+        laidOut[id] = block
+        while laidOutOrder.count > Self.laidOutLimit {
+            laidOut.removeValue(forKey: laidOutOrder.removeFirst())?.discardLayout()
         }
     }
 }
