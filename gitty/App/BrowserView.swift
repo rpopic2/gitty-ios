@@ -163,13 +163,26 @@ struct BrowserView: View {
         }
     }
 
-    /// Makes a project (or Files, for "") the open one and shows it in the Project tab.
+    /// Makes a project (or Files, for "") the open one and shows it in the Project tab. The Code
+    /// level behind it switches too: to the project's file it opens at (the last one opened,
+    /// see `ProjectStartFile`), unless the open file is already in it.
     private func showProject(_ id: String) {
         openAlbumIDString = ""
         openProjectID = id
         mode = .project
         isEditingAddress = false
         sideBar.close()
+        let current = currentURL
+        Task {
+            // Still this project, on its tab (leaving it opens the file there anyway: `modeBinding`).
+            guard let start = await ProjectStartFile.find(projectID: id, current: current),
+                  openProjectID == id, mode == .project, currentURL == current
+            else { return }
+            // Not recorded as opened: the reader didn't open it.
+            openedURL = start
+            projectStartURL = nil
+            currentURLString = start.absoluteString
+        }
     }
 }
 
