@@ -413,7 +413,8 @@ struct SymbolsView: View, Equatable {
     /// A file with no symbols (a README, a config file) shows its whole text under its title
     /// instead: otherwise unfolding it would show nothing.
     private func code(for symbol: CodeSymbol) -> some View {
-        let isWholeFile = showsWholeFiles && symbol.kind == .file && symbol.isDownloaded && symbol.isIndexed
+        let isWholeFile = showsWholeFiles && symbol.kind == .file && symbol.diff == nil && symbol.isDownloaded
+            && symbol.isIndexed
             && fileCounts.count(of: symbol, in: symbols) == 0
         return SymbolCode(symbol: symbol, isWholeFile: isWholeFile, store: codeBlocks, peek: peek, blames: blames,
                    collapsed: collapsed, openFile: openFile,
@@ -639,7 +640,7 @@ private struct CodeHeader: View {
                     if symbol.kind == .file {
                         FileTitle(name: symbol.name, count: symbolCount, isFolded: isCollapsed,
                                   isDownloaded: symbol.isDownloaded, isDownloading: isDownloading,
-                                  isIndexed: symbol.isIndexed, indent: indent)
+                                  isIndexed: symbol.isIndexed, indent: indent, change: symbol.diff?.change)
                             .onAppear {
                                 if !symbol.isIndexed, let url = symbol.fileURL { onNeedsSymbols?(url) }
                             }
@@ -675,7 +676,7 @@ private struct CodeHeader: View {
     /// here, so the title follows it); until then, or while it's collapsed, guessed from its
     /// first lines.
     private func canCollapse(_ isCollapsed: Bool) -> Bool {
-        if symbol.kind == .lines { return true }
+        if symbol.kind == .lines || symbol.kind == .hunk { return true }
         if !isCollapsed, let layouts = blocks.block(for: symbol).layouts { return !layouts.isEmpty }
         let lines = symbol.preview.split(separator: "\n", omittingEmptySubsequences: false).dropFirst()
         return lines.contains { !$0.allSatisfy(\.isWhitespace) }
@@ -703,6 +704,8 @@ private struct FileTitle: View {
     var isIndexed = true
     /// Steps in, in line with its folder's header (inside a group).
     var indent = 0
+    /// A diff album's file: how it changed (a badge before its name; `count` is its hunks).
+    var change: GitChange.Kind? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -711,6 +714,9 @@ private struct FileTitle: View {
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(isFolded ? 0 : 90))
                 .opacity(isDownloaded ? 1 : 0)
+            if let change {
+                ChangeBadge(change: change)
+            }
             Text(name)
                 .font(.headline)
                 .foregroundStyle(isDownloaded ? .primary : .secondary)
@@ -1052,6 +1058,11 @@ private struct SymbolTitle: View {
             Text(symbol.name)
                 .font(codeTextStyle.swiftUIFont)
                 .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
+        case .hunk:
+            // The code the change is in (or its lines), colored as code.
+            Text(SyntaxColoring.shared.attributed(symbol.name, fileExtension: fileExtension, theme: codeTextStyle.theme))
+                .font(codeTextStyle.swiftUIFont)
+                .foregroundStyle(Color(uiColor: RawTextStyle.textColor))
         default:
             Text(SyntaxColoring.shared.attributed(CodeHeader.declaration(of: symbol), fileExtension: fileExtension,
                                                   theme: codeTextStyle.theme))
@@ -1115,10 +1126,19 @@ private final class CodeBlock {
         let fileExtension = fileExtension
         let highlighted = theme != .none
         // The title shows the declaration: the code leaves its line out.
-        let dropsDeclaration = symbol.kind != .file && symbol.kind != .lines
+        let dropsDeclaration = symbol.kind != .file && symbol.kind != .lines && symbol.kind != .hunk
         let declarationLine = symbol.line
+        // A diff album's hunk: its lines, from the diff, not from the file.
+        let hunkLines = symbol.kind == .hunk ? symbol.diff?.lines : nil
         task = Task {
             var texts = known
+            if texts == nil, let hunkLines {
+                let made = await Task.detached(priority: priority) {
+                    CodeBlock.diffTexts(hunkLines, fileExtension: fileExtension, highlighted: highlighted)
+                }.value
+                self.texts = made
+                texts = made
+            }
             if texts == nil {
                 var plain = ownCode
                 var fromPreview = false
@@ -1173,10 +1193,27 @@ private final class CodeBlock {
         return result
     }
 
+    /// A hunk's lines as code, colored as its file's, each line marked added, removed or
+    /// unchanged with its number (`CodeText.diffLines`).
+    nonisolated static func diffTexts(_ lines: [UnifiedDiff.Line], fileExtension: String,
+                                      highlighted: Bool) -> [CodeText] {
+        let plain = lines.map { TabExpansion.expand($0.text) }.joined(separator: "\n")
+        let marks = lines.map { line in
+            DiffLineMark(kind: line.kind, number: line.kind == .removed ? line.oldNumber : line.newNumber ?? line.oldNumber)
+        }
+        return CodePieces.texts(plain, fileExtension: fileExtension, highlighted: highlighted).map { piece in
+            let count = piece.string.split(separator: "\n", omittingEmptySubsequences: false).count
+            let start = min(piece.firstLine, marks.count)
+            let end = min(start + count, marks.count)
+            return CodeText(string: piece.string, runs: piece.runs, firstLine: piece.firstLine,
+                            diffLines: Array(marks[start..<end]))
+        }
+    }
+
     /// What stands in until the code is laid out: its first lines, without the declaration.
     var placeholder: String {
         let preview = TabExpansion.expand(symbol.preview)
-        guard symbol.kind != .file, symbol.kind != .lines else { return preview }
+        guard symbol.kind != .file, symbol.kind != .lines, symbol.kind != .hunk else { return preview }
         return preview.split(separator: "\n", omittingEmptySubsequences: false).dropFirst().joined(separator: "\n")
     }
 
@@ -1792,6 +1829,52 @@ private struct BlameStrip: View {
             .frame(width: CodePeek.blameWidth)
             .frame(maxHeight: .infinity)
             .transition(.opacity)
+        }
+    }
+}
+
+/// How a diff album's file changed, before its name: added (a green plus), deleted (a red
+/// minus), modified (an orange pencil), renamed or copied (a blue arrow).
+struct ChangeBadge: View {
+    let change: GitChange.Kind
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.subheadline)
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(.white, color)
+            .accessibilityLabel(label)
+    }
+
+    private var symbol: String {
+        switch change {
+        case .added: "plus.circle.fill"
+        case .deleted: "minus.circle.fill"
+        case .modified: "pencil.circle.fill"
+        case .renamed: "arrow.right.circle.fill"
+        case .copied: "doc.on.doc.fill"
+        case .typeChanged: "arrow.triangle.2.circlepath.circle.fill"
+        }
+    }
+
+    private var color: Color {
+        switch change {
+        case .added: .green
+        case .deleted: .red
+        case .modified: .orange
+        case .renamed, .copied: .blue
+        case .typeChanged: .purple
+        }
+    }
+
+    private var label: Text {
+        switch change {
+        case .added: Text("Added")
+        case .deleted: Text("Deleted")
+        case .modified: Text("Modified")
+        case .renamed: Text("Renamed")
+        case .copied: Text("Copied")
+        case .typeChanged: Text("Type changed")
         }
     }
 }

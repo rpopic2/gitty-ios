@@ -26,12 +26,15 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
     let firstLine: Int
     /// Its text, for marking a word in it.
     private let string: NSString
+    /// A hunk's lines' kinds and numbers (`CodeText.diffLines`).
+    let diffLines: [DiffLineMark]?
     /// The last word marked and where it is (drawing happens on the main thread only).
     private var markCache: (word: String, rects: [CGRect])?
 
     init(_ text: CodeText, key: CodeLayoutKey) {
         self.key = key
         firstLine = text.firstLine
+        diffLines = text.diffLines
         let traits = UITraitCollection(userInterfaceStyle: key.isDark ? .dark : .light)
         let font = key.style.uiFont
         let attributed = NSMutableAttributedString(string: text.string, attributes: [
@@ -154,7 +157,11 @@ nonisolated final class CodePieceLayout: @unchecked Sendable {
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.secondaryLabel]
         UIGraphicsPushContext(context)
         for (row, line) in lineStarts where row < origins.count {
-            let label = String(firstFileLine + firstLine + line) as NSString
+            // A hunk's lines have their own numbers (none for a note).
+            let number: Int? = if let diffLines { line < diffLines.count ? diffLines[line].number : nil }
+                               else { firstFileLine + firstLine + line }
+            guard let number else { continue }
+            let label = String(number) as NSString
             let size = label.size(withAttributes: attributes)
             let baseline = height - origins[row].y
             label.draw(at: CGPoint(x: right - size.width, y: baseline - font.ascender), withAttributes: attributes)
@@ -205,6 +212,8 @@ final class CodePieceUIView: UIView {
 
     /// Room left of the code for the numbers: the peek's slide and the block's margin.
     static let gutterWidth = CodePeek.width + RawTextStyle.insets.left
+    /// A hunk's lines' backgrounds, edge to edge (past the code's margins).
+    private let diffBackground = CodeDiffBackgroundView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -213,6 +222,8 @@ final class CodePieceUIView: UIView {
         isUserInteractionEnabled = false  // taps go to SwiftUI (see `SymbolCodeText`)
         contentMode = .redraw
         clipsToBounds = false  // the numbers sit left of the code
+        diffBackground.isHidden = true
+        addSubview(diffBackground)
         numbers.isHidden = true
         addSubview(numbers)
         blameView.isHidden = true
@@ -240,6 +251,9 @@ final class CodePieceUIView: UIView {
             numbers.layout = layout
             numbers.firstFileLine = firstFileLine
             numbers.setNeedsDisplay()
+            diffBackground.layout = layout
+            diffBackground.isHidden = layout.diffLines == nil
+            diffBackground.setNeedsDisplay()
         }
         numbers.isHidden = !isPeeking
     }
@@ -248,6 +262,8 @@ final class CodePieceUIView: UIView {
         super.layoutSubviews()
         let width = Self.gutterWidth
         numbers.frame = CGRect(x: -width, y: 0, width: width, height: bounds.height)
+        let margin = RawTextStyle.insets.left
+        diffBackground.frame = CGRect(x: -margin, y: 0, width: bounds.width + 2 * margin, height: bounds.height)
         blameView.frame = CGRect(x: -width - CodePeek.blameWidth, y: 0, width: CodePeek.blameWidth,
                                  height: bounds.height)
     }
@@ -369,6 +385,41 @@ final class CodeBlameView: UIView {
 }
 
 /// A piece's line numbers, drawn once per layout and shown only while peeking.
+/// A hunk's lines' backgrounds behind its code: green for added lines, red for removed ones,
+/// across the block's whole width (it reaches past the code's margins).
+final class CodeDiffBackgroundView: UIView {
+    var layout: CodePieceLayout?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        contentMode = .redraw
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func draw(_ rect: CGRect) {
+        guard let layout, let marks = layout.diffLines else { return }
+        for row in layout.lineRows() {
+            let index = row.line - layout.firstLine
+            guard index >= 0, index < marks.count, let color = Self.color(for: marks[index].kind) else { continue }
+            color.setFill()
+            UIRectFill(CGRect(x: 0, y: row.top, width: bounds.width, height: row.bottom - row.top))
+        }
+    }
+
+    /// The same as the diff pages' (`DiffText`).
+    static func color(for kind: UnifiedDiff.Line.Kind) -> UIColor? {
+        switch kind {
+        case .added: UIColor.systemGreen.withAlphaComponent(0.16)
+        case .removed: UIColor.systemRed.withAlphaComponent(0.16)
+        case .hunk, .context, .note: nil
+        }
+    }
+}
+
 final class CodeLineNumbersView: UIView {
     var layout: CodePieceLayout?
     var firstFileLine = 1

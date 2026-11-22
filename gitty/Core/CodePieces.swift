@@ -43,6 +43,15 @@ nonisolated struct CodeText: Equatable, Sendable {
     let runs: [SyntaxHighlighter.Run]
     /// Its first line, counted from the block's first (0).
     let firstLine: Int
+    /// A diff album's hunk: each line's kind (its background) and number, in order.
+    var diffLines: [DiffLineMark]? = nil
+}
+
+/// A hunk's line in a block: added, removed or unchanged, and its number in the file (the new
+/// file's; the old one's for a removed line).
+nonisolated struct DiffLineMark: Equatable, Sendable {
+    let kind: UnifiedDiff.Line.Kind
+    let number: Int?
 }
 
 extension CodePieces {
