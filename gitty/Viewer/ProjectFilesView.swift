@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// The open project in the Project tab: its row (with the space it takes on this device), the
-/// filter (`*.cs *.md`, see `FileFilter`) that narrows the project's files at the Code level,
+/// filter (`Scripts`, `*.cs *.md`, see `FileFilter`) that narrows the project's files at the Code level,
 /// Git (the branch or tag, Clone or Pull, History), its review and its albums. The files
 /// themselves are at the Code level. Pull down to refresh the file list, or fetch a clone.
 struct ProjectFilesView: View {

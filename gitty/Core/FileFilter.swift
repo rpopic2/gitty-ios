@@ -1,9 +1,13 @@
 import Foundation
 
-/// A project's file filter, such as `*.cs *.md` or `src/*.swift !*Tests.cs`: space-separated
-/// globs. A file passes if it matches any pattern (or there are none) and no `!` pattern.
+/// A project's file filter, such as `Scripts`, `*.cs *.md` or `src/*.swift !*Tests.cs`:
+/// space-separated words and globs. A file passes if its path contains every word, matches any
+/// glob (or there are none), and nothing after a `!`.
 ///
-/// - A pattern without `/` matches the file name: `*.cs`, `README*`.
+/// - A word (no `*`, `?` or `/`) is found anywhere in the path inside the project, as the
+///   headers show it: `Scripts` keeps `Assets/Scripts/Player.cs` and `ScriptRunner.cs`. Several
+///   words narrow it further: `Scripts Editor`. `!Generated` leaves out every path with it.
+/// - A pattern with `*` or `?` and no `/` matches the file name: `*.cs`, `README*`.
 /// - A pattern with `/` matches the path inside the project, as the Project tab's headers show
 ///   it: `src/*.swift`. A pattern ending in `/` matches everything in that directory: `!Tests/`.
 /// - `*` is any run of characters within one name, `**` crosses directories (`src/**/*.c` also
@@ -12,32 +16,50 @@ import Foundation
 nonisolated struct FileFilter: Equatable, Sendable {
     /// What was typed.
     let text: String
+    /// Each must be in the path (lowercased).
+    private let words: [String]
     private let includes: [Pattern]
+    /// None may be in the path (lowercased).
+    private let excludedWords: [String]
     private let excludes: [Pattern]
 
     init(_ text: String) {
         self.text = text
-        var includes: [Pattern] = [], excludes: [Pattern] = []
+        var words: [String] = [], includes: [Pattern] = []
+        var excludedWords: [String] = [], excludes: [Pattern] = []
         for token in text.split(whereSeparator: { $0.isWhitespace || $0 == "," }) {
-            if token.hasPrefix("!") {
-                if let pattern = Pattern(token.dropFirst()) { excludes.append(pattern) }
-            } else if let pattern = Pattern(token) {
-                includes.append(pattern)
+            let excluded = token.hasPrefix("!")
+            let body = excluded ? token.dropFirst() : token
+            if Self.isWord(body) {
+                if excluded { excludedWords.append(body.lowercased()) } else { words.append(body.lowercased()) }
+            } else if let pattern = Pattern(body) {
+                if excluded { excludes.append(pattern) } else { includes.append(pattern) }
             }
         }
+        self.words = words
         self.includes = includes
+        self.excludedWords = excludedWords
         self.excludes = excludes
+    }
+
+    /// Text to find in the path, not a glob.
+    private static func isWord(_ token: Substring) -> Bool {
+        !token.isEmpty && !token.contains(where: { "*?/".contains($0) })
     }
 
     static let none = FileFilter("")
 
     /// Lets every file through.
-    var isEmpty: Bool { includes.isEmpty && excludes.isEmpty }
+    var isEmpty: Bool { words.isEmpty && includes.isEmpty && excludedWords.isEmpty && excludes.isEmpty }
 
     /// - Parameter path: the file's path inside the project, without a leading `/`.
     func matches(_ path: String) -> Bool {
         guard !isEmpty else { return true }
-        let path = Array(path.lowercased())
+        let lowered = path.lowercased()
+        if excludedWords.contains(where: { lowered.contains($0) }) { return false }
+        guard words.allSatisfy({ lowered.contains($0) }) else { return false }
+        guard !includes.isEmpty || !excludes.isEmpty else { return true }
+        let path = Array(lowered)
         let name = Array(path.split(separator: "/").last ?? [])
         if excludes.contains(where: { $0.matches(path: path, name: name) }) { return false }
         return includes.isEmpty || includes.contains { $0.matches(path: path, name: name) }

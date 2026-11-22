@@ -22,6 +22,29 @@ struct FileFilterTests {
         #expect(FileFilter("readme*").matches("docs/README.md"))
     }
 
+    @Test func aWordIsFoundAnywhereInThePath() {
+        let filter = FileFilter("Scripts")
+        #expect(filter.matches("Assets/Scripts/Player.cs"))  // a directory
+        #expect(filter.matches("Tools/ScriptsRunner.cs"))  // a name
+        #expect(filter.matches("assets/scripts/a.cs"))  // any case
+        #expect(!filter.matches("Assets/Art/Script.png"))  // "Script" isn't "Scripts"
+        #expect(!filter.matches("README.md"))
+    }
+
+    @Test func everyWordMustBeThere() {
+        let filter = FileFilter("Scripts Editor")
+        #expect(filter.matches("Assets/Scripts/Editor/Build.cs"))
+        #expect(!filter.matches("Assets/Scripts/Player.cs"))
+    }
+
+    @Test func wordsAndPatternsNarrowTogether() {
+        let filter = FileFilter("Scripts *.cs !Generated")
+        #expect(filter.matches("Assets/Scripts/Player.cs"))
+        #expect(!filter.matches("Assets/Scripts/notes.md"))  // not *.cs
+        #expect(!filter.matches("Assets/Player.cs"))  // no Scripts
+        #expect(!filter.matches("Assets/Scripts/Generated/Ids.cs"))  // left out
+    }
+
     @Test func questionMarkIsOneCharacter() {
         let filter = FileFilter("?.c")
         #expect(filter.matches("a.c"))
