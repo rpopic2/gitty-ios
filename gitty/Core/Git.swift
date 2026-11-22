@@ -92,9 +92,13 @@ nonisolated struct GitBlameHunk: Equatable, Sendable {
 /// A file's commits, newest first.
 nonisolated struct GitFileHistory: Sendable {
     let commits: [GitCommit]
-    /// More can be shown: the walk stopped at the limit, or reached the start of a shallow
-    /// clone (fetching more history goes further).
-    let canLoadMore: Bool
+    /// The walk stopped at the limit: there's more in the clone (no download needed).
+    var hasMoreHere = false
+    /// It reached the oldest commit a shallow clone has: older ones have to be fetched.
+    var reachedDownloadedStart = false
+
+    /// More can be shown, here or by fetching.
+    var canLoadMore: Bool { hasMoreHere || reachedDownloadedStart }
 }
 
 nonisolated final class GitRepository {
@@ -402,7 +406,7 @@ nonisolated final class GitRepository {
             git_commit_free(parent)
             if !Git.same(entry, parentEntry) { commits.append(Self.commit(commit)) }
         }
-        return GitFileHistory(commits: commits, canLoadMore: looked >= limit || reachedBoundary)
+        return GitFileHistory(commits: commits, hasMoreHere: looked >= limit, reachedDownloadedStart: reachedBoundary)
     }
 
     /// Who last changed each run of lines of `path` (relative to the repository), at HEAD.
@@ -462,7 +466,8 @@ nonisolated final class GitRepository {
             }
             commits.append(info)
         }
-        return GitFileHistory(commits: commits, canLoadMore: commits.count >= limit || reachedBoundary)
+        return GitFileHistory(commits: commits, hasMoreHere: commits.count >= limit && !reachedBoundary,
+                              reachedDownloadedStart: reachedBoundary)
     }
 
     /// The files a commit changed, against its first parent (everything, for the first commit

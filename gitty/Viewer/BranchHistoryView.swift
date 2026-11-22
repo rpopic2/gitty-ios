@@ -82,7 +82,7 @@ struct BranchHistoryView: View {
             }
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
-                Text("The history comes from a clone: Clone downloads the project with Git, its latest commit first, then more history as you scroll back.")
+                Text("The history comes from a clone: Clone downloads the project with Git, its latest commit only. Fetch Older, at the end of the history, downloads older commits when you want them.")
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
             }
         }
@@ -107,26 +107,19 @@ struct BranchHistoryView: View {
                     }
                 }
             }
-            if model.canLoadMore {
-                Button {
-                    Task { await model.loadMore() }
-                } label: {
-                    HStack {
-                        Text("Load More History")
-                        if model.isLoading {
-                            Spacer()
-                            ProgressView()
-                        }
-                    }
-                }
-                .disabled(model.isLoading)
+            if model.hasMoreHere {
+                // In the clone already: no download.
+                Button("Show More") { Task { await model.showMore() } }
+                    .disabled(model.isLoading)
+            } else if model.canFetchOlder {
+                OlderCommitsRow(fetch: model.olderFetch) { model.fetchOlder() }
             }
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
-                if model.commits.last?.isBoundary == true {
-                    Text("The oldest commit here is where the downloaded history starts: Load More History fetches 100 more.")
+                if model.canFetchOlder, !model.hasMoreHere {
+                    Text("The oldest commit here is where the downloaded history starts: Fetch Older downloads \(CloneStore.historyStep) older ones from GitHub.")
                 }
-                if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
+                if let error = model.errorMessage ?? model.olderFetch.errorMessage { Text(error).foregroundStyle(.red) }
             }
         }
     }
@@ -143,10 +136,14 @@ final class BranchHistoryModel {
     /// Roughly how much the clone downloads.
     private(set) var cloneEstimate: Int64?
     private(set) var commits: [GitCommit] = []
-    private(set) var canLoadMore = false
+    /// More commits are in the clone than listed.
+    private(set) var hasMoreHere = false
+    /// The list reaches where the clone's history starts: older commits are on GitHub.
+    private(set) var canFetchOlder = false
+    let olderFetch = OlderCommitsFetch()
     private(set) var isLoading = false
     private(set) var errorMessage: String?
-    /// How many commits are listed; Load More raises it.
+    /// How many commits are listed; Show More raises it.
     private var limit = BranchHistoryModel.pageSize
 
     static let pageSize = 100
@@ -164,7 +161,7 @@ final class BranchHistoryModel {
         project = await ProjectStore.shared.project(id: projectID)
         clone = await CloneStore.shared.record(forProject: projectID)
         hasLoaded = true
-        if clone != nil { await loadLog(deepeningIfShallow: true) }
+        if clone != nil { await loadLog() }
     }
 
     func cloneProject(estimate: Int64? = nil) async {
@@ -186,7 +183,7 @@ final class BranchHistoryModel {
         }
         listener.cancel()
         cloneProgress = nil
-        if clone != nil { await loadLog(deepeningIfShallow: true) }
+        if clone != nil { await loadLog() }
     }
 
     /// Pull to refresh: the branch's latest commit.
@@ -198,38 +195,34 @@ final class BranchHistoryModel {
         } catch {
             errorMessage = error.localizedDescription
         }
-        await loadLog(deepeningIfShallow: false)
+        await loadLog()
     }
 
-    /// More commits: further back, fetching more history from GitHub when the downloaded
-    /// history is used up.
-    func loadMore() async {
-        isLoading = true
+    /// More of the commits already in the clone (no download).
+    func showMore() async {
+        limit += Self.pageSize
+        await loadLog()
+    }
+
+    /// Fetch Older: older commits from GitHub, then listed.
+    func fetchOlder() {
         errorMessage = nil
-        do {
-            if commits.last?.isBoundary == true {
-                try await CloneStore.shared.loadMoreHistory(projectID: projectID)
-            }
-            limit += Self.pageSize
-        } catch {
-            errorMessage = error.localizedDescription
+        olderFetch.start(projectID: projectID) { [weak self] in
+            guard let self else { return }
+            limit = max(limit, commits.count + CloneStore.historyStep)
+            await loadLog()
         }
-        await loadLog(deepeningIfShallow: false)
     }
 
-    /// - Parameter deepeningIfShallow: a fresh clone has just its latest commit: fetch the
-    ///   next ones right away.
-    private func loadLog(deepeningIfShallow: Bool) async {
+    /// The commits in the clone, offline: nothing is fetched here (Fetch Older does that).
+    private func loadLog() async {
         isLoading = true
         defer { isLoading = false }
         do {
-            var result = try await CloneStore.shared.log(projectID: projectID, limit: limit)
-            if deepeningIfShallow, result.commits.count < 2, result.commits.last?.isBoundary == true {
-                try await CloneStore.shared.loadMoreHistory(projectID: projectID)
-                result = try await CloneStore.shared.log(projectID: projectID, limit: limit)
-            }
+            let result = try await CloneStore.shared.log(projectID: projectID, limit: limit)
             commits = result.commits
-            canLoadMore = result.canLoadMore
+            hasMoreHere = result.hasMoreHere
+            canFetchOlder = result.reachedDownloadedStart
         } catch {
             errorMessage = error.localizedDescription
         }

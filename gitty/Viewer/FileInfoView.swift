@@ -161,28 +161,21 @@ struct FileInfoView: View {
             ForEach(model.history.dropFirst()) { commit in
                 commitLink(commit, location: location)
             }
-            if model.canLoadMore {
-                Button {
-                    Task { await model.loadMore() }
-                } label: {
-                    HStack {
-                        Text("Load More History")
-                        if model.isLoading {
-                            Spacer()
-                            ProgressView()
-                        }
-                    }
-                }
-                .disabled(model.isLoading)
+            if model.hasMoreHere {
+                // In the clone already: no download.
+                Button("Show More") { Task { await model.showMore() } }
+                    .disabled(model.isLoading)
+            } else if model.canFetchOlder {
+                OlderCommitsRow(fetch: model.olderFetch) { model.fetchOlder() }
             }
         } header: {
             Text("History")
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 if model.history.last?.isBoundary == true {
-                    Text("The oldest commit here is where the downloaded history starts: the file may have changed in it or before.")
+                    Text("The oldest commit here is where the downloaded history starts: the file may have changed in it or before. Fetch Older downloads \(CloneStore.historyStep) older commits from GitHub.")
                 }
-                if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
+                if let error = model.errorMessage ?? model.olderFetch.errorMessage { Text(error).foregroundStyle(.red) }
             }
         }
     }
@@ -252,14 +245,15 @@ final class FileInfoModel {
     /// Roughly how much the clone downloads.
     private(set) var cloneEstimate: Int64?
     private(set) var history: [GitCommit] = []
-    private(set) var canLoadMore = false
+    /// More of the clone's commits to look through.
+    private(set) var hasMoreHere = false
+    /// The walk reached where the clone's history starts: older commits are on GitHub.
+    private(set) var canFetchOlder = false
+    let olderFetch = OlderCommitsFetch()
     private(set) var isLoading = false
     private(set) var errorMessage: String?
-    /// How many commits the history walk looks at; Load More raises it.
+    /// How many commits the history walk looks at; Show More raises it.
     private var limit = 300
-
-    /// When a fresh shallow clone has no change of this file yet: fetch more this many times.
-    private static let automaticDeepening = 3
 
     /// From the project's file list, until the file is downloaded.
     private let knownSize: Int?
@@ -285,7 +279,7 @@ final class FileInfoModel {
         }
         if let location { clone = await CloneStore.shared.record(forProject: location.project.id) }
         hasLoaded = true
-        if clone != nil { await loadHistory(deepeningIfEmpty: true) }
+        if clone != nil { await loadHistory() }
     }
 
     /// Clones the project, then shows the history.
@@ -308,43 +302,38 @@ final class FileInfoModel {
         }
         listener.cancel()
         cloneProgress = nil
-        if clone != nil { await loadHistory(deepeningIfEmpty: true) }
+        if clone != nil { await loadHistory() }
     }
 
-    /// More commits: looks further back, fetching more history from GitHub when the clone's
-    /// downloaded history is used up.
-    func loadMore() async {
+    /// Looks further back through the commits already in the clone (no download).
+    func showMore() async {
+        limit += 300
+        await loadHistory()
+    }
+
+    /// Fetch Older: older commits from GitHub, then looked through.
+    func fetchOlder() {
         guard let projectID = location?.project.id else { return }
-        isLoading = true
         errorMessage = nil
-        do {
-            if history.last?.isBoundary == true || history.isEmpty {
-                try await CloneStore.shared.loadMoreHistory(projectID: projectID)
-            }
-            limit += 300
-        } catch {
-            errorMessage = error.localizedDescription
+        olderFetch.start(projectID: projectID) { [weak self] in
+            guard let self else { return }
+            limit += CloneStore.historyStep
+            await loadHistory()
         }
-        await loadHistory(deepeningIfEmpty: false)
     }
 
-    private func loadHistory(deepeningIfEmpty: Bool) async {
+    /// The file's commits in the clone, offline: nothing is fetched here (Fetch Older does that,
+    /// when asked; a fresh shallow clone only knows the file is there).
+    private func loadHistory() async {
         guard let location else { return }
         let projectID = location.project.id
         isLoading = true
         defer { isLoading = false }
         do {
-            var result = try await CloneStore.shared.history(projectID: projectID, path: location.path, limit: limit)
-            var deepened = 0
-            // A shallow clone only knows the file is there: fetch until a real change shows up.
-            while deepeningIfEmpty, result.canLoadMore, !result.commits.contains(where: { !$0.isBoundary }),
-                  deepened < Self.automaticDeepening {
-                try await CloneStore.shared.loadMoreHistory(projectID: projectID)
-                deepened += 1
-                result = try await CloneStore.shared.history(projectID: projectID, path: location.path, limit: limit)
-            }
+            let result = try await CloneStore.shared.history(projectID: projectID, path: location.path, limit: limit)
             history = result.commits
-            canLoadMore = result.canLoadMore
+            hasMoreHere = result.hasMoreHere
+            canFetchOlder = result.reachedDownloadedStart
         } catch {
             errorMessage = error.localizedDescription
         }

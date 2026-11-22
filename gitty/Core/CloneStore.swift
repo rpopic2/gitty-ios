@@ -230,8 +230,11 @@ actor CloneStore {
 
     /// The first clone: the latest commit only.
     static let initialDepth = 1
-    /// How many more commits each "load more" fetches.
+    /// How many more commits a comparison's Load More History fetches.
     static let deepenStep = 100
+    /// How many older commits a history's Fetch Older fetches: few, so it's quick (each one
+    /// brings the files it changed).
+    static let historyStep = 20
 
     private let index: CloneIndex
     private let documents: DocumentStore
@@ -455,15 +458,18 @@ actor CloneStore {
         }
     }
 
-    /// Fetches `deepenStep` more commits of the checked-out branch or tag.
-    func loadMoreHistory(projectID: String) async throws {
+    /// Fetches `historyStep` older commits of the checked-out branch or tag (only when asked:
+    /// the history shows what's in the clone, offline). Cancelled with its task.
+    func loadMoreHistory(projectID: String,
+                         progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws {
         guard var record = index.record(forProject: projectID), let depth = record.depth else { return }
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
-        let deeper = depth + Self.deepenStep
+        let deeper = depth + Self.historyStep
         let ref = record.ref
         try await serially(projectID) {
-            try GitRepository(at: folder).fetch(ref, depth: deeper, token: token, isCancelled: { Task.isCancelled })
+            try GitRepository(at: folder).fetch(ref, depth: deeper, token: token, progress: progress,
+                                                isCancelled: { Task.isCancelled })
         }
         record.depth = deeper
         index.save(record)
