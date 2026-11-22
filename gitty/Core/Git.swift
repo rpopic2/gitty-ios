@@ -308,6 +308,30 @@ nonisolated final class GitRepository {
         return names
     }
 
+    /// Deletes the downloaded branches and tags `origin` no longer has (`git fetch --prune`),
+    /// except `kept` (the one checked out: its files are listed from its ref). Only the refs go:
+    /// their commits stay in the clone until it's downloaded again. Returns their names.
+    @discardableResult
+    func pruneRefs(notIn remote: ProjectRefs, keeping kept: GitRef) -> [String] {
+        let branches = Set(remote.branches), tags = Set(remote.tags)
+        var gone: [(reference: String, name: String)] = []
+        for (glob, prefix, names) in [("refs/remotes/origin/*", "refs/remotes/origin/", branches),
+                                      ("refs/tags/*", "refs/tags/", tags)] {
+            var iterator: UnsafeMutablePointer<git_reference_iterator>?
+            guard git_reference_iterator_glob_new(&iterator, pointer, glob) == 0 else { continue }
+            defer { git_reference_iterator_free(iterator) }
+            var name: UnsafePointer<CChar>?
+            while git_reference_next_name(&name, iterator) == 0, let name {
+                let full = String(cString: name)
+                guard full.hasPrefix(prefix), full != "refs/remotes/origin/HEAD", full != kept.localReference else { continue }
+                let short = String(full.dropFirst(prefix.count))
+                if !names.contains(short) { gone.append((full, short)) }
+            }
+        }
+        // Once the iterator is done with them.
+        return gone.compactMap { git_reference_remove(pointer, $0.reference) == 0 ? $0.name : nil }
+    }
+
     /// How many commits `newer` has that `older` doesn't (0 if either isn't known).
     func commitsAhead(_ newer: String, of older: String) -> Int {
         var newerID = git_oid(), olderID = git_oid()

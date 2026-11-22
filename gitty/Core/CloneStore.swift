@@ -207,6 +207,8 @@ nonisolated enum CloneError: LocalizedError, Equatable {
     case notFetched(String)
     /// The downloaded history doesn't go back far enough (to where two branches split).
     case historyTooShort
+    /// The branch or tag checked out isn't on GitHub any more (what was downloaded stays).
+    case deletedOnRemote(String)
 
     var errorDescription: String? {
         switch self {
@@ -218,6 +220,8 @@ nonisolated enum CloneError: LocalizedError, Equatable {
             "“\(ref)” isn’t downloaded. Pull it to read it."
         case .historyTooShort:
             "The downloaded history doesn’t go back to where they split. Load more history to compare them."
+        case .deletedOnRemote(let ref):
+            "“\(ref)” was deleted on GitHub. You can keep reading it here, or switch to another branch."
         }
     }
 }
@@ -355,9 +359,12 @@ actor CloneStore {
         }) ?? []
     }
 
-    /// Pull down in the project: downloads the branch or tag's latest commits (as much history as
-    /// before) without checking them out, and lists the remote's branches and tags again.
-    /// Returns how many commits are new (`newCommits`); Pull checks them out.
+    /// Pull down in the project: lists the remote's branches and tags again, deletes the
+    /// downloaded ones it doesn't have any more (like `git fetch --prune`, except the one checked
+    /// out), and downloads the branch or tag's latest commits (as much history as before) without
+    /// checking them out. Returns how many commits are new (`newCommits`); Pull checks them out.
+    /// - Throws: `CloneError.deletedOnRemote` when the one checked out is gone from GitHub
+    ///   (nothing to fetch; the remote's list is saved all the same).
     @discardableResult
     func fetch(projectID: String, progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws -> Int {
         guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
@@ -366,16 +373,27 @@ actor CloneStore {
         let ref = record.ref
         let depth = record.depth
         let checkedOut = record.commit
-        let (refs, newCommits) = try await serially(projectID) { () throws -> (ProjectRefs?, Int) in
+        let (refs, newCommits) = try await serially(projectID) { () throws -> (ProjectRefs?, Int?) in
             let repository = try GitRepository(at: folder)
-            try repository.fetch(ref, depth: depth, token: token, progress: progress, isCancelled: { Task.isCancelled })
+            // Listed first: offline or refused, the fetch below fails as before, and nothing is pruned.
             let refs = try? repository.remoteRefs(token: token)
+            if let refs {
+                repository.pruneRefs(notIn: refs, keeping: ref)
+                let names: [String]
+                switch ref {
+                case .branch: names = refs.branches
+                case .tag: names = refs.tags
+                }
+                if !names.contains(ref.name) { return (refs, nil) }
+            }
+            try repository.fetch(ref, depth: depth, token: token, progress: progress, isCancelled: { Task.isCancelled })
             let latest = repository.fetchedCommit(of: ref) ?? checkedOut
             return (refs, latest == checkedOut ? 0 : max(1, repository.commitsAhead(latest, of: checkedOut)))
         }
         if let refs { record.remoteRefs = refs }
-        record.newCommits = newCommits
+        record.newCommits = newCommits ?? 0
         index.save(record)
+        guard let newCommits else { throw CloneError.deletedOnRemote(ref.name) }
         return newCommits
     }
 

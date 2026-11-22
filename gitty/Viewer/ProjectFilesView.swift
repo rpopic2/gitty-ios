@@ -568,7 +568,14 @@ struct ProjectFilesView: View {
         guard let ref = clone?.ref else { return }
         await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID) }) { estimate in
             startDownload(String(localized: "Fetching…"), estimate: estimate) { progress in
-                try await CloneStore.shared.fetch(projectID: projectID, progress: progress)
+                do {
+                    try await CloneStore.shared.fetch(projectID: projectID, progress: progress)
+                } catch {
+                    // The branch list may have changed all the same (pruned, or this one deleted).
+                    clone = await CloneStore.shared.record(forProject: projectID)
+                    await loadRefs()
+                    throw error
+                }
                 clone = await CloneStore.shared.record(forProject: projectID)
                 await loadRefs()
             }
