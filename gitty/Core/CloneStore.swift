@@ -344,14 +344,14 @@ actor CloneStore {
         return try await serially(projectID) { try GitRepository(at: folder).tree(of: ref) }
     }
 
-    /// Whether the clone has downloaded these branches and tags (by name), for the branch menu.
+    /// The branches and tags the clone has downloaded (by name), for the branch menu: from the
+    /// clone's own refs. (From the remote's list, a clone made before it was kept had none: every
+    /// branch asked to be pulled again, even one pulled a minute before.)
     func fetchedRefs(projectID: String) async -> Set<String> {
-        guard let record = index.record(forProject: projectID), let refs = record.remoteRefs else { return [] }
+        guard let record = index.record(forProject: projectID) else { return [] }
         let folder = index.folder(of: record)
         return (try? await serially(projectID) { () throws -> Set<String> in
-            let repository = try GitRepository(at: folder)
-            let all = refs.branches.map(GitRef.branch) + refs.tags.map(GitRef.tag)
-            return Set(all.filter { repository.fetchedCommit(of: $0) != nil }.map(\.name))
+            try GitRepository(at: folder).fetchedRefNames()
         }) ?? []
     }
 

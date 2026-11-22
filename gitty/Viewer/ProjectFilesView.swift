@@ -683,10 +683,11 @@ struct ProjectFilesView: View {
     private func loadRefs() async {
         if let clone, let remote = clone.remoteRefs {
             refs = remote
-            fetchedRefs = await CloneStore.shared.fetchedRefs(projectID: projectID)
         } else {
             refs = try? await ProjectStore.shared.refs(for: projectID)
         }
+        // Whatever the list came from: a clone without the remote's list still knows what it has.
+        if clone != nil { fetchedRefs = await CloneStore.shared.fetchedRefs(projectID: projectID) }
     }
 
     /// Shows another branch or tag. A cloned project checks out one it has downloaded (offline,

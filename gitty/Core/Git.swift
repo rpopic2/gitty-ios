@@ -284,6 +284,24 @@ nonisolated final class GitRepository {
         return Git.string(git_object_id(object))
     }
 
+    /// The branches and tags this clone has downloaded, by name: its own refs, so it doesn't
+    /// depend on the remote's list (which older clones didn't keep).
+    func fetchedRefNames() -> Set<String> {
+        var names: Set<String> = []
+        for (glob, prefix) in [("refs/remotes/origin/*", "refs/remotes/origin/"), ("refs/tags/*", "refs/tags/")] {
+            var iterator: OpaquePointer?
+            guard git_reference_iterator_glob_new(&iterator, pointer, glob) == 0 else { continue }
+            defer { git_reference_iterator_free(iterator) }
+            var name: UnsafePointer<CChar>?
+            while git_reference_next_name(&name, iterator) == 0, let name {
+                let full = String(cString: name)
+                guard full.hasPrefix(prefix), full != "refs/remotes/origin/HEAD" else { continue }
+                names.insert(String(full.dropFirst(prefix.count)))
+            }
+        }
+        return names
+    }
+
     /// How many commits `newer` has that `older` doesn't (0 if either isn't known).
     func commitsAhead(_ newer: String, of older: String) -> Int {
         var newerID = git_oid(), olderID = git_oid()
