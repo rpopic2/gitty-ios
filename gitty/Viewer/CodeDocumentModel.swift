@@ -687,11 +687,12 @@ final class CodeDocumentModel {
     func loadMoreDiffAlbumHistory() async throws {
         guard let album = activeAlbum, case .comparison(let base, let head, _) = album.diff?.source,
               let projectID = symbolsProjectID else { return }
-        let refs: [GitRef] = [base, head].compactMap { side in
+        var refs: [GitRef] = []
+        for side in [base, head] {
             switch side {
-            case .branch(let name): .branch(name)
-            case .tag(let name): .tag(name)
-            default: nil
+            case .branch(let name): refs.append(GitRef.branch(name))
+            case .tag(let name): refs.append(GitRef.tag(name))
+            default: break
             }
         }
         try await CloneStore.shared.loadMoreHistory(for: refs, projectID: projectID)
