@@ -506,8 +506,9 @@ nonisolated final class GitRepository {
     }
 
     /// One file's changes from one commit to another, as a unified diff.
-    func patch(from before: String, to after: String, path: String) throws -> String {
-        try withDiff(from: before, to: after, path: path, Self.patchText)
+    /// - Parameter wholeFile: every line of the file around the changes, not just 3.
+    func patch(from before: String, to after: String, path: String, wholeFile: Bool = false) throws -> String {
+        try withDiff(from: before, to: after, path: path, wholeFile: wholeFile, Self.patchText)
     }
 
     private static func changeList(_ diff: OpaquePointer?) -> [GitChange] {
@@ -531,8 +532,9 @@ nonisolated final class GitRepository {
 
     /// One file's changes in a commit, as a unified diff (`diff --git` header and hunks).
     /// Empty if the commit didn't change it.
-    func patch(in commitID: String, path: String) throws -> String {
-        try withDiff(of: commitID, path: path, Self.patchText)
+    /// - Parameter wholeFile: every line of the file around the changes, not just 3.
+    func patch(in commitID: String, path: String, wholeFile: Bool = false) throws -> String {
+        try withDiff(of: commitID, path: path, wholeFile: wholeFile, Self.patchText)
     }
 
     private static func patchText(_ diff: OpaquePointer?) -> String {
@@ -626,7 +628,7 @@ nonisolated final class GitRepository {
     }
 
     /// The diff of a commit against its first parent, limited to `path` if given.
-    private func withDiff<Result>(of commitID: String, path: String?,
+    private func withDiff<Result>(of commitID: String, path: String?, wholeFile: Bool = false,
                                   _ body: (OpaquePointer?) throws -> Result) throws -> Result {
         var id = git_oid()
         try Git.check(git_oid_fromstr(&id, commitID))
@@ -645,11 +647,11 @@ nonisolated final class GitRepository {
             }
         }
         defer { git_tree_free(parentTree) }
-        return try withDiff(parentTree, tree, path: path, body)
+        return try withDiff(parentTree, tree, path: path, wholeFile: wholeFile, body)
     }
 
     /// The diff from one commit's files to another's, limited to `path` if given.
-    private func withDiff<Result>(from before: String, to after: String, path: String?,
+    private func withDiff<Result>(from before: String, to after: String, path: String?, wholeFile: Bool = false,
                                   _ body: (OpaquePointer?) throws -> Result) throws -> Result {
         func tree(of commitID: String) throws -> OpaquePointer? {
             var id = git_oid()
@@ -665,14 +667,17 @@ nonisolated final class GitRepository {
         defer { git_tree_free(old) }
         let new = try tree(of: after)
         defer { git_tree_free(new) }
-        return try withDiff(old, new, path: path, body)
+        return try withDiff(old, new, path: path, wholeFile: wholeFile, body)
     }
 
     /// The diff from one tree to another (`nil`: nothing, so everything is added).
     private func withDiff<Result>(_ parentTree: OpaquePointer?, _ tree: OpaquePointer?, path: String?,
+                                  wholeFile: Bool = false,
                                   _ body: (OpaquePointer?) throws -> Result) throws -> Result {
         var options = git_diff_options()
         git_diff_options_init(&options, UInt32(GIT_DIFF_OPTIONS_VERSION))
+        // The whole file as one hunk: more context than any file has lines.
+        if wholeFile { options.context_lines = 1_000_000_000 }
         let paths = path.map { [$0] } ?? []
         return try Git.withStrArray(paths) { pathspec in
             if path != nil {

@@ -45,7 +45,7 @@ nonisolated enum GitSide: Hashable, Codable, Sendable {
 
 /// Two sides to compare, and how.
 nonisolated struct GitComparison: Hashable, Sendable {
-    enum Mode: String, Hashable, Sendable {
+    enum Mode: String, Hashable, Codable, Sendable {
         /// What `head` changed since it split off `base` (`base...head`, like a pull request).
         case sinceSplit
         /// The difference between the two, directly (`base..head`): `base`'s own changes since

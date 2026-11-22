@@ -562,6 +562,7 @@ final class CodeDocumentModel {
     func show(album: Album?) {
         guard album != self.album else { return }
         self.album = album
+        diffAlbumShown = nil  // a diff album is worked out again each time it shows
         publishAlbum()
         indexAlbumFilesIfNeeded()
     }
@@ -585,6 +586,11 @@ final class CodeDocumentModel {
 
     /// Works out `albumSymbols`, loading the text of files with lines in the album first.
     private func publishAlbum() {
+        if let album = activeAlbum, let diff = album.diff {
+            publishDiffAlbum(album, diff)
+            return
+        }
+        diffAlbumState = nil
         guard let album = activeAlbum, case .ready(let all) = symbolIndex else {
             if !albumSymbols.isEmpty { albumSymbols = [] }
             return
@@ -609,6 +615,117 @@ final class CodeDocumentModel {
             guard let text else { return }
             albumTexts[file] = text as NSString
             publishAlbum()
+        }
+    }
+
+    // MARK: - Diff album
+
+    /// A diff album being worked out, or why it can't show.
+    enum DiffAlbumState: Equatable {
+        case loading
+        /// A side of its comparison isn't in the clone (its label): Pull downloads it.
+        case notDownloaded(String)
+        /// Where its branches split isn't downloaded.
+        case historyTooShort
+        case failed(String)
+    }
+
+    private(set) var diffAlbumState: DiffAlbumState?
+    /// The commits the diff album's cards are between, for their pages.
+    @ObservationIgnored private(set) var diffSides: DiffSides?
+    /// The diff album the cards are for (worked out once each time it shows).
+    @ObservationIgnored private var diffAlbumShown: UUID?
+    @ObservationIgnored private var diffAlbumTask: Task<Void, Never>?
+    /// Diff pages' text: a changed file's whole diff (by path), loaded when its page needs it.
+    private var diffTexts: [String: NSAttributedString] = [:]
+    @ObservationIgnored private var loadingDiffTexts: Set<String> = []
+
+    /// Works out a diff album's cards from the clone, offline: a comparison as its branches are
+    /// in the clone now.
+    private func publishDiffAlbum(_ album: Album, _ diff: AlbumDiff) {
+        guard diffAlbumShown != album.id else { return }
+        diffAlbumShown = album.id
+        diffAlbumTask?.cancel()
+        albumSymbols = []
+        diffTexts = [:]
+        diffAlbumState = .loading
+        diffAlbumTask = Task {
+            guard let project = await ProjectStore.shared.project(id: album.projectID) else { return }
+            do {
+                let (sides, cards) = try await DiffAlbumContents.load(diff, project: project)
+                guard !Task.isCancelled, activeAlbum?.id == album.id else { return }
+                diffSides = sides
+                albumSymbols = cards
+                diffAlbumState = nil
+            } catch {
+                guard !Task.isCancelled, activeAlbum?.id == album.id else { return }
+                switch error {
+                case CloneError.notFetched(let side): diffAlbumState = .notDownloaded(side)
+                case CloneError.historyTooShort: diffAlbumState = .historyTooShort
+                default: diffAlbumState = .failed(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// The diff album's side that isn't downloaded: Pull fetches it (its latest commit, nothing
+    /// checked out), then the album shows.
+    func pullDiffAlbumSide(_ label: String) async throws {
+        guard let album = activeAlbum, case .comparison(let base, let head, _) = album.diff?.source,
+              let projectID = symbolsProjectID else { return }
+        for side in [base, head] where side.label == label {
+            switch side {
+            case .branch(let name): try await CloneStore.shared.fetchRef(.branch(name), projectID: projectID)
+            case .tag(let name): try await CloneStore.shared.fetchRef(.tag(name), projectID: projectID)
+            default: continue
+            }
+        }
+        reloadDiffAlbum()
+    }
+
+    /// More history for the diff album's branches, so where they split can be found.
+    func loadMoreDiffAlbumHistory() async throws {
+        guard let album = activeAlbum, case .comparison(let base, let head, _) = album.diff?.source,
+              let projectID = symbolsProjectID else { return }
+        let refs: [GitRef] = [base, head].compactMap { side in
+            switch side {
+            case .branch(let name): .branch(name)
+            case .tag(let name): .tag(name)
+            default: nil
+            }
+        }
+        try await CloneStore.shared.loadMoreHistory(for: refs, projectID: projectID)
+        reloadDiffAlbum()
+    }
+
+    func reloadDiffAlbum() {
+        diffAlbumShown = nil
+        publishAlbum()
+    }
+
+    /// A diff page's text: its file's whole diff, every line with the changes in it (`nil`
+    /// until it's loaded; then the page shows it).
+    func diffText(of part: DiffPart) -> NSAttributedString? {
+        if let known = diffTexts[part.path] { return known }
+        loadDiffText(part)
+        return nil
+    }
+
+    private func loadDiffText(_ part: DiffPart) {
+        guard let sides = diffSides, let projectID = symbolsProjectID, !loadingDiffTexts.contains(part.path) else { return }
+        loadingDiffTexts.insert(part.path)
+        let style = CodeTextStyle.current
+        let path = part.path
+        Task {
+            defer { loadingDiffTexts.remove(path) }
+            guard let patch = try? await DiffAlbumContents.patch(of: path, sides: sides, projectID: projectID,
+                                                                 wholeFile: true) else { return }
+            let fileExtension = (path as NSString).pathExtension
+            // `RenderedText` carries it back from the background (it's Sendable).
+            let rendered = await Task.detached(priority: .userInitiated) {
+                DiffText.render(UnifiedDiff(patch), fileExtension: fileExtension, style: style)
+            }.value
+            if let rendered { diffTexts[path] = rendered.attributedString }
         }
     }
 
@@ -642,6 +759,8 @@ final class CodeDocumentModel {
     /// The text of one symbol, styled like the file. `nil` while another file's text is loading.
     /// A file's own entry gets the file's text object itself, the same one until it's refreshed.
     func text(of symbol: CodeSymbol) -> NSAttributedString? {
+        // A diff album's card: its file's whole diff.
+        if let diff = symbol.diff { return diffText(of: diff) }
         guard let full = fullText(of: symbol.fileURL) else { return nil }
         // A file's entry is the whole file (one not indexed yet doesn't know its length).
         if symbol.kind == .file || symbol.range == NSRange(location: 0, length: full.length) { return full }

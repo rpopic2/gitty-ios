@@ -514,11 +514,13 @@ actor CloneStore {
         return try await serially(projectID) { try GitRepository(at: folder).changes(from: before, to: after) }
     }
 
-    func patch(projectID: String, from before: String, to after: String, path: String) async throws -> String {
+    /// - Parameter wholeFile: every line of the file around the changes, not just 3.
+    func patch(projectID: String, from before: String, to after: String, path: String,
+               wholeFile: Bool = false) async throws -> String {
         guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
         let folder = index.folder(of: record)
         return try await serially(projectID) {
-            try GitRepository(at: folder).patch(from: before, to: after, path: path)
+            try GitRepository(at: folder).patch(from: before, to: after, path: path, wholeFile: wholeFile)
         }
     }
 
@@ -573,10 +575,13 @@ actor CloneStore {
         return try await serially(projectID) { try GitRepository(at: folder).changes(in: commit) }
     }
 
-    func patch(projectID: String, commit: String, path: String) async throws -> String {
+    /// - Parameter wholeFile: every line of the file around the changes, not just 3.
+    func patch(projectID: String, commit: String, path: String, wholeFile: Bool = false) async throws -> String {
         guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
         let folder = index.folder(of: record)
-        return try await serially(projectID) { try GitRepository(at: folder).patch(in: commit, path: path) }
+        return try await serially(projectID) {
+            try GitRepository(at: folder).patch(in: commit, path: path, wholeFile: wholeFile)
+        }
     }
 
     // MARK: Running

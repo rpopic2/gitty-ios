@@ -11,13 +11,18 @@ nonisolated struct Album: Codable, Identifiable, Hashable, Sendable {
     var projectID: String
     var items: [AlbumItem]
     var createdAt: Date
+    /// A diff album: the changes it shows, a card per file and hunk (`DiffAlbumContents`), and
+    /// no items.
+    var diff: AlbumDiff?
 
-    init(id: UUID = UUID(), name: String, projectID: String, items: [AlbumItem] = [], createdAt: Date = .now) {
+    init(id: UUID = UUID(), name: String, projectID: String, items: [AlbumItem] = [], createdAt: Date = .now,
+         diff: AlbumDiff? = nil) {
         self.id = id
         self.name = name
         self.projectID = projectID
         self.items = items
         self.createdAt = createdAt
+        self.diff = diff
     }
 
     /// Whether `item` is in the album itself (not just through its whole file).
@@ -232,11 +237,12 @@ final class AlbumStore {
         albums.filter { $0.projectID == projectID }
     }
 
-    /// A new album, with `items` in it.
+    /// A new album, with `items` in it (or a diff album, showing `diff`).
     @discardableResult
-    func create(named name: String, projectID: String, items: [AlbumItem] = []) -> Album {
+    func create(named name: String, projectID: String, items: [AlbumItem] = [], diff: AlbumDiff? = nil) -> Album {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        var album = Album(name: trimmed.isEmpty ? String(localized: "Untitled Album") : trimmed, projectID: projectID)
+        var album = Album(name: trimmed.isEmpty ? String(localized: "Untitled Album") : trimmed, projectID: projectID,
+                          diff: diff)
         album.items = Self.adding(items, to: [])
         albums.append(album)
         save()

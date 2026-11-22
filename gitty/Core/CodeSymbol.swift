@@ -10,6 +10,8 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
         case file
         /// Some lines of a file, kept in an album (see `AlbumContents`).
         case lines
+        /// A changed part of a file, in a diff album (`diff` has its lines).
+        case hunk
 
         var title: String {
             switch self {
@@ -23,6 +25,7 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
             case .enumMember: "Enum Case"
             case .file: "File"
             case .lines: "Lines"
+            case .hunk: "Change"
             }
         }
 
@@ -38,6 +41,7 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
             case .enumMember: "e.square"
             case .file: "doc.text"
             case .lines: "text.alignleft"
+            case .hunk: "plusminus"
             }
         }
     }
@@ -64,6 +68,8 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
     /// A file's entry whose symbols aren't known yet (being read in the background, or when it
     /// shows): just its title for now.
     var isIndexed = true
+    /// A diff album's card: its file's change, and for a hunk its lines.
+    var diff: DiffPart? = nil
 
     /// "Line 12", "Lines 12–30", or "File" for a file's own entry.
     var lineLabel: String {
@@ -112,6 +118,6 @@ nonisolated struct CodeSymbol: Identifiable, Hashable, Sendable {
     /// The same symbol at another place in a combined list, from `file`.
     func moved(to id: Int, file: URL?) -> CodeSymbol {
         CodeSymbol(id: id, name: name, kind: kind, range: range, line: line, preview: preview, fileURL: file,
-                   endLine: endLine, isDownloaded: isDownloaded, isIndexed: isIndexed)
+                   endLine: endLine, isDownloaded: isDownloaded, isIndexed: isIndexed, diff: diff)
     }
 }

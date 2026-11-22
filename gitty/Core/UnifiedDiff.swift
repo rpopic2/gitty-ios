@@ -4,8 +4,8 @@ import Foundation
 /// removed and unchanged lines with their line numbers. The `diff --git`, `index`, `---` and
 /// `+++` lines are left out: the page says which file it is.
 nonisolated struct UnifiedDiff: Equatable, Sendable {
-    nonisolated struct Line: Equatable, Sendable {
-        enum Kind: Equatable, Sendable {
+    nonisolated struct Line: Hashable, Sendable {
+        enum Kind: Hashable, Sendable {
             /// `@@ -10,7 +10,8 @@ func draw()`
             case hunk
             case added, removed, context
