@@ -72,6 +72,8 @@ struct CodeScreen: View {
     @State private var collapseRequest: CollapseRequest?
     /// The file whose info and history are showing (Show History in the Code level's menu).
     @State private var historyFile: HistoryFile?
+    /// Pull or Load More History failed, for a diff album.
+    @State private var diffAlbumError: String?
     @State private var historyDetent: PresentationDetent = .large
 
     private struct HistoryFile: Identifiable {
@@ -200,6 +202,13 @@ struct CodeScreen: View {
         } message: { message in
             Text(message)
         }
+        .alert("Couldn’t Download", isPresented: Binding(get: { diffAlbumError != nil },
+                                                          set: { if !$0 { diffAlbumError = nil } }),
+               presenting: diffAlbumError) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
+        }
     }
 
     private var content: some View {
@@ -314,6 +323,8 @@ struct CodeScreen: View {
             )
             // The bar collapsing redraws this screen, not the list.
             .equatable()
+            // A diff album that can't show its cards yet says why, over the empty list.
+            .overlay { diffAlbumNote }
             // A fresh list for each album, and once the project's files are in, when the open file
             // showed alone before them (the list finds its symbol by name). Searches go on results pages: this list is never filtered.
             .id([model.activeAlbum?.id.uuidString ?? "", model.projectSymbolsLoaded ? "project" : "file"])
@@ -333,6 +344,7 @@ struct CodeScreen: View {
     private static let screenSourceID = AnyHashable("codeScreen")
 
     private func openPager(at symbol: CodeSymbol, anchor: PageAnchor?) {
+        if let diff = symbol.diff { return openDiffPage(at: symbol, diff, anchor: anchor) }
         let id = UUID()
         // Where its code was tapped, the page opens at those lines and fades in over them
         // (zooming from the whole screen) instead of zooming from the middle.
@@ -344,6 +356,76 @@ struct CodeScreen: View {
         stackSearch = nil
         cardPlaces.current = [:]
         cardPath = [.card(id)]
+    }
+
+    /// A diff album's card: its file's whole diff, full screen, at the hunk (at the line tapped,
+    /// where it was on screen), paging through the album's other files.
+    private func openDiffPage(at symbol: CodeSymbol, _ diff: DiffPart, anchor: PageAnchor?) {
+        let files = model.listSymbols.filter { $0.kind == .file && $0.diff != nil }
+        guard let entry = files.first(where: { $0.diff?.path == diff.path }) else { return }
+        let line = symbol.kind == .hunk ? diff.wholeDiffLine(of: anchor?.line ?? diff.firstChange) : 0
+        let id = UUID()
+        stackedCards = [id: StackedCard(symbols: files, initialID: entry.id,
+                                        anchor: PageAnchor(line: line, screenY: anchor?.screenY ?? 160),
+                                        zoomSource: anchor == nil ? AnyHashable(symbol.id) : Self.screenSourceID,
+                                        depth: 1)]
+        stackedResults = [:]
+        stackSearch = nil
+        cardPlaces.current = [:]
+        cardPath = [.card(id)]
+    }
+
+    /// A diff album that can't show its cards (yet): comparing, a side isn't downloaded (Pull
+    /// it), its history is too short, or no changes.
+    @ViewBuilder
+    private var diffAlbumNote: some View {
+        if let state = model.diffAlbumState {
+            Group {
+                switch state {
+                case .loading:
+                    ProgressView("Comparing…")
+                case .notDownloaded(let side):
+                    ContentUnavailableView {
+                        Label("“\(side)” Isn’t Downloaded", systemImage: "icloud.and.arrow.down")
+                    } description: {
+                        Text("This album compares it as the clone has it. Pull downloads its latest commit (nothing is checked out).")
+                    } actions: {
+                        Button("Pull \(side)") { Task { await runDiffAlbumAction { try await model.pullDiffAlbumSide(side) } } }
+                            .buttonStyle(.borderedProminent)
+                    }
+                case .historyTooShort:
+                    ContentUnavailableView {
+                        Label("Where They Split Isn’t Downloaded", systemImage: "clock.arrow.circlepath")
+                    } description: {
+                        Text("The clone’s history doesn’t go back far enough to compare them.")
+                    } actions: {
+                        Button("Load More History") {
+                            Task { await runDiffAlbumAction { try await model.loadMoreDiffAlbumHistory() } }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                case .failed(let message):
+                    ContentUnavailableView("Couldn’t Show the Changes", systemImage: "exclamationmark.triangle",
+                                           description: Text(message))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(uiColor: .systemGroupedBackground))
+        } else if model.activeAlbum?.diff != nil, model.listSymbols.isEmpty {
+            ContentUnavailableView("No Changes", systemImage: "checkmark",
+                                   description: Text("The two sides have the same files now."))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(uiColor: .systemGroupedBackground))
+        }
+    }
+
+    /// Pull or Load More History for the diff album, its error shown if it fails.
+    private func runDiffAlbumAction(_ action: @escaping @MainActor () async throws -> Void) async {
+        do {
+            try await action()
+        } catch {
+            if !Task.isCancelled { diffAlbumError = error.localizedDescription }
+        }
     }
 
     /// A card in the stack: the one opened from the list, or one opened from search results.

@@ -101,6 +101,11 @@ struct ProjectFilesView: View {
                     Task { await load(refresh: true) }
                 }
             }
+            // Make Album in a diff shown over the project: the album shows, so these close.
+            .onChange(of: albumNaming?.madeDiffAlbumCount) {
+                isShowingHistory = false
+                comparing = nil
+            }
             .sheet(isPresented: $isShowingHistory, onDismiss: {
                 // It may have cloned the project.
                 Task { clone = await CloneStore.shared.record(forProject: projectID) }

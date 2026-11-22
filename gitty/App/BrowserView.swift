@@ -79,6 +79,12 @@ struct BrowserView: View {
         .environment(highlights)
         .environment(albumNaming)
         .modifier(AlbumNamingAlert(naming: albumNaming, onCreated: { showAlbum($0.id) }))
+        // Make Album, in a diff's list of files: its album at the Code level.
+        .onChange(of: albumNaming.madeDiffAlbum?.id) { _, id in
+            guard let id else { return }
+            showAlbum(id)
+            albumNaming.didShowDiffAlbum()
+        }
         // The open album was deleted (from the Project tab, or with its project).
         .onChange(of: AlbumStore.shared.albums) {
             if !openAlbumIDString.isEmpty, AlbumStore.shared.album(id: openAlbumID) == nil { openAlbumIDString = "" }

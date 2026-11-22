@@ -242,6 +242,7 @@ struct CommitFilesView: View {
     @State private var isComparing = false
     /// The diff zooms out of its file's row, and closes like a symbol's card.
     @Namespace private var diffNamespace
+    @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
 
     private struct DiffStart: Identifiable {
         let path: String
@@ -304,6 +305,16 @@ struct CommitFilesView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button("Compare", systemImage: "arrow.left.arrow.right") { isComparing = true }
                     .accessibilityHint("Compares this commit with another, or with the checkout")
+            }
+            // Its changes as an album: a card per file and change, at the Code level.
+            ToolbarItem(placement: .primaryAction) {
+                Button("Make Album", systemImage: "rectangle.stack.badge.plus") {
+                    let source = AlbumDiff.Source.commit(commit.id)
+                    albumNaming?.makeDiffAlbum(named: AlbumDiff.name(for: source, commitSummary: commit.summary),
+                                               projectID: projectID, diff: AlbumDiff(source: source))
+                }
+                .disabled(changes?.isEmpty ?? true)
+                .accessibilityHint("Makes an album of this commit’s changes")
             }
         }
         .navigationDestination(isPresented: $isComparing) {

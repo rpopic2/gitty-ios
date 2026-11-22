@@ -1505,8 +1505,15 @@ private struct CodeMenu: ViewModifier {
                     Button("Expand All", systemImage: "chevron.down.2", action: onExpandAll)
                 }
             }
-            Section { textItems }
-            if let albumContext {
+            Section {
+                if let diff = symbol.diff {
+                    diffItems(diff)
+                } else {
+                    textItems
+                }
+            }
+            // A diff's card belongs to its diff album only.
+            if let albumContext, symbol.diff == nil {
                 AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext,
                                download: symbol.isDownloaded ? nil : symbol.fileURL)
             }
@@ -1567,6 +1574,18 @@ private struct CodeMenu: ViewModifier {
                 withCode { range, fileText in TextSharer.share(fileText.substring(with: range)) { _ in } }
             }
         }
+    }
+
+    /// A diff album's card: Copy and Share the change as a unified diff (a hunk's lines, or a
+    /// file's path for its title). Its text is the diff's, not the file's, so nothing reads it
+    /// from the file.
+    @ViewBuilder
+    private func diffItems(_ diff: DiffPart) -> some View {
+        let text = diff.lines.isEmpty
+            ? diff.path
+            : DiffAlbumContents.unified(diff.lines, header: symbol.name)
+        Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+        Button("Share", systemImage: "square.and.arrow.up") { TextSharer.share(text) { _ in } }
     }
 
     /// The code's range and its file's text, once read (at once for the open file's).

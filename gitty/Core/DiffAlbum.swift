@@ -166,6 +166,18 @@ nonisolated enum DiffAlbumContents {
         return CodeSymbol.linesLabel(first, last)
     }
 
+    /// A hunk as a unified diff again: its title, then its lines with `+`, `-` or a space first.
+    static func unified(_ lines: [UnifiedDiff.Line], header: String) -> String {
+        ([header] + lines.map { line in
+            switch line.kind {
+            case .added: "+" + line.text
+            case .removed: "-" + line.text
+            case .context: " " + line.text
+            case .hunk, .note: line.text
+            }
+        }).joined(separator: "\n")
+    }
+
     /// The first few lines, `+`, `-` or a space first: what stands in until its code is laid out.
     static func preview(of lines: [UnifiedDiff.Line]) -> String {
         lines.prefix(SymbolIndexer.previewLineCount).map { line in

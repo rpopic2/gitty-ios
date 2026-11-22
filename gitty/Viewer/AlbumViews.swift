@@ -20,6 +20,21 @@ final class AlbumNaming {
 
     var title: LocalizedStringKey { renamingID == nil ? "New Album" : "Rename Album" }
 
+    /// A diff album just made (Make Album, in a commit's or a comparison's files), named
+    /// after them: the app shows it at the Code level (then sets this back to `nil`).
+    private(set) var madeDiffAlbum: Album?
+    /// Goes up with each one made: the project's sheets the diff was shown in close.
+    private(set) var madeDiffAlbumCount = 0
+
+    func makeDiffAlbum(named name: String, projectID: String, diff: AlbumDiff) {
+        madeDiffAlbum = AlbumStore.shared.create(named: name, projectID: projectID, diff: diff)
+        madeDiffAlbumCount += 1
+    }
+
+    func didShowDiffAlbum() {
+        madeDiffAlbum = nil
+    }
+
     func begin(projectID: String, items: [AlbumItem] = [], opensAlbum: Bool = false) {
         renamingID = nil
         self.projectID = projectID

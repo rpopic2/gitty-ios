@@ -21,6 +21,7 @@ struct CompareView: View {
     @State private var refs: ProjectRefs?
     @State private var fetched: Set<String> = []
     @Namespace private var diffNamespace
+    @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
 
     private enum Which: String, Identifiable {
         case base, head
@@ -63,6 +64,19 @@ struct CompareView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(comparison.title)
         .navigationBarTitleDisplayMode(.inline)
+        // The changes as an album: its branches as the clone has them each time it shows.
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Make Album", systemImage: "rectangle.stack.badge.plus") {
+                    let source = AlbumDiff.Source.comparison(base: comparison.base, head: comparison.head,
+                                                             mode: comparison.mode)
+                    albumNaming?.makeDiffAlbum(named: AlbumDiff.name(for: source), projectID: projectID,
+                                               diff: AlbumDiff(source: source))
+                }
+                .disabled(changes?.isEmpty ?? true)
+                .accessibilityHint("Makes an album of these changes")
+            }
+        }
         .navigationDestination(for: ComparedCommit.self) { item in
             CommitFilesView(projectID: projectID, commit: item.commit)
         }

@@ -130,6 +130,9 @@ struct SymbolPager: View {
                                 // once it's there (a different id makes the view take the text).
                                 let pageText = text(symbol)
                                 let isFilePage = symbol.kind == .file
+                                // A diff album's page: its file's whole diff, numbered from it.
+                                let isDiffPage = symbol.diff != nil
+                                let pageComment = commentAction(for: symbol)
                                 ReadOnlyTextView(
                                     text: pageText ?? NSAttributedString(),
                                     textID: pageID(for: symbol, text: pageText),
@@ -138,14 +141,14 @@ struct SymbolPager: View {
                                     symbolSearchTerm: symbolSearchTerm,
                                     onSearchSymbols: onSearchSymbols,
                                     onFindOccurrences: onFindOccurrences,
-                                    onComment: { onComment(symbol, $0) },
+                                    onComment: pageComment,
                                     albumMenu: pageAlbumMenu(for: symbol),
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension,
                                     highlight: highlights?.current,
                                     onHighlight: { highlights?.current = $0 },
-                                    positionURL: isFilePage ? symbol.fileURL ?? openFile : nil,
+                                    positionURL: isFilePage && !isDiffPage ? symbol.fileURL ?? openFile : nil,
                                     onRefresh: refreshAction(for: symbol),
-                                    lineNumbering: .counted(firstLine: { firstLine(symbol) }),
+                                    lineNumbering: lineNumbering(for: symbol),
                                     onScrollDown: { isCaptionHidden = $0 },
                                     // The page's text view starts below the status bar.
                                     startAnchor: (symbol.id == initialID ? initialAnchor : pageAnchors[symbol.id])
@@ -223,14 +226,29 @@ struct SymbolPager: View {
         return { infoFile = InfoFile(url: url, symbol: from) }
     }
 
+    /// A page's numbers: counted from its symbol's line in its file; a diff page's from each
+    /// line's own (the diff's, before and after).
+    private func lineNumbering(for symbol: CodeSymbol) -> LineNumbering {
+        if symbol.diff != nil { return .marked }
+        let firstLine = firstLine
+        return .counted(firstLine: { firstLine(symbol) })
+    }
+
+    /// Comment on a selection (not on a diff page: its text is the diff, not the file's).
+    private func commentAction(for symbol: CodeSymbol) -> (@MainActor (NSRange) -> Void)? {
+        guard symbol.diff == nil else { return nil }
+        let onComment = onComment
+        return { onComment(symbol, $0) }
+    }
+
     private func pageAlbumMenu(for symbol: CodeSymbol) -> (@MainActor (NSRange) -> UIMenu?)? {
-        guard let albumMenu else { return nil }
+        guard let albumMenu, symbol.diff == nil else { return nil }
         return { albumMenu(symbol, $0) }
     }
 
     /// Pull to refresh, on a file's page only.
     private func refreshAction(for symbol: CodeSymbol) -> (@MainActor () async -> Void)? {
-        guard symbol.kind == .file else { return nil }
+        guard symbol.kind == .file, symbol.diff == nil else { return nil }
         let refresh = onRefresh
         let file = symbol.fileURL
         return { await refresh(file) }
