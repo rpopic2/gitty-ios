@@ -62,6 +62,23 @@ nonisolated struct DiffPart: Hashable, Sendable {
         return before + 1  // after the hunk's header
     }
 
+    /// A comment on the whole hunk: its lines' numbers before and after, and the lines.
+    func reviewSelection(commit: String, summary: String) -> ReviewDiffSelection {
+        let old = lines.compactMap(\.oldNumber)
+        let new = lines.compactMap(\.newNumber)
+        let text = lines.map { line in
+            switch line.kind {
+            case .added: "+" + line.text
+            case .removed: "-" + line.text
+            case .context: " " + line.text
+            case .hunk, .note: line.text
+            }
+        }.joined(separator: "\n")
+        return ReviewDiffSelection(path: path, oldPath: oldPath, commit: commit, summary: summary,
+                                   oldLines: old.min().map { $0...(old.max() ?? $0) },
+                                   newLines: new.min().map { $0...(new.max() ?? $0) }, diff: text)
+    }
+
     /// A hunk's first changed line (0-based, in `lines`), where its page opens.
     var firstChange: Int {
         lines.firstIndex { $0.kind == .added || $0.kind == .removed } ?? 0

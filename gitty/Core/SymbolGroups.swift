@@ -275,7 +275,9 @@ final class CollapsedCodeStore {
 
     /// - Parameter openFile: the file that symbols without a `fileURL` are in.
     nonisolated static func key(for symbol: CodeSymbol, openFile: URL) -> String {
-        (symbol.fileURL ?? openFile).absoluteString + "#" + symbol.kind.rawValue + "#" + symbol.name
+        let key = (symbol.fileURL ?? openFile).absoluteString + "#" + symbol.kind.rawValue + "#" + symbol.name
+        // A diff's hunks often share their title (the code they're in): their line tells them apart.
+        return symbol.kind == .hunk ? key + "#" + String(symbol.line) : key
     }
 
     nonisolated static func key(forFile file: URL) -> String {

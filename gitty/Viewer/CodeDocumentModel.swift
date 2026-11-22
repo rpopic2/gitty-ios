@@ -636,16 +636,26 @@ final class CodeDocumentModel {
     /// The diff album the cards are for (worked out once each time it shows).
     @ObservationIgnored private var diffAlbumShown: UUID?
     @ObservationIgnored private var diffAlbumTask: Task<Void, Never>?
-    /// Diff pages' text: a changed file's whole diff (by path), loaded when its page needs it.
-    private var diffTexts: [String: NSAttributedString] = [:]
+    /// All the diff album's cards; the list shows those of the files the project's filter lets
+    /// through (the others are still in the album).
+    @ObservationIgnored private var diffAlbumCards: [CodeSymbol] = []
+    /// Diff pages' text: a changed file's whole diff (by path), loaded when its page needs it,
+    /// and the diff it shows, line for line (for comments).
+    private var diffTexts: [String: (text: NSAttributedString, diff: UnifiedDiff)] = [:]
     @ObservationIgnored private var loadingDiffTexts: Set<String> = []
 
     /// Works out a diff album's cards from the clone, offline: a comparison as its branches are
     /// in the clone now.
     private func publishDiffAlbum(_ album: Album, _ diff: AlbumDiff) {
-        guard diffAlbumShown != album.id else { return }
+        guard diffAlbumShown != album.id else {
+            // Shown already: only the filter may have changed.
+            let shown = filteredDiffCards()
+            if shown != albumSymbols { albumSymbols = shown }
+            return
+        }
         diffAlbumShown = album.id
         diffAlbumTask?.cancel()
+        diffAlbumCards = []
         albumSymbols = []
         diffTexts = [:]
         diffAlbumState = .loading
@@ -655,7 +665,8 @@ final class CodeDocumentModel {
                 let (sides, cards) = try await DiffAlbumContents.load(diff, project: project)
                 guard !Task.isCancelled, activeAlbum?.id == album.id else { return }
                 diffSides = sides
-                albumSymbols = cards
+                diffAlbumCards = cards
+                albumSymbols = filteredDiffCards()
                 diffAlbumState = nil
             } catch {
                 guard !Task.isCancelled, activeAlbum?.id == album.id else { return }
@@ -666,6 +677,39 @@ final class CodeDocumentModel {
                 }
             }
         }
+    }
+
+    /// The diff album's cards of the files the project's filter lets through, like the list's
+    /// files (by their path in the project).
+    private func filteredDiffCards() -> [CodeSymbol] {
+        guard let projectID = symbolsProjectID else { return diffAlbumCards }
+        let filter = ProjectFilterStore.standard.filter(for: projectID)
+        guard !filter.isEmpty else { return diffAlbumCards }
+        let scope = collapseScope
+        return diffAlbumCards.filter { card in
+            guard let address = card.fileURL?.absoluteString, address.hasPrefix(scope) else { return true }
+            let relative = String(address.dropFirst(scope.count))
+            return filter.matches(relative.removingPercentEncoding ?? relative)
+        }
+    }
+
+    /// A comment on lines selected on a diff page: the album's commit (a comparison's newer
+    /// side), the file, the lines' numbers before and after, and the change (the page's text has
+    /// one line per diff line).
+    func diffSelection(for symbol: CodeSymbol, range: NSRange) -> ReviewDiffSelection? {
+        guard let part = symbol.diff, let shown = diffTexts[part.path], let sides = diffSides,
+              range.length > 0, NSMaxRange(range) <= shown.text.length else { return nil }
+        let lines = ReviewText.lines(of: range, in: shown.text.string as NSString)
+        let picked = shown.diff.selection((lines.start - 1)...(lines.end - 1))
+        return ReviewDiffSelection(path: part.path, oldPath: part.oldPath, commit: sides.commit ?? sides.after,
+                                   summary: activeAlbum?.name ?? "", oldLines: picked.old, newLines: picked.new,
+                                   diff: picked.text)
+    }
+
+    /// A comment on a whole hunk (its card's long-press menu).
+    func diffSelection(forHunk symbol: CodeSymbol) -> ReviewDiffSelection? {
+        guard let part = symbol.diff, !part.lines.isEmpty, let sides = diffSides else { return nil }
+        return part.reviewSelection(commit: sides.commit ?? sides.after, summary: activeAlbum?.name ?? "")
     }
 
     /// The diff album's side that isn't downloaded: Pull fetches it (its latest commit, nothing
@@ -707,7 +751,7 @@ final class CodeDocumentModel {
     /// A diff page's text: its file's whole diff, every line with the changes in it (`nil`
     /// until it's loaded; then the page shows it).
     func diffText(of part: DiffPart) -> NSAttributedString? {
-        if let known = diffTexts[part.path] { return known }
+        if let known = diffTexts[part.path] { return known.text }
         loadDiffText(part)
         return nil
     }
@@ -723,10 +767,11 @@ final class CodeDocumentModel {
                                                                  wholeFile: true) else { return }
             let fileExtension = (path as NSString).pathExtension
             // `RenderedText` carries it back from the background (it's Sendable).
-            let rendered = await Task.detached(priority: .userInitiated) {
-                DiffText.render(UnifiedDiff(patch), fileExtension: fileExtension, style: style)
+            let (diff, rendered) = await Task.detached(priority: .userInitiated) { () -> (UnifiedDiff, RenderedText?) in
+                let diff = UnifiedDiff(patch)
+                return (diff, DiffText.render(diff, fileExtension: fileExtension, style: style))
             }.value
-            if let rendered { diffTexts[path] = rendered.attributedString }
+            if let rendered { diffTexts[path] = (rendered.attributedString, diff) }
         }
     }
 

@@ -450,6 +450,11 @@ struct CodeScreen: View {
             pageAnchors: card.pageAnchors,
             // The page shows the symbol's own text, which starts where the symbol does.
             onComment: { symbol, range in
+                // A diff page's text is the diff: the comment is on its lines.
+                if symbol.diff != nil {
+                    comment(onDiff: model.diffSelection(for: symbol, range: range))
+                    return
+                }
                 comment(on: NSRange(location: symbol.range.location + range.location, length: range.length),
                         inFile: symbol.fileURL)
             },
@@ -586,7 +591,8 @@ struct CodeScreen: View {
                         onCommentOnFolder: { path in
                             // Folders are named from where the project's files start.
                             if let scope = URL(string: model.collapseScope) { comment(onPathOf: scope, folder: path) }
-                        })
+                        },
+                        onCommentOnDiff: { comment(onDiff: model.diffSelection(forHunk: $0)) })
     }
 
     /// The stack's symbols, as code blocks: tap one to go back to its card.
@@ -958,6 +964,21 @@ struct CodeScreen: View {
     /// Search in the text menu: what to search for, for any selection.
     private func symbolSearchTerm(forSelection selection: String) -> String? {
         SymbolSearch.query(fromSelection: selection)
+    }
+
+    /// Comment on lines of a diff album's change: the commit, the file, both sides' line numbers
+    /// and the change (`ReviewDiffSelection`), at the end of the project's review.
+    private func comment(onDiff selection: ReviewDiffSelection?) {
+        guard let selection, let projectID = model.symbolsProjectID else { return }
+        let format = reviewFormat
+        let review = review
+        Task {
+            let repository = await ProjectStore.shared.project(id: projectID).map { project in
+                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref,
+                                 commit: CloneIndex.shared.record(forProject: projectID)?.commit)
+            }
+            review.add(selection, format: format, repository: repository, projectID: projectID, overSheet: false)
+        }
     }
 
     /// Comment on a whole file or folder: its path (as the review names files) at the end of the

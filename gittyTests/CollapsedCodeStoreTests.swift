@@ -101,6 +101,17 @@ struct CollapsedCodeStoreTests {
         #expect(!store.isCollapsed(symbol("main"), openFile: open, scope: scope))  // tapped ones start over
     }
 
+    @Test func hunksWithTheSameTitleFoldOnTheirOwn() throws {
+        let (store, _) = try store()
+        func hunk(at line: Int) -> CodeSymbol {
+            CodeSymbol(id: line, name: "int main(void)", kind: .hunk, range: NSRange(location: 0, length: 0),
+                       line: line, preview: "", fileURL: other)
+        }
+        store.toggle(hunk(at: 3), openFile: open, scope: scope)
+        #expect(store.isCollapsed(hunk(at: 3), openFile: open, scope: scope))
+        #expect(!store.isCollapsed(hunk(at: 40), openFile: open, scope: scope))
+    }
+
     @Test func aFilesMenuCollapsesItsSymbols() throws {
         let (store, _) = try store()
         let symbols = [symbol("b1", in: other), symbol("b2", in: other)]

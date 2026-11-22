@@ -234,9 +234,8 @@ struct SymbolPager: View {
         return .counted(firstLine: { firstLine(symbol) })
     }
 
-    /// Comment on a selection (not on a diff page: its text is the diff, not the file's).
+    /// Comment on a selection (on a diff page, on the diff's lines: see `CodeScreen`).
     private func commentAction(for symbol: CodeSymbol) -> (@MainActor (NSRange) -> Void)? {
-        guard symbol.diff == nil else { return nil }
         let onComment = onComment
         return { onComment(symbol, $0) }
     }

@@ -1467,6 +1467,8 @@ struct CodeTextActions {
     /// its path.
     var onCommentOnFile: (@MainActor (URL) -> Void)? = nil
     var onCommentOnFolder: (@MainActor (String) -> Void)? = nil
+    /// A diff album's hunk: a comment on its change.
+    var onCommentOnDiff: (@MainActor (CodeSymbol) -> Void)? = nil
 }
 
 /// The long-press menu of a symbol's title and code: a small preview, then Open (its page) and
@@ -1584,6 +1586,9 @@ private struct CodeMenu: ViewModifier {
         let text = diff.lines.isEmpty
             ? diff.path
             : DiffAlbumContents.unified(diff.lines, header: symbol.name)
+        if !diff.lines.isEmpty, let onCommentOnDiff = textActions?.onCommentOnDiff {
+            Button("Comment", systemImage: "text.bubble") { onCommentOnDiff(symbol) }
+        }
         Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
         Button("Share", systemImage: "square.and.arrow.up") { TextSharer.share(text) { _ in } }
     }

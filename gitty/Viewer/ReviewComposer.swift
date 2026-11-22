@@ -110,11 +110,12 @@ final class ReviewDraft {
             projectID: projectID, overSheet: false)
     }
 
-    /// A comment on lines of a diff, from the file info sheet.
+    /// A comment on lines of a diff: from the file info sheet (`overSheet`), or a diff album's
+    /// card or page (on the screen itself).
     func add(_ selection: ReviewDiffSelection, format: ReviewFormat, repository: ReviewRepository?,
-             projectID: String) {
+             projectID: String, overSheet: Bool = true) {
         add(block: ReviewText.block(for: selection, format: format), format: format, repository: repository,
-            projectID: projectID, overSheet: true)
+            projectID: projectID, overSheet: overSheet)
     }
 
     private func add(block: String, format: ReviewFormat, repository: ReviewRepository?, projectID: String,
