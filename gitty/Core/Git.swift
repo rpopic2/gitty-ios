@@ -289,7 +289,8 @@ nonisolated final class GitRepository {
     func fetchedRefNames() -> Set<String> {
         var names: Set<String> = []
         for (glob, prefix) in [("refs/remotes/origin/*", "refs/remotes/origin/"), ("refs/tags/*", "refs/tags/")] {
-            var iterator: OpaquePointer?
+            // A full struct in libgit2's headers (its backends can make them), so not opaque here.
+            var iterator: UnsafeMutablePointer<git_reference_iterator>?
             guard git_reference_iterator_glob_new(&iterator, pointer, glob) == 0 else { continue }
             defer { git_reference_iterator_free(iterator) }
             var name: UnsafePointer<CChar>?
