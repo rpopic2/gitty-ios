@@ -355,22 +355,6 @@ actor CloneStore {
         }) ?? []
     }
 
-    /// Roughly what deleting a downloaded branch or tag would free (`GitRepository.bytesOnlyIn`);
-    /// `nil` for the checked-out one, which can't be deleted.
-    func bytesFreed(byDeleting ref: GitRef, projectID: String) async -> Int64? {
-        guard let record = index.record(forProject: projectID), ref != record.ref else { return nil }
-        let folder = index.folder(of: record)
-        return try? await serially(projectID) { try GitRepository(at: folder).bytesOnlyIn(ref) }
-    }
-
-    /// Deletes a downloaded branch or tag from the clone, freeing what only it used (not the
-    /// checked-out one). It can be pulled again.
-    func deleteFetched(_ ref: GitRef, projectID: String) async throws {
-        guard let record = index.record(forProject: projectID), ref != record.ref else { return }
-        let folder = index.folder(of: record)
-        try await serially(projectID) { try GitRepository(at: folder).deleteFetched(ref) }
-    }
-
     /// Pull down in the project: downloads the branch or tag's latest commits (as much history as
     /// before) without checking them out, and lists the remote's branches and tags again.
     /// Returns how many commits are new (`newCommits`); Pull checks them out.

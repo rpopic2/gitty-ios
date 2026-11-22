@@ -41,8 +41,6 @@ struct ProjectFilesView: View {
     @State private var isShowingHistory = false
     /// A cloned project's branches and tags the clone has downloaded (the others need a pull).
     @State private var fetchedRefs: Set<String> = []
-    /// Branches and tags being deleted from the clone now.
-    @State private var deletingRefs: Set<String> = []
     /// The branch picker is up.
     @State private var isPickingRef = false
     /// A branch or tag held in the picker, compared with the checkout once the picker's gone.
@@ -667,41 +665,17 @@ struct ProjectFilesView: View {
     private func branchPicker(current: String?) -> some View {
         let downloaded: Set<String>? = clone == nil ? nil : fetchedRefs
         var onCompare: (@MainActor (_ name: String, _ isTag: Bool) -> Void)?
-        var onDelete: (@MainActor (_ name: String, _ isTag: Bool) -> Void)?
-        var bytesFreed: (@MainActor (_ name: String, _ isTag: Bool) async -> Int64?)?
         if clone != nil {
-            let projectID = projectID
             onCompare = { name, isTag in
                 pendingComparison = Comparing(head: isTag ? .tag(name) : .branch(name))
-            }
-            onDelete = { name, isTag in deleteRef(name, isTag: isTag) }
-            bytesFreed = { name, isTag in
-                await CloneStore.shared.bytesFreed(byDeleting: isTag ? .tag(name) : .branch(name), projectID: projectID)
             }
         }
         return BranchPicker(refs: refs, current: current, recent: RecentRefsStore.standard.names(for: projectID),
                             downloaded: downloaded,
                             onChoose: { name, isTag in switchRef(to: name, isTag: isTag) },
-                            onCompare: onCompare, onDelete: onDelete, bytesFreed: bytesFreed,
-                            deleting: deletingRefs)
+                            onCompare: onCompare)
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
-    }
-
-    /// Deletes a downloaded branch or tag from the clone (freeing what only it used), then
-    /// shows it as not downloaded and the project's new size.
-    private func deleteRef(_ name: String, isTag: Bool) {
-        deletingRefs.insert(name)
-        Task {
-            do {
-                try await CloneStore.shared.deleteFetched(isTag ? .tag(name) : .branch(name), projectID: projectID)
-            } catch {
-                cloneError = error
-            }
-            fetchedRefs = await CloneStore.shared.fetchedRefs(projectID: projectID)
-            deletingRefs.remove(name)
-            await refreshStorage()
-        }
     }
 
     /// The branches and tags: a cloned project's from the clone (listed from the remote when
