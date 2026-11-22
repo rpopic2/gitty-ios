@@ -234,7 +234,7 @@ actor CloneStore {
     static let deepenStep = 100
     /// How many older commits a history's Fetch Older fetches: few, so it's quick (each one
     /// brings the files it changed).
-    static let historyStep = 20
+    static let historyStep = 10
 
     private let index: CloneIndex
     private let documents: DocumentStore
