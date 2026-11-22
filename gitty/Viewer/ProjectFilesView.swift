@@ -65,7 +65,7 @@ struct ProjectFilesView: View {
 
     @State private var isSignedIn = false
     @State private var isSigningIn = false
-    /// The filter as typed. It's applied (and saved) when editing ends.
+    /// The filter as typed, saved as it changes; `filter` (the icon's colour) when editing ends.
     @State private var filterText = ""
     @State private var filter = FileFilter.none
     @FocusState private var isEditingFilter: Bool
@@ -152,7 +152,14 @@ struct ProjectFilesView: View {
             }
             // Back from the Code level: files may have downloaded meanwhile.
             .onChange(of: isActive) { _, isActive in
-                if isActive { Task { await refreshStorage() } }
+                if isActive {
+                    Task { await refreshStorage() }
+                } else {
+                    // Left for the Code level while typing: it stays alive underneath, so the
+                    // field wouldn't end editing by itself.
+                    isEditingFilter = false
+                    applyFilter()
+                }
             }
     }
 
@@ -243,7 +250,7 @@ struct ProjectFilesView: View {
         }
     }
 
-    /// Tap to edit; applied when you press Done or leave the field.
+    /// Tap to edit; saved as you type, and the Code level follows it when it shows.
     private var filterRow: some View {
         HStack(spacing: 10) {
             Image(systemName: "line.3.horizontal.decrease.circle")
@@ -270,6 +277,11 @@ struct ProjectFilesView: View {
         }
         .onChange(of: isEditingFilter) { _, isEditing in
             if !isEditing { applyFilter() }
+        }
+        // Saved as you type: the Code level reads it when it shows (it's indexed again then, not
+        // on each key), however you get there, even with the field still editing.
+        .onChange(of: filterText) {
+            if hasLoadedFilter { ProjectFilterStore.standard.save(filterText, for: projectID) }
         }
     }
 
