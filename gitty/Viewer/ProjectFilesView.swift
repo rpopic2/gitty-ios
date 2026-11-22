@@ -45,6 +45,9 @@ struct ProjectFilesView: View {
     @State private var isPickingRef = false
     /// A branch or tag held in the picker, compared with the checkout once the picker's gone.
     @State private var pendingComparison: Comparing?
+    /// Compare Against… (the branch row's long-press menu): the picker, to choose what to
+    /// compare the checkout with.
+    @State private var isPickingComparison = false
     @State private var comparing: Comparing?
 
     private struct Comparing: Identifiable {
@@ -643,11 +646,27 @@ struct ProjectFilesView: View {
         .disabled(isSwitchingRef || download != nil)
         .accessibilityLabel("Branch")
         .accessibilityValue(Text(verbatim: project.ref ?? ""))
+        // Touch and hold: compare the checkout with another branch, tag or commit (the clone has
+        // what's compared).
+        .contextMenu {
+            if clone != nil {
+                Button("Compare Against…", systemImage: "arrow.left.arrow.right") {
+                    isPickingComparison = true
+                    if refs == nil { Task { await loadRefs() } }
+                }
+            }
+        }
         .sheet(isPresented: $isPickingRef, onDismiss: {
             comparing = pendingComparison
             pendingComparison = nil
         }) {
             branchPicker(current: project.ref)
+        }
+        .sheet(isPresented: $isPickingComparison, onDismiss: {
+            comparing = pendingComparison
+            pendingComparison = nil
+        }) {
+            comparisonPicker(current: project.ref)
         }
         .sheet(item: $comparing) { item in
             NavigationStack {
@@ -659,6 +678,17 @@ struct ProjectFilesView: View {
                     }
             }
         }
+    }
+
+    /// Compare Against…: the same picker, but what's chosen is compared with the checkout (a
+    /// branch, a tag, or a commit by its hash).
+    private func comparisonPicker(current: String?) -> some View {
+        BranchPicker(refs: refs, current: current, recent: RecentRefsStore.standard.names(for: projectID),
+                     downloaded: fetchedRefs, onChoose: { _, _ in },
+                     onChooseSide: { side in pendingComparison = Comparing(head: side) },
+                     offersCheckedOut: false, title: "Compare Against")
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
     }
 
     /// The branch row's picker. Comparing needs the clone.

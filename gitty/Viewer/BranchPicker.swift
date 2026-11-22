@@ -37,6 +37,10 @@ struct BranchPicker: View {
     /// Choosing a comparison's side instead (`CompareView`): the checkout and commits (typed
     /// as hashes) can be chosen too.
     var onChooseSide: (@MainActor (GitSide) -> Void)? = nil
+    /// Choosing a side: the checkout is offered too (not when it's what's compared against).
+    var offersCheckedOut = true
+    /// Instead of "Branches and Tags" (or "Compare", choosing a side).
+    var title: LocalizedStringKey? = nil
     /// Touch and hold a branch or tag: Compare with Checked Out (`nil`: not offered).
     var onCompare: (@MainActor (_ name: String, _ isTag: Bool) -> Void)? = nil
 
@@ -53,7 +57,7 @@ struct BranchPicker: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .navigationTitle(onChooseSide == nil ? "Branches and Tags" : "Compare")
+            .navigationTitle(title ?? (onChooseSide == nil ? "Branches and Tags" : "Compare"))
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: onChooseSide == nil ? Text("Search Branches and Tags")
@@ -76,7 +80,7 @@ struct BranchPicker: View {
             if let onChooseSide {
                 // A comparison's side: the checkout, or the commit a typed hash names.
                 Section {
-                    if query.isEmpty {
+                    if query.isEmpty, offersCheckedOut {
                         sideRow(.checkedOut, onChooseSide)
                     }
                     if let hash = GitSide.commitHash(in: query) {
