@@ -24,8 +24,9 @@ nonisolated struct RecentRefsStore: @unchecked Sendable {
 }
 
 /// Choosing a branch or tag: searched as symbols are (`SymbolSearch.matchingNames`, the part
-/// after the last `/` counting most), the ones used lately first. On a cloned project, the ones
-/// the clone hasn't downloaded say so (choosing one asks to pull it).
+/// after the last `/` counting most), the ones used lately first. On a cloned project, each says
+/// whether the clone has it (an iPhone) or not (a cloud: choosing one asks to pull it); swipe a
+/// downloaded one to delete it from the clone, and hold it to see what that would free.
 struct BranchPicker: View {
     let refs: ProjectRefs?
     let current: String?
@@ -39,6 +40,12 @@ struct BranchPicker: View {
     var onChooseSide: (@MainActor (GitSide) -> Void)? = nil
     /// Touch and hold a branch or tag: Compare with Checked Out (`nil`: not offered).
     var onCompare: (@MainActor (_ name: String, _ isTag: Bool) -> Void)? = nil
+    /// Swipe a downloaded one (not the current): delete it from the clone (`nil`: not offered).
+    var onDelete: (@MainActor (_ name: String, _ isTag: Bool) -> Void)? = nil
+    /// Holding a downloaded one: roughly what deleting it frees.
+    var bytesFreed: (@MainActor (_ name: String, _ isTag: Bool) async -> Int64?)? = nil
+    /// Being deleted now.
+    var deleting: Set<String> = []
 
     @State private var query = ""
     @Environment(\.dismiss) private var dismiss
@@ -121,6 +128,14 @@ struct BranchPicker: View {
 
     private func row(_ name: String, isTag: Bool) -> some View {
         let isDownloaded = downloaded?.contains(name) ?? true
+        let dismiss = dismiss
+        var compare: (@MainActor () -> Void)?
+        if let onCompare {
+            compare = {
+                dismiss()
+                onCompare(name, isTag)
+            }
+        }
         return Button {
             dismiss()
             if let onChooseSide {
@@ -139,11 +154,6 @@ struct BranchPicker: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if !isDownloaded {
-                        Text("Not downloaded")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
                 Spacer(minLength: 8)
                 if name == current {
@@ -151,16 +161,99 @@ struct BranchPicker: View {
                         .foregroundStyle(.tint)
                         .accessibilityLabel("Current")
                 }
-            }
-            .contentShape(Rectangle())
-        }
-        .contextMenu {
-            if let onCompare, name != current {
-                Button("Compare with Checked Out", systemImage: "arrow.left.arrow.right") {
-                    dismiss()
-                    onCompare(name, isTag)
+                if deleting.contains(name) {
+                    ProgressView()
+                } else if downloaded != nil {
+                    // Like Files' iCloud items: on this iPhone, or only on GitHub.
+                    Image(systemName: isDownloaded ? "iphone" : "icloud.and.arrow.down")
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(isDownloaded ? "Downloaded" : "Not downloaded")
                 }
             }
+            .opacity(isDownloaded ? 1 : 0.6)
+            .contentShape(Rectangle())
+        }
+        .disabled(deleting.contains(name))
+        .swipeActions {
+            if let onDelete, downloaded != nil, isDownloaded, name != current, !deleting.contains(name) {
+                Button(role: .destructive) { onDelete(name, isTag) } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
+        .modifier(RefMenu(name: name, isTag: isTag, isDownloaded: downloaded != nil && isDownloaded,
+                          isCurrent: name == current, onCompare: compare, bytesFreed: bytesFreed))
+    }
+}
+
+/// A branch or tag's long-press menu: Compare with Checked Out; on a downloaded one, a preview
+/// with roughly what deleting it from the clone would free.
+private struct RefMenu: ViewModifier {
+    let name: String
+    let isTag: Bool
+    let isDownloaded: Bool
+    let isCurrent: Bool
+    let onCompare: (@MainActor () -> Void)?
+    let bytesFreed: (@MainActor (_ name: String, _ isTag: Bool) async -> Int64?)?
+
+    func body(content: Content) -> some View {
+        if isDownloaded, let bytesFreed {
+            content.contextMenu {
+                items
+            } preview: {
+                RefStoragePreview(name: name, isTag: isTag, isCurrent: isCurrent, bytesFreed: bytesFreed)
+            }
+        } else {
+            content.contextMenu { items }
+        }
+    }
+
+    @ViewBuilder private var items: some View {
+        if let onCompare, !isCurrent {
+            Button("Compare with Checked Out", systemImage: "arrow.left.arrow.right", action: onCompare)
+        }
+    }
+}
+
+/// A downloaded branch or tag held: its name, and what deleting it would free, worked out as
+/// it shows (it goes through the clone's objects, a moment on a big one).
+private struct RefStoragePreview: View {
+    let name: String
+    let isTag: Bool
+    let isCurrent: Bool
+    let bytesFreed: @MainActor (_ name: String, _ isTag: Bool) async -> Int64?
+
+    @State private var bytes: Int64?
+    @State private var isDone = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(name, systemImage: isTag ? "tag" : "arrow.triangle.branch")
+                .font(.headline.monospaced())
+                .lineLimit(2)
+            Group {
+                if isCurrent {
+                    Text("Checked out: switch to another to delete it.")
+                } else if !isDone {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                        Text("Working out its size…")
+                    }
+                } else if let bytes {
+                    Text("Deleting it frees up to \(bytes.formatted(.byteCount(style: .file))).")
+                } else {
+                    Text("Its size couldn’t be worked out.")
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(width: 300, alignment: .leading)
+        .task {
+            guard !isCurrent else { return }
+            bytes = await bytesFreed(name, isTag)
+            isDone = true
         }
     }
 }
