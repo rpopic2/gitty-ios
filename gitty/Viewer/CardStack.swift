@@ -104,8 +104,14 @@ final class StackSearch: ResultsPageSearch {
 
     var symbolName: String { "magnifyingglass" }
     var placeholder: String { String(localized: "Search Files and Symbols") }
+    /// `SomeFile.c:980`: the files it names, and the line their title opens at.
+    var lineQuery: FileLineQuery? { FileLineQuery(query) }
+
     /// While the project's symbols are still being read, the search finds only those read.
     var note: String? {
+        if let lineQuery {
+            return String(localized: "Tap a file’s name to open it at line \(lineQuery.line).")
+        }
         guard let progress = model.indexingProgress else { return nil }
         let left = (progress.total - progress.done).formatted()
         if progress.isPaused {
@@ -127,6 +133,21 @@ final class StackSearch: ResultsPageSearch {
         }
         isSearching = true
         let model = model
+        if let target = FileLineQuery(query) {
+            // A place in a file: just the files it names.
+            let all = model.listSymbols, openFile = model.url
+            task = Task { [weak self] in
+                let files = await Task.detached(priority: .userInitiated) {
+                    target.files(in: all, openFile: openFile)
+                }.value
+                guard !Task.isCancelled, let self else { return }
+                self.results = files
+                self.resultsQuery = query
+                self.version += 1
+                self.isSearching = false
+            }
+            return
+        }
         task = Task { [weak self] in
             // The symbols may still be getting ready (a search right after opening a file).
             guard let stream = await model.searchStream(query), !Task.isCancelled else {

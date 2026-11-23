@@ -811,6 +811,10 @@ struct CodeScreen: View {
     private func openStackedCard(at symbol: CodeSymbol, anchor: PageAnchor?, from search: StackSearch) {
         pruneStack()
         let id = UUID()
+        // `SomeFile.c:980`: a file's title opens it at the line.
+        let anchor = symbol.kind == .file
+            ? search.lineQuery.map { PageAnchor(line: $0.line - 1, screenY: 160) } ?? anchor
+            : anchor
         stackedCards[id] = StackedCard(symbols: search.results, initialID: symbol.id, anchor: anchor,
                                        zoomSource: AnyHashable(CardRoute.results(search.id)),
                                        depth: cardPath.count + 1)

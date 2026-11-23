@@ -3,6 +3,50 @@ import Observation
 
 /// Search by file name: for the Code level's search, matching files come with all their
 /// symbols.
+/// A search for a place in a file, as compilers and stack traces print it: `SomeFile.c:980`,
+/// `src/net/SomeFile.c:980`, `SomeFile.c:980:12` (the column is left out), or `:980` for the
+/// open file. Its results are the files it names; tapping one's title opens it at the line.
+nonisolated struct FileLineQuery: Equatable, Sendable {
+    /// The file's name or the end of its path, as typed; empty for the open file.
+    let file: String
+    /// 1-based.
+    let line: Int
+
+    init(file: String, line: Int) {
+        self.file = file
+        self.line = line
+    }
+
+    init?(_ text: String) {
+        var parts = text.trimmingCharacters(in: .whitespaces).split(separator: ":", omittingEmptySubsequences: false)
+        // A column after the line: left out.
+        if parts.count >= 3, let last = parts.last, !last.isEmpty, last.allSatisfy(\.isASCII), Int(last) != nil {
+            parts.removeLast()
+        }
+        guard parts.count >= 2, let last = parts.last, last.allSatisfy(\.isASCII), let line = Int(last), line > 0
+        else { return nil }
+        let file = parts.dropLast().joined(separator: ":")
+        guard !file.contains(where: \.isWhitespace) else { return nil }
+        self.file = file
+        self.line = line
+    }
+
+    /// The files it names, each with its entry and symbols (the open file alone for `:980`).
+    /// A path's end must match the file's path; a name alone matches as file search does.
+    func files(in symbols: [CodeSymbol], openFile: URL) -> [CodeSymbol] {
+        guard !file.isEmpty else { return symbols.filter { ($0.fileURL ?? openFile) == openFile } }
+        let name = String(file.split(separator: "/").last ?? "")
+        guard !name.isEmpty else { return [] }
+        let named = FileNameSearch.symbols(inFilesNamed: name, in: symbols, maxRank: 5)
+        guard file.contains("/") else { return named }
+        let tail = "/" + file.lowercased().drop { $0 == "/" }
+        return named.filter { symbol in
+            let address = (symbol.fileURL ?? openFile).absoluteString
+            return (address.removingPercentEncoding ?? address).lowercased().hasSuffix(tail)
+        }
+    }
+}
+
 nonisolated enum FileNameSearch {
     /// The files whose name matches (fuzzy, like symbol search), the best match first (equal
     /// ones in list order), each with its entry and all its symbols. `symbols` is the whole

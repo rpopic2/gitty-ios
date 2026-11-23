@@ -68,4 +68,27 @@ struct FolderGroupTests {
         #expect(FolderGroup.path(of: url("My%20Folder/a.c"), scope: scope) == "My Folder")
         #expect(FolderGroup.path(of: URL(string: "https://elsewhere/a.c")!, scope: scope) == "")
     }
+
+    @Test func aPlaceInAFileIsReadLikeACompilersMessage() {
+        #expect(FileLineQuery("SomeFile.c:980") == FileLineQuery(file: "SomeFile.c", line: 980))
+        #expect(FileLineQuery("src/net/SomeFile.c:980:12")?.file == "src/net/SomeFile.c")  // no column
+        #expect(FileLineQuery("src/net/SomeFile.c:980:12")?.line == 980)
+        #expect(FileLineQuery(":980") == FileLineQuery(file: "", line: 980))  // the open file
+        #expect(FileLineQuery("SomeFile.c") == nil)
+        #expect(FileLineQuery("SomeFile.c:") == nil)
+        #expect(FileLineQuery("SomeFile.c:0") == nil)
+        #expect(FileLineQuery("a b:3") == nil)  // words, not a file
+    }
+
+    @Test func aPlaceInAFileFindsTheFilesItNames() {
+        let open = URL(string: "https://raw.githubusercontent.com/o/r/main/src/a.c")!
+        let nested = URL(string: "https://raw.githubusercontent.com/o/r/main/lib/b.c")!
+        let list = [entry(0, "a.c", in: nil), symbol(1, "main"),
+                    entry(2, "b.c", in: other), symbol(3, "abc", in: other),
+                    entry(4, "b.c", in: nested), symbol(5, "f", in: nested)]
+        #expect(FileLineQuery("b.c:9")?.files(in: list, openFile: open).map(\.id) == [2, 3, 4, 5])  // both
+        #expect(FileLineQuery("lib/b.c:9")?.files(in: list, openFile: open).map(\.id) == [4, 5])  // the path's
+        #expect(FileLineQuery("src/a.c:9")?.files(in: list, openFile: open).map(\.id) == [0, 1])  // the open one
+        #expect(FileLineQuery(":9")?.files(in: list, openFile: open).map(\.id) == [0, 1])
+    }
 }
