@@ -666,9 +666,6 @@ struct BottomBarStack: View {
             let nextOut = max(lifted, arrivedForward ? 1 - arrived : 0) * Self.edgeShown
             bar
                 .padding(.horizontal, inset)
-                .overlay(alignment: .top) {
-                    if swipe.onLift != nil { AlbumsHandle() }
-                }
                 .offset(x: x)
                 .background {
                     ZStack {
@@ -696,6 +693,11 @@ struct BottomBarStack: View {
                     }
                     withAnimation(.smooth(duration: 0.25)) { arrival = 1 }
                     isSettling = false
+                }
+                // The handle stays in the middle as the bars slide under it (after the offset: not
+                // moved by it).
+                .overlay(alignment: .top) {
+                    if swipe.onLift != nil { AlbumsHandle() }
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
                 // SwiftUI's drag for the swipes (UIKit's pan, here, never went sideways); the
