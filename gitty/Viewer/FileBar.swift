@@ -612,8 +612,7 @@ struct BottomBarStack: View {
                               copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                               searchQuery: searchQuery, onClearSearch: onClearSearch,
                               onCollapseAll: onCollapseAll, onExpandAll: onExpandAll,
-                              onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon, reactsToTouch: swipe == nil,
-                              onPan: panAction, onPanEnded: panEndedAction))
+                              onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon, reactsToTouch: swipe == nil))
         }
         // A review set aside floats above the bar, at either end (swipe it across): not part of it.
         .overlay(alignment: .top) {
@@ -688,6 +687,9 @@ struct BottomBarStack: View {
                     isSettling = false
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
+                // SwiftUI's drag for the swipes (UIKit's pan, here, never went sideways); the
+                // menu is UIKit's, so the drag has no SwiftUI menu to wait for.
+                .simultaneousGesture(swipeGesture)
                 .accessibilityActions {
                     if let previous = swipe.previous {
                         Button(String(localized: "Show \(previous.title)")) { swipe.onSwitch(false) }
@@ -800,10 +802,16 @@ struct BottomBarStack: View {
     /// How far a drag toward a new album must go to make it.
     private var newAlbumDistance: CGFloat { max(barWidth, 1) * 0.3 }
 
-    /// The bar's pan (UIKit's, in `BarTouchLayer`), in the window's space: pulled up, the bar
-    /// moves with the finger, and in its own the drag would shake. Measured from where it was
-    /// first seen moving: it starts a few points along, and counted from where the finger went
-    /// down, the bar would jump those points.
+    /// In the screen's space: pulled up, the bar moves with the finger, and in its own the drag
+    /// would shake.
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .global)
+            .onChanged { value in panAction?(value.translation) }
+            .onEnded { value in panEndedAction?(value.translation, value.predictedEndTranslation) }
+    }
+
+    /// The bar's drag. Measured from where it was first seen moving: it starts a few points
+    /// along, and counted from where the finger went down, the bar would jump those points.
     private var panAction: (@MainActor (CGSize) -> Void)? {
         guard let swipe, !isCollapsed else { return nil }
         return { translation in
