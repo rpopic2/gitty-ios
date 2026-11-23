@@ -31,6 +31,23 @@ struct CollapsedCodeStoreTests {
         #expect(!reopened.areAllFoldersFolded(scope: scope))
     }
 
+    @Test func anAlbumFoldsOnItsOwn() throws {
+        let defaults = try #require(UserDefaults(suiteName: "CollapsedCodeStoreTests-\(UUID().uuidString)"))
+        let project = CollapsedCodeStore(defaults: defaults)
+        let album = CollapsedCodeStore(defaults: defaults, namespace: "album.x.")
+        let main = symbol("main", in: open)
+        album.toggle(main, openFile: open, scope: scope)
+        album.setAllFilesFolded(true, scope: scope)
+        #expect(album.isCollapsed(main, openFile: open, scope: scope))
+        #expect(!project.isCollapsed(main, openFile: open, scope: scope))  // the project's stay
+        #expect(!project.areAllFilesFolded(scope: scope))
+        // Saved under its own names.
+        let reopened = CollapsedCodeStore(defaults: defaults, namespace: "album.x.")
+        #expect(reopened.isCollapsed(main, openFile: open, scope: scope))
+        #expect(reopened.areAllFilesFolded(scope: scope))
+        #expect(!CollapsedCodeStore(defaults: defaults).isCollapsed(main, openFile: open, scope: scope))
+    }
+
     @Test func aGroupStartsClosedAndStaysOpenOnceOpened() throws {
         let (store, defaults) = try store()
         #expect(!store.isGroupOpen("drivers", scope: scope))

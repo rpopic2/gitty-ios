@@ -315,6 +315,8 @@ struct CodeScreen: View {
                 folders: model.activeAlbum == nil ? model.folderGroups : nil,
                 onNeedsSymbols: { model.needsSymbols(of: $0) },
                 onOpenURL: { onOpen($0) },
+                // Each album folds on its own (the whole project's are the shared ones).
+                collapsed: CollapsedCodeStore.forAlbum(model.activeAlbum?.id),
                 onShowCommit: { showBlameCommit(projectID: $0, id: $1) },
                 showsWholeFiles: true,
                 textActions: codeTextActions(from: nil),
@@ -855,6 +857,10 @@ struct CodeScreen: View {
             if model.projectSymbolsLoaded { startsAtFile = false }
             return ownEntryID
         }
+        // Each album keeps its own place, like a Safari tab.
+        if let album = model.activeAlbum {
+            return ReadingPositionStore.standard.symbolsPosition(forAlbum: album.id)?.symbolID(in: model.listSymbols)
+        }
         return ReadingPositionStore.standard.symbolsPosition(for: model.url)?.symbolID(in: model.listSymbols)
     }
 
@@ -862,7 +868,11 @@ struct CodeScreen: View {
     /// only when another card reaches the middle (a few times a second at most), and the save is
     /// a few bytes. (Searches go on results pages, so this list is always the whole one.)
     private func saveListPosition(_ symbol: CodeSymbol) {
-        ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), for: model.url)
+        if let album = model.activeAlbum {
+            ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), forAlbum: album.id)
+        } else {
+            ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), for: model.url)
+        }
     }
 
     /// Full-screen, opaque, so the hidden file text never shows through.
@@ -906,8 +916,36 @@ struct CodeScreen: View {
                 onCollapseAll: collapseAllAction(true),
                 onExpandAll: collapseAllAction(false),
                 // In an album: its icon before its name.
-                titleIcon: model.activeAlbum != nil ? "rectangle.stack" : nil
+                titleIcon: model.activeAlbum != nil ? "rectangle.stack" : nil,
+                swipe: albumSwipe
             )
+        }
+    }
+
+    /// Swiping the bar sideways, like Safari's tabs: through the project's albums, the whole
+    /// project first. Past the last, a new empty album.
+    private var albumSwipe: BarSwipe? {
+        guard let projectID = model.symbolsProjectID else { return nil }
+        let albums = AlbumStore.shared.albums(inProject: projectID)
+        // 0: the whole project; then each album, as Project lists them.
+        let index = model.activeAlbum.flatMap { album in albums.firstIndex { $0.id == album.id } }.map { $0 + 1 } ?? 0
+        let whole = BarSwipe.Neighbour(title: model.symbolsProjectTitle ?? model.fileName, icon: nil)
+        let neighbour = { (place: Int) -> BarSwipe.Neighbour in
+            place == 0 ? whole : BarSwipe.Neighbour(title: albums[place - 1].name, icon: "rectangle.stack")
+        }
+        let previous: BarSwipe.Neighbour? = index > 0 ? neighbour(index - 1) : nil
+        let next = index < albums.count ? neighbour(index + 1)
+            : BarSwipe.Neighbour(title: AlbumStore.shared.untitledName(projectID: projectID), icon: "plus")
+        let showProject = onShowProject, openAlbum = onOpenAlbum
+        return BarSwipe(previous: previous, next: next) { forward in
+            let place = forward ? index + 1 : index - 1
+            if place <= 0 {
+                showProject()
+            } else if place <= albums.count {
+                openAlbum(albums[place - 1].id)
+            } else {
+                openAlbum(AlbumStore.shared.createUntitled(projectID: projectID).id)
+            }
         }
     }
 

@@ -262,12 +262,40 @@ final class AlbumStore {
     func delete(_ id: UUID) {
         albums.removeAll { $0.id == id }
         save()
+        Self.forgetPlace(of: id)
     }
 
     /// A project was deleted: its albums go with it.
     func deleteAlbums(inProject projectID: String) {
+        let gone = albums.filter { $0.projectID == projectID }.map(\.id)
         albums.removeAll { $0.projectID == projectID }
         save()
+        gone.forEach(Self.forgetPlace)
+    }
+
+    /// Where its list was left, and what was folded in it.
+    private static func forgetPlace(of id: UUID) {
+        CollapsedCodeStore.forget(album: id)
+        ReadingPositionStore.standard.removeSymbolsPosition(forAlbum: id)
+    }
+
+    /// Swiping past the last album: an empty one, "New Album" (numbered when that's taken),
+    /// without asking for a name (rename it in Project).
+    @discardableResult
+    func createUntitled(projectID: String) -> Album {
+        create(named: untitledName(projectID: projectID), projectID: projectID)
+    }
+
+    /// What `createUntitled` would call it.
+    func untitledName(projectID: String) -> String {
+        let base = String(localized: "New Album")
+        let taken = Set(albums(inProject: projectID).map(\.name))
+        var name = base, number = 2
+        while taken.contains(name) {
+            name = "\(base) \(number)"
+            number += 1
+        }
+        return name
     }
 
     /// Adds what isn't in the album yet, at the end.

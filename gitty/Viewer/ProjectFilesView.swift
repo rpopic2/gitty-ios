@@ -13,7 +13,7 @@ struct ProjectFilesView: View {
     /// The album shown, marked in the list.
     let currentAlbumID: UUID?
     let onOpenAlbum: @MainActor (UUID) -> Void
-    /// The project's row: the whole project (out of an album), at the Code level.
+    /// The whole project's album row: the whole project (out of an album), at the Code level.
     let onShowProject: @MainActor () -> Void
     @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
     /// The project's review, in progress and last shared.
@@ -189,16 +189,8 @@ struct ProjectFilesView: View {
     private func list(project: ProjectInfo, tree: ProjectTree) -> some View {
         List {
             Section {
-                // Like "all of it" above the albums: a tap shows the whole project at the Code
-                // level, out of an album.
+                // The whole project is the first album now (see `albumsSection`).
                 header(project: project, tree: tree)
-                    .contentShape(Rectangle())
-                    .onTapGesture { onShowProject() }
-                    .listRowBackground(currentAlbumID == nil
-                        ? Color(uiColor: .systemGray4)
-                        : Color(uiColor: .secondarySystemGroupedBackground))
-                    .accessibilityAddTraits(currentAlbumID == nil ? [.isButton, .isSelected] : .isButton)
-                    .accessibilityAction { onShowProject() }
             }
             Section("Filter") {
                 filterRow
@@ -363,6 +355,27 @@ struct ProjectFilesView: View {
     private func albumsSection(project: ProjectInfo) -> some View {
         let albums = AlbumStore.shared.albums(inProject: project.id)
         Section {
+            // The whole project, first and always there (like Photos' Recents): not renamed or
+            // deleted. Swiping the bar at the Code level goes through these, in this order.
+            Button { onShowProject() } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(project.title)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text("Whole project")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "shippingbox")
+                        .foregroundStyle(.tint)
+                }
+            }
+            .listRowBackground(currentAlbumID == nil
+                ? Color(uiColor: .systemGray4)
+                : Color(uiColor: .secondarySystemGroupedBackground))
+            .accessibilityAddTraits(currentAlbumID == nil ? .isSelected : [])
             ForEach(albums) { album in
                 Button { onOpenAlbum(album.id) } label: {
                     AlbumRow(album: album)
@@ -389,7 +402,9 @@ struct ProjectFilesView: View {
             Text("Albums")
         } footer: {
             if albums.isEmpty {
-                Text("An album keeps the symbols, files and lines of this project you want to see together. To add something to one, touch and hold it at the Code level, then choose Add to Album.")
+                Text("An album keeps the symbols, files and lines of this project you want to see together. To add something to one, touch and hold it at the Code level, then choose Add to Album. Swipe the bar sideways to go from one album to the next.")
+            } else {
+                Text("Swipe the bar at the Code level sideways to go from one album to the next.")
             }
         }
     }

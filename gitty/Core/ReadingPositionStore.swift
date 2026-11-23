@@ -75,6 +75,25 @@ nonisolated struct ReadingPositionStore: @unchecked Sendable {
         defaults.set(data, forKey: symbolsKey(for: url))
     }
 
+    /// Where an album's list was left (the whole project's is the open file's, above).
+    func symbolsPosition(forAlbum id: UUID) -> SymbolsPosition? {
+        guard let data = defaults.data(forKey: albumKey(id)) else { return nil }
+        return try? JSONDecoder().decode(SymbolsPosition.self, from: data)
+    }
+
+    func saveSymbolsPosition(_ position: SymbolsPosition, forAlbum id: UUID) {
+        guard let data = try? JSONEncoder().encode(position) else { return }
+        defaults.set(data, forKey: albumKey(id))
+    }
+
+    func removeSymbolsPosition(forAlbum id: UUID) {
+        defaults.removeObject(forKey: albumKey(id))
+    }
+
+    private func albumKey(_ id: UUID) -> String {
+        "symbolsPosition:album:" + id.uuidString
+    }
+
     /// Forgets both places in the file: File's and the Symbols list's.
     func remove(for url: URL) {
         defaults.removeObject(forKey: key(for: url))

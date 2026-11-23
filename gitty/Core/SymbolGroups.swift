@@ -158,6 +158,25 @@ final class CollapsedCodeStore {
     /// level's folds don't hide its results, and its own go with it.
     static func temporary() -> CollapsedCodeStore { CollapsedCodeStore(defaults: nil) }
 
+    /// An album's own folds (`nil`: the whole project's, `shared`), so switching albums keeps
+    /// each one as it was left. Made when first shown; an album starts with nothing folded.
+    static func forAlbum(_ id: UUID?) -> CollapsedCodeStore {
+        guard let id else { return shared }
+        if let store = albumStores[id] { return store }
+        let store = CollapsedCodeStore(defaults: .standard, namespace: "album." + id.uuidString + ".")
+        albumStores[id] = store
+        return store
+    }
+
+    private static var albumStores: [UUID: CollapsedCodeStore] = [:]
+
+    /// A deleted album's folds go with it.
+    static func forget(album id: UUID) {
+        albumStores[id] = nil
+        let namespace = "album." + id.uuidString + "."
+        for key in Key.all { UserDefaults.standard.removeObject(forKey: Key.named(key, namespace)) }
+    }
+
     /// Symbols that differ from their scope's default.
     private(set) var flipped: Set<String>
     /// Files that differ from their scope's default (folded, unless the scope's are).
@@ -179,6 +198,8 @@ final class CollapsedCodeStore {
     private(set) var openGroups: Set<String>
     /// `nil`: not saved (`temporary()`).
     @ObservationIgnored private let defaults: UserDefaults?
+    /// Before each saved key's name: "" for the whole project's, an album's own otherwise.
+    @ObservationIgnored private let namespace: String
 
     private enum Key {
         static let flipped = "collapsedCode.symbols"
@@ -191,10 +212,18 @@ final class CollapsedCodeStore {
         static let openGroups = "collapsedCode.openGroups"
         /// Before Collapse All: symbols and `file#` keys together.
         static let old = "collapsedCode"
+
+        static let all = [flipped, files, scopes, foldedScopes, folders, foldedFolderScopes, seenScopes, openGroups]
+
+        /// `collapsedCode.album.<id>.symbols` for an album's.
+        static func named(_ key: String, _ namespace: String) -> String {
+            namespace.isEmpty ? key : key.replacingOccurrences(of: "collapsedCode.", with: "collapsedCode." + namespace)
+        }
     }
 
-    init(defaults: UserDefaults?) {
+    init(defaults: UserDefaults?, namespace: String = "") {
         self.defaults = defaults
+        self.namespace = namespace
         guard let defaults else {
             flipped = []
             files = []
@@ -206,9 +235,10 @@ final class CollapsedCodeStore {
             openGroups = []
             return
         }
-        var flipped = Set(defaults.stringArray(forKey: Key.flipped) ?? [])
-        var files = Set(defaults.stringArray(forKey: Key.files) ?? [])
-        if let old = defaults.stringArray(forKey: Key.old) {
+        func saved(_ key: String) -> [String] { defaults.stringArray(forKey: Key.named(key, namespace)) ?? [] }
+        var flipped = Set(saved(Key.flipped))
+        var files = Set(saved(Key.files))
+        if namespace.isEmpty, let old = defaults.stringArray(forKey: Key.old) {
             for key in old {
                 if key.hasPrefix("file#") { files.insert(key) } else { flipped.insert(key) }
             }
@@ -216,12 +246,12 @@ final class CollapsedCodeStore {
         }
         self.flipped = flipped
         self.files = files
-        collapsedScopes = Set(defaults.stringArray(forKey: Key.scopes) ?? [])
-        foldedScopes = Set(defaults.stringArray(forKey: Key.foldedScopes) ?? [])
-        folders = Set(defaults.stringArray(forKey: Key.folders) ?? [])
-        foldedFolderScopes = Set(defaults.stringArray(forKey: Key.foldedFolderScopes) ?? [])
-        seenScopes = Set(defaults.stringArray(forKey: Key.seenScopes) ?? [])
-        openGroups = Set(defaults.stringArray(forKey: Key.openGroups) ?? [])
+        collapsedScopes = Set(saved(Key.scopes))
+        foldedScopes = Set(saved(Key.foldedScopes))
+        folders = Set(saved(Key.folders))
+        foldedFolderScopes = Set(saved(Key.foldedFolderScopes))
+        seenScopes = Set(saved(Key.seenScopes))
+        openGroups = Set(saved(Key.openGroups))
     }
 
     func isGroupOpen(_ path: String, scope: String) -> Bool {
@@ -247,7 +277,7 @@ final class CollapsedCodeStore {
             foldedFolderScopes.insert(scope)
             save()
         } else {
-            defaults.set(seenScopes.sorted(), forKey: Key.seenScopes)
+            defaults.set(seenScopes.sorted(), forKey: Key.named(Key.seenScopes, namespace))
         }
     }
 
@@ -374,13 +404,15 @@ final class CollapsedCodeStore {
 
     private func save() {
         guard let defaults else { return }
-        defaults.set(flipped.sorted(), forKey: Key.flipped)
-        defaults.set(files.sorted(), forKey: Key.files)
-        defaults.set(collapsedScopes.sorted(), forKey: Key.scopes)
-        defaults.set(foldedScopes.sorted(), forKey: Key.foldedScopes)
-        defaults.set(folders.sorted(), forKey: Key.folders)
-        defaults.set(foldedFolderScopes.sorted(), forKey: Key.foldedFolderScopes)
-        defaults.set(seenScopes.sorted(), forKey: Key.seenScopes)
-        defaults.set(openGroups.sorted(), forKey: Key.openGroups)
+        let namespace = namespace
+        func set(_ values: Set<String>, _ key: String) { defaults.set(values.sorted(), forKey: Key.named(key, namespace)) }
+        set(flipped, Key.flipped)
+        set(files, Key.files)
+        set(collapsedScopes, Key.scopes)
+        set(foldedScopes, Key.foldedScopes)
+        set(folders, Key.folders)
+        set(foldedFolderScopes, Key.foldedFolderScopes)
+        set(seenScopes, Key.seenScopes)
+        set(openGroups, Key.openGroups)
     }
 }

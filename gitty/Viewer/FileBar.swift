@@ -73,9 +73,10 @@ struct FileBar: View {
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
-         titleIcon: String? = nil) {
+         titleIcon: String? = nil, swipe: BarSwipe? = nil) {
         self.title = title
         self.titleIcon = titleIcon
+        self.swipe = swipe
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
         self.isProgressVisible = isProgressVisible
@@ -307,8 +308,15 @@ struct BottomBarStack: View {
     let onExpandAll: (@MainActor () -> Void)?
     /// Before the title: an album's icon while one shows.
     let titleIcon: String?
+    /// Swiping the bar sideways switches albums, like Safari's tabs (`nil`: it doesn't).
+    let swipe: BarSwipe?
     /// A review set aside shows above the bar, like a minimized Mail draft.
     @Environment(ReviewDraft.self) private var review: ReviewDraft?
+    /// How far the bar is dragged sideways (its neighbours follow it).
+    @State private var dragX: CGFloat = 0
+    /// Decided on the drag's first move: sideways switches, anything else is left alone.
+    @State private var isSwiping: Bool?
+    @State private var barWidth: CGFloat = 0
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -318,9 +326,10 @@ struct BottomBarStack: View {
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
-         titleIcon: String? = nil) {
+         titleIcon: String? = nil, swipe: BarSwipe? = nil) {
         self.title = title
         self.titleIcon = titleIcon
+        self.swipe = swipe
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
         self.isProgressVisible = isProgressVisible
@@ -341,11 +350,11 @@ struct BottomBarStack: View {
                 ReviewDock(draft: review)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
-                    isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
-                    copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
-                    searchQuery: searchQuery, onClearSearch: onClearSearch,
-                    onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, titleIcon: titleIcon)
+            swipeable(FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
+                              isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
+                              copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
+                              searchQuery: searchQuery, onClearSearch: onClearSearch,
+                              onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, titleIcon: titleIcon))
         }
 
         if #available(iOS 26.0, *) {
@@ -354,4 +363,92 @@ struct BottomBarStack: View {
             stack.background(.bar, ignoresSafeAreaEdges: .bottom)
         }
     }
+
+    /// The bar, following a sideways drag with its neighbours' bars beside it, like Safari's
+    /// tabs. Let go far enough (or flung) and the neighbour slides in; where there's none, the
+    /// bar stretches a little and springs back.
+    @ViewBuilder
+    private func swipeable(_ bar: FileBar) -> some View {
+        if let swipe, !isCollapsed {
+            bar
+                .offset(x: dragX)
+                .background {
+                    if dragX != 0 {
+                        ZStack {
+                            if let previous = swipe.previous { neighbour(previous).offset(x: dragX - barWidth) }
+                            if let next = swipe.next { neighbour(next).offset(x: dragX + barWidth) }
+                        }
+                    }
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
+                .simultaneousGesture(swipeGesture(swipe))
+                .accessibilityActions {
+                    if let previous = swipe.previous {
+                        Button(String(localized: "Show \(previous.title)")) { swipe.onSwitch(false) }
+                    }
+                    if let next = swipe.next {
+                        Button(String(localized: "Show \(next.title)")) { swipe.onSwitch(true) }
+                    }
+                }
+        } else {
+            bar
+        }
+    }
+
+    private func neighbour(_ neighbour: BarSwipe.Neighbour) -> some View {
+        FileBar(title: neighbour.title, isCollapsed: false, progressFraction: 0, isProgressVisible: false,
+                onExpand: {}, onEdit: {}, titleIcon: neighbour.icon)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private func swipeGesture(_ swipe: BarSwipe) -> some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                let dx = value.translation.width, dy = value.translation.height
+                if isSwiping == nil { isSwiping = abs(dx) > abs(dy) }
+                guard isSwiping == true else { return }
+                // Toward a side with nothing there: a little, and less the further it goes.
+                let hasNeighbour = dx < 0 ? swipe.next != nil : swipe.previous != nil
+                dragX = hasNeighbour ? dx : dx / (1 + abs(dx) / 60)
+            }
+            .onEnded { value in
+                defer { isSwiping = nil }
+                guard isSwiping == true else { return }
+                let dx = value.translation.width
+                let flung = value.predictedEndTranslation.width
+                let forward = dx < 0
+                let hasNeighbour = forward ? swipe.next != nil : swipe.previous != nil
+                let width = max(barWidth, 1)
+                let farEnough = abs(dx) > width * 0.3 || (abs(flung) > width * 0.5 && (flung < 0) == forward)
+                guard hasNeighbour, farEnough else {
+                    withAnimation(.spring(duration: 0.3)) { dragX = 0 }
+                    return
+                }
+                // The neighbour slides into place, then becomes the bar.
+                withAnimation(.smooth(duration: 0.22)) {
+                    dragX = forward ? -width : width
+                } completion: {
+                    swipe.onSwitch(forward)
+                    var instant = Transaction()
+                    instant.disablesAnimations = true
+                    withTransaction(instant) { dragX = 0 }
+                }
+            }
+    }
+}
+
+/// Swiping the bottom bar sideways, between albums: the bars beside it, and what a swipe does.
+struct BarSwipe {
+    struct Neighbour: Equatable {
+        let title: String
+        let icon: String?
+    }
+
+    /// To the left (swiping right shows it); `nil`: nothing there, the bar springs back.
+    let previous: Neighbour?
+    /// To the right (swiping left shows it).
+    let next: Neighbour?
+    /// `true`: the next one.
+    let onSwitch: @MainActor (_ forward: Bool) -> Void
 }

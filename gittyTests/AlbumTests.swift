@@ -113,4 +113,14 @@ struct AlbumTests {
         reloaded.deleteAlbums(inProject: "p")
         #expect(AlbumStore(defaults: defaults).albums.isEmpty)
     }
+
+    @Test func swipingPastTheLastAlbumMakesANumberedNewOne() throws {
+        let defaults = try #require(UserDefaults(suiteName: "AlbumTests-\(UUID().uuidString)"))
+        let store = AlbumStore(defaults: defaults)
+        #expect(store.createUntitled(projectID: "p").name == "New Album")
+        #expect(store.untitledName(projectID: "p") == "New Album 2")
+        #expect(store.createUntitled(projectID: "p").name == "New Album 2")
+        #expect(store.untitledName(projectID: "q") == "New Album")  // each project's own
+        #expect(store.albums(inProject: "p").allSatisfy { $0.items.isEmpty })
+    }
 }
