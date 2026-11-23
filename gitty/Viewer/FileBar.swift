@@ -66,6 +66,9 @@ struct FileBar: View {
     let onDeleteAlbum: (@MainActor () -> Void)?
     /// Before the title: an album's icon while one shows.
     let titleIcon: String?
+    /// iOS 26's glass swells and stretches under the finger: not on a bar that's swiped
+    /// sideways, which should keep its size as it moves.
+    let reactsToTouch: Bool
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -76,9 +79,10 @@ struct FileBar: View {
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
          onDeleteAlbum: (@MainActor () -> Void)? = nil,
-         titleIcon: String? = nil) {
+         titleIcon: String? = nil, reactsToTouch: Bool = true) {
         self.title = title
         self.titleIcon = titleIcon
+        self.reactsToTouch = reactsToTouch
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
         self.isProgressVisible = isProgressVisible
@@ -123,7 +127,7 @@ struct FileBar: View {
             if #available(iOS 26.0, *) {
                 GlassFileBar(title: title, titleIcon: titleIcon, search: activeSearch, isCollapsed: isCollapsed,
                              progress: ProgressLine(fraction: progressFraction, isVisible: isProgressVisible),
-                             clearButton: clearButton)
+                             clearButton: clearButton, reactsToTouch: reactsToTouch)
             } else {
                 ClassicFileBar(title: title, titleIcon: titleIcon, search: activeSearch, isCollapsed: isCollapsed,
                                progress: ProgressLine(fraction: progressFraction, isVisible: isProgressVisible),
@@ -236,6 +240,7 @@ private struct GlassFileBar: View {
     let isCollapsed: Bool
     let progress: ProgressLine
     let clearButton: ClearSearchButton?
+    let reactsToTouch: Bool
 
     var body: some View {
         BarTitle(title: title, icon: titleIcon, search: search, isCollapsed: isCollapsed)
@@ -245,7 +250,7 @@ private struct GlassFileBar: View {
             .overlay(alignment: .trailing) { clearButton }
             .overlay(alignment: .bottom) { progress }
             .clipShape(Capsule())
-            .glassEffect(.regular.interactive(), in: Capsule())
+            .glassEffect(.regular.interactive(reactsToTouch), in: Capsule())
             .padding(.horizontal, FileBarMetrics.glassHorizontalMargin)
             .padding(.bottom, FileBarMetrics.glassBottomPadding)
     }
@@ -331,6 +336,9 @@ struct BottomBarStack: View {
     @State private var makesNew = false
     /// Let go, and still moving back into place or on to the neighbour.
     @State private var isSettling = false
+    /// How far the neighbours' edges are in at rest (1). Just after a switch they're where the
+    /// slide left them, at the screen's sides, and come in from there.
+    @State private var edgeReveal: CGFloat = 1
 
     /// Where it rests, not being swiped (or the albums page rising from it): only then does a
     /// tap open Project.
@@ -374,7 +382,7 @@ struct BottomBarStack: View {
                               copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                               searchQuery: searchQuery, onClearSearch: onClearSearch,
                               onCollapseAll: onCollapseAll, onExpandAll: onExpandAll,
-                              onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon))
+                              onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon, reactsToTouch: swipe == nil))
         }
         // A review set aside floats above the bar, at either end (swipe it across): not part of it.
         .overlay(alignment: .top) {
@@ -403,7 +411,8 @@ struct BottomBarStack: View {
             // sits its edge in from where it goes as it slides.
             let inset = edgeInset(swipe)
             let step = neighbourStep(swipe)
-            let resting = Self.edgeShown * (1 - min(1, abs(dragX) / step))
+            let progress = min(1, abs(dragX) / step)
+            let resting = Self.edgeShown * edgeReveal * (1 - progress)
             bar
                 .padding(.horizontal, inset)
                 .overlay(alignment: .top) {
@@ -423,7 +432,8 @@ struct BottomBarStack: View {
                             }
                         }
                     }
-                    .opacity(dragX == 0 ? 0.7 : 1)
+                    // Dimmed at rest, full as they slide in (no jump as it's let go).
+                    .opacity(1 - 0.3 * edgeReveal * (1 - progress))
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
                 .simultaneousGesture(swipeGesture(swipe))
@@ -498,7 +508,7 @@ struct BottomBarStack: View {
         let margin = Self.capsuleMargin + inset
         // From the bar's left, in its own space: where a neighbour's capsule would start, and
         // the screen's side, moving in to the bar's end.
-        let left = dragX + step - Self.edgeShown * (1 - progress) + margin
+        let left = dragX + step - Self.edgeShown * edgeReveal * (1 - progress) + margin
         let right = barWidth - margin * progress
         let width = max(0, right - left)
         return Self.capsuleShape
@@ -588,9 +598,15 @@ struct BottomBarStack: View {
                     dragX = forward ? -neighbourStep(swipe) : neighbourStep(swipe)
                 } completion: {
                     swipe.onSwitch(forward)
+                    // The neighbour is the bar now, where it was; the old bar is a neighbour,
+                    // where it was, just off the screen: its edge comes in from there.
                     var instant = Transaction()
                     instant.disablesAnimations = true
-                    withTransaction(instant) { dragX = 0 }
+                    withTransaction(instant) {
+                        dragX = 0
+                        edgeReveal = 0
+                    }
+                    withAnimation(.smooth(duration: 0.25)) { edgeReveal = 1 }
                     isSettling = false
                 }
             }
