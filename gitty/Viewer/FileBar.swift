@@ -336,9 +336,14 @@ struct BottomBarStack: View {
     @State private var makesNew = false
     /// Let go, and still moving back into place or on to the neighbour.
     @State private var isSettling = false
-    /// How far the neighbours' edges are in at rest (1). Just after a switch they're where the
-    /// slide left them, at the screen's sides, and come in from there.
-    @State private var edgeReveal: CGFloat = 1
+    /// 1 at rest. Just after a switch, 0: the neighbour on the far side, new on screen, comes in
+    /// from just off it, and the old bar (a neighbour now) dims.
+    @State private var arrival: CGFloat = 1
+    /// That far side is the right one (the switch went forward).
+    @State private var arrivedForward = true
+    /// Switching away from this album (its id), until the bar shows the new one: the slide
+    /// stays where it ended meanwhile, so nothing jumps back and forth.
+    @State private var switchingFrom: String?
     /// How far the bar is being pulled up (to the albums page): the neighbours' edges go out to
     /// the sides as it rises.
     @State private var liftDistance: CGFloat = 0
@@ -346,7 +351,7 @@ struct BottomBarStack: View {
     /// Where it rests, not being swiped (or the albums page rising from it): only then does a
     /// tap open Project.
     private var isAtHome: Bool {
-        dragX == 0 && isSwiping == nil && !isSettling && !(swipe?.isAway?() ?? false)
+        dragX == 0 && isSwiping == nil && !isSettling && switchingFrom == nil && !(swipe?.isAway?() ?? false)
     }
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
@@ -410,35 +415,55 @@ struct BottomBarStack: View {
     @ViewBuilder
     private func swipeable(_ bar: FileBar) -> some View {
         if let swipe, !isCollapsed {
-            // With an edge showing, the bar narrows to leave room for it. At rest a neighbour
-            // sits its edge in from where it goes as it slides.
+            // With an edge showing, the bar narrows to leave room for it. The bar and its
+            // neighbours move as one strip, each where the next one's edge shows: a switch ends
+            // with the old bar exactly where a neighbour rests.
             let inset = edgeInset(swipe)
-            let step = neighbourStep(swipe)
-            let progress = min(1, abs(dragX) / step)
-            // Pulled up, the edges leave to the sides, gone by a few dozen points.
+            let spacing = neighbourSpacing(swipe)
+            // The new album showing already (the slide over): from here, at rest.
+            let switched = switchingFrom != nil && swipe.currentID != switchingFrom
+            let x = switched ? 0 : dragX
+            let arrived = switched ? 0 : arrival
+            let progress = min(1, abs(x) / spacing)
+            // Pulled up, the edges leave to the sides, gone by a few dozen points; just after a
+            // switch, the far one comes in from there.
             let lifted = min(1, liftDistance / Self.liftToHideEdges)
-            let resting = Self.edgeShown * edgeReveal * (1 - progress) * (1 - lifted)
+            let previousOut = max(lifted, arrivedForward ? 0 : 1 - arrived) * Self.edgeShown
+            let nextOut = max(lifted, arrivedForward ? 1 - arrived : 0) * Self.edgeShown
             bar
                 .padding(.horizontal, inset)
                 .overlay(alignment: .top) {
                     if swipe.onLift != nil { AlbumsHandle() }
                 }
-                .offset(x: dragX)
+                .offset(x: x)
                 .background {
                     ZStack {
                         if let previous = swipe.previous {
-                            neighbour(previous).padding(.horizontal, inset).offset(x: dragX - step + resting)
+                            neighbour(previous).padding(.horizontal, inset).offset(x: x - spacing - previousOut)
                         }
                         if let next = swipe.next {
                             if next.isNew {
-                                newAlbumBox(inset: inset, step: step)
+                                newAlbumBox(inset: inset, spacing: spacing, x: x, out: nextOut)
                             } else {
-                                neighbour(next).padding(.horizontal, inset).offset(x: dragX + step - resting)
+                                neighbour(next).padding(.horizontal, inset).offset(x: x + spacing + nextOut)
                             }
                         }
                     }
-                    // Dimmed at rest, full as they slide in (no jump as it's let go).
-                    .opacity(1 - 0.3 * edgeReveal * (1 - progress))
+                    // Dimmed at rest, full as they slide in (the old bar dims as it arrives).
+                    .opacity(1 - 0.3 * arrived * (1 - progress))
+                }
+                // The new album shows: the strip is at rest around it now.
+                .onChange(of: swipe.currentID) {
+                    guard switchingFrom != nil else { return }
+                    var instant = Transaction()
+                    instant.disablesAnimations = true
+                    withTransaction(instant) {
+                        dragX = 0
+                        arrival = 0
+                        switchingFrom = nil
+                    }
+                    withAnimation(.smooth(duration: 0.25)) { arrival = 1 }
+                    isSettling = false
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
                 .simultaneousGesture(swipeGesture(swipe))
@@ -468,10 +493,9 @@ struct BottomBarStack: View {
         return showsEdges ? Self.edgeShown + Self.edgeGap : 0
     }
 
-    /// From the bar's place to a neighbour's as it slides: a whole width less half the space
-    /// around the capsules, so neighbours sit half as far apart as the screen's margins.
-    private func neighbourStep(_ swipe: BarSwipe) -> CGFloat {
-        max(barWidth - Self.capsuleMargin - edgeInset(swipe), 1)
+    /// From the bar's place to a neighbour's, at rest and as it slides: where its edge shows.
+    private func neighbourSpacing(_ swipe: BarSwipe) -> CGFloat {
+        max(barWidth - Self.capsuleMargin - edgeInset(swipe) - Self.edgeShown, 1)
     }
 
     /// Back to where it rests (taps wait until it's there).
@@ -510,13 +534,13 @@ struct BottomBarStack: View {
     /// in its middle. At rest just its edge shows, as a neighbour's does; dragged, its near end
     /// follows the bar's and its far end comes in from the screen's side, so it grows into the
     /// bar's place.
-    private func newAlbumBox(inset: CGFloat, step: CGFloat) -> some View {
-        let progress = min(1, abs(dragX) / step)
+    /// - Parameter out: how far its edge has gone off the screen's side (pulled up).
+    private func newAlbumBox(inset: CGFloat, spacing: CGFloat, x: CGFloat, out: CGFloat) -> some View {
+        let progress = min(1, abs(x) / spacing)
         let margin = Self.capsuleMargin + inset
         // From the bar's left, in its own space: where a neighbour's capsule would start, and
         // the screen's side, moving in to the bar's end.
-        let lifted = min(1, liftDistance / Self.liftToHideEdges)  // pulled up: it leaves too
-        let left = dragX + step - Self.edgeShown * edgeReveal * (1 - progress) * (1 - lifted) + margin
+        let left = x + spacing + out + margin
         let right = barWidth - margin * progress
         let width = max(0, right - left)
         return Self.capsuleShape
@@ -602,22 +626,22 @@ struct BottomBarStack: View {
                     springBack()
                     return
                 }
-                // The neighbour slides into place, then becomes the bar.
+                // The neighbour slides into the bar's place (the bar into a neighbour's), then
+                // becomes the bar once the album shows (see `onChange(of: currentID)`).
                 isSettling = true
+                arrivedForward = forward
                 withAnimation(.smooth(duration: 0.22)) {
-                    dragX = forward ? -neighbourStep(swipe) : neighbourStep(swipe)
+                    dragX = forward ? -neighbourSpacing(swipe) : neighbourSpacing(swipe)
                 } completion: {
+                    switchingFrom = swipe.currentID
                     swipe.onSwitch(forward)
-                    // The neighbour is the bar now, where it was; the old bar is a neighbour,
-                    // where it was, just off the screen: its edge comes in from there.
-                    var instant = Transaction()
-                    instant.disablesAnimations = true
-                    withTransaction(instant) {
-                        dragX = 0
-                        edgeReveal = 0
+                    // Should the album not change after all: back to rest.
+                    Task {
+                        try? await Task.sleep(for: .seconds(1))
+                        guard switchingFrom != nil else { return }
+                        switchingFrom = nil
+                        springBack()
                     }
-                    withAnimation(.smooth(duration: 0.25)) { edgeReveal = 1 }
-                    isSettling = false
                 }
             }
     }
@@ -654,6 +678,8 @@ struct BarSwipe {
     let previous: Neighbour?
     /// To the right (swiping left shows it).
     let next: Neighbour?
+    /// The album shown ("" for the whole project): a switch is over once it changes.
+    let currentID: String
     /// `true`: the next one.
     let onSwitch: @MainActor (_ forward: Bool) -> Void
     /// Swiping up instead: how far (the albums page follows), then where it was let go and

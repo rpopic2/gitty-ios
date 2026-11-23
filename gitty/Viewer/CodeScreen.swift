@@ -959,7 +959,8 @@ struct CodeScreen: View {
             : lastIsEmpty ? nil
             : BarSwipe.Neighbour(title: AlbumStore.shared.untitledName(projectID: projectID), icon: "plus", isNew: true)
         let showProject = onShowProject, openAlbum = onOpenAlbum
-        return BarSwipe(previous: previous, next: next, onSwitch: { forward in
+        return BarSwipe(previous: previous, next: next, currentID: model.activeAlbum?.id.uuidString ?? "",
+                        onSwitch: { forward in
             let place = forward ? index + 1 : index - 1
             if place <= 0 {
                 showProject()
