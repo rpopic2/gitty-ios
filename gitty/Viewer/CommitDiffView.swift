@@ -57,8 +57,8 @@ struct CommitDiffView: View {
                             .padding(.bottom, 8)
                     }
                 }
-                // A review set aside floats above the caption, at its end.
-                .overlay(alignment: .topTrailing) {
+                // A review set aside floats above the caption, at either end (swipe it across).
+                .overlay(alignment: .top) {
                     if let review, review.isDocked {
                         ReviewDock(draft: review, overSheet: true)
                             .offset(y: -ReviewDock.floatingRise)  // all of it above, clear of the bar

@@ -249,8 +249,13 @@ struct ReviewDock: View {
     /// its space below, and a little more.
     static let floatingRise: CGFloat = reservedHeight + 6
 
-    /// A small capsule floating at the end, above the bar (or a page's caption): the review's
-    /// icon and how many comments it has. Tap it to open the review.
+    /// Which side it floats at: swipe it left or right to move it (saved on this device).
+    @AppStorage("reviewDockOnLeft") private var isOnLeft = false
+    /// How far it's dragged toward the other side.
+    @State private var dragX: CGFloat = 0
+
+    /// A small capsule floating at one end, above the bar (or a page's caption): the review's
+    /// icon and how many comments it has. Tap it to open the review; swipe it to the other end.
     var body: some View {
         Button { draft.resume(overSheet: overSheet) } label: {
             HStack(spacing: 6) {
@@ -266,13 +271,35 @@ struct ReviewDock: View {
         }
         .buttonStyle(.plain)
         .modifier(DockBackground())
-        .padding(.trailing, FileBarMetrics.fieldHorizontalMargin + 4)
+        .offset(x: dragX)
+        .gesture(
+            DragGesture(minimumDistance: 10, coordinateSpace: .global)
+                .onChanged { value in
+                    // Toward the other side freely; away from it, only a little.
+                    let dx = value.translation.width
+                    let toward = isOnLeft ? dx > 0 : dx < 0
+                    dragX = toward ? dx : dx / (1 + abs(dx) / 30)
+                }
+                .onEnded { value in
+                    let dx = value.translation.width, flung = value.predictedEndTranslation.width
+                    let moves = isOnLeft ? dx > 100 || flung > 200 : dx < -100 || flung < -200
+                    withAnimation(.spring(duration: 0.35)) {
+                        if moves { isOnLeft.toggle() }
+                        dragX = 0
+                    }
+                }
+        )
+        .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin + 4)
+        .frame(maxWidth: .infinity, alignment: isOnLeft ? .leading : .trailing)
         .padding(.bottom, 8)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Review, ^[\(draft.commentCount) comment](inflect: true)"))
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens the review")
         .accessibilityAction { draft.resume(overSheet: overSheet) }
+        .accessibilityAction(named: isOnLeft ? Text("Move to the Right") : Text("Move to the Left")) {
+            withAnimation(.spring(duration: 0.35)) { isOnLeft.toggle() }
+        }
     }
 }
 

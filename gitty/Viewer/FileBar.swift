@@ -376,8 +376,8 @@ struct BottomBarStack: View {
                               onCollapseAll: onCollapseAll, onExpandAll: onExpandAll,
                               onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon))
         }
-        // A review set aside floats above the bar, at its end: not part of it.
-        .overlay(alignment: .topTrailing) {
+        // A review set aside floats above the bar, at either end (swipe it across): not part of it.
+        .overlay(alignment: .top) {
             if !isCollapsed, let review, review.isDocked {
                 ReviewDock(draft: review)
                     .offset(y: -ReviewDock.floatingRise)  // all of it above, clear of the bar
