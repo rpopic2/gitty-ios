@@ -936,7 +936,7 @@ struct CodeScreen: View {
     }
 
     /// Swiping the bar sideways, like Safari's tabs: through the project's albums, the whole
-    /// project first. Past the last, a new empty album.
+    /// project first. Past the last, a new empty album (not while the last one is empty).
     private var albumSwipe: BarSwipe? {
         guard let projectID = model.symbolsProjectID else { return nil }
         let albums = AlbumStore.shared.albums(inProject: projectID)
@@ -947,8 +947,11 @@ struct CodeScreen: View {
             place == 0 ? whole : BarSwipe.Neighbour(title: albums[place - 1].name, icon: "rectangle.stack")
         }
         let previous: BarSwipe.Neighbour? = index > 0 ? neighbour(index - 1) : nil
-        let next = index < albums.count ? neighbour(index + 1)
-            : BarSwipe.Neighbour(title: AlbumStore.shared.untitledName(projectID: projectID), icon: "plus")
+        // A new album past the last, unless the last is still empty (use that one first).
+        let lastIsEmpty = albums.last.map { $0.items.isEmpty && $0.diff == nil } ?? false
+        let next: BarSwipe.Neighbour? = index < albums.count ? neighbour(index + 1)
+            : lastIsEmpty ? nil
+            : BarSwipe.Neighbour(title: AlbumStore.shared.untitledName(projectID: projectID), icon: "plus", isNew: true)
         let showProject = onShowProject, openAlbum = onOpenAlbum
         return BarSwipe(previous: previous, next: next) { forward in
             let place = forward ? index + 1 : index - 1

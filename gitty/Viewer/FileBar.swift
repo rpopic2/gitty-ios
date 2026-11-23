@@ -327,6 +327,8 @@ struct BottomBarStack: View {
     /// Decided on the drag's first move: sideways switches, anything else is left alone.
     @State private var isSwiping: Bool?
     @State private var barWidth: CGFloat = 0
+    /// Dragged far enough to make a new album on letting go (a tap of haptics as it crosses).
+    @State private var makesNew = false
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -389,7 +391,13 @@ struct BottomBarStack: View {
                     if dragX != 0 {
                         ZStack {
                             if let previous = swipe.previous { neighbour(previous).offset(x: dragX - barWidth) }
-                            if let next = swipe.next { neighbour(next).offset(x: dragX + barWidth) }
+                            if let next = swipe.next {
+                                if next.isNew {
+                                    newAlbumSign.offset(x: barWidth / 2 + dragX / 2)  // the middle of the gap
+                                } else {
+                                    neighbour(next).offset(x: dragX + barWidth)
+                                }
+                            }
                         }
                     }
                 }
@@ -415,6 +423,21 @@ struct BottomBarStack: View {
             .accessibilityHidden(true)
     }
 
+    /// Past the last album, like Safari's new tab: just a +, in the middle of what the bar
+    /// uncovers, stronger once letting go makes the album.
+    private var newAlbumSign: some View {
+        Image(systemName: "plus")
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(makesNew ? Color.primary : Color.secondary)
+            .scaleEffect(makesNew ? 1.15 : 0.9)
+            .animation(.spring(duration: 0.2), value: makesNew)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    /// How far a drag toward a new album must go to make it.
+    private var newAlbumDistance: CGFloat { max(barWidth, 1) * 0.3 }
+
     private func swipeGesture(_ swipe: BarSwipe) -> some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
@@ -424,9 +447,19 @@ struct BottomBarStack: View {
                 // Toward a side with nothing there: a little, and less the further it goes.
                 let hasNeighbour = dx < 0 ? swipe.next != nil : swipe.previous != nil
                 dragX = hasNeighbour ? dx : dx / (1 + abs(dx) / 60)
+                // Toward a new album: a tap as it gets far enough to make one.
+                let crossed = dx < 0 && swipe.next?.isNew == true && -dx > newAlbumDistance
+                if crossed != makesNew {
+                    makesNew = crossed
+                    if crossed { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+                }
             }
             .onEnded { value in
-                defer { isSwiping = nil }
+                let wasPastNew = makesNew
+                defer {
+                    isSwiping = nil
+                    makesNew = false
+                }
                 guard isSwiping == true else { return }
                 let dx = value.translation.width
                 let flung = value.predictedEndTranslation.width
@@ -434,6 +467,13 @@ struct BottomBarStack: View {
                 let hasNeighbour = forward ? swipe.next != nil : swipe.previous != nil
                 let width = max(barWidth, 1)
                 let farEnough = abs(dx) > width * 0.3 || (abs(flung) > width * 0.5 && (flung < 0) == forward)
+                if forward, swipe.next?.isNew == true {
+                    // Only once it's past the threshold (a fling doesn't make one): the new
+                    // album's bar springs back into place.
+                    if wasPastNew { swipe.onSwitch(true) }
+                    withAnimation(.spring(duration: 0.3)) { dragX = 0 }
+                    return
+                }
                 guard hasNeighbour, farEnough else {
                     withAnimation(.spring(duration: 0.3)) { dragX = 0 }
                     return
@@ -456,6 +496,8 @@ struct BarSwipe {
     struct Neighbour: Equatable {
         let title: String
         let icon: String?
+        /// Past the last album: a new one, shown as just a +.
+        var isNew = false
     }
 
     /// To the left (swiping right shows it); `nil`: nothing there, the bar springs back.
