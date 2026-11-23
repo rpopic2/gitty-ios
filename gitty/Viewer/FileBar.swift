@@ -489,7 +489,7 @@ struct BottomBarStack: View {
                     isSettling = false
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
-                .gesture(swipeGesture(swipe))
+                .simultaneousGesture(swipeGesture(swipe))
                 .accessibilityActions {
                     if let previous = swipe.previous {
                         Button(String(localized: "Show \(previous.title)")) { swipe.onSwitch(false) }
@@ -602,11 +602,12 @@ struct BottomBarStack: View {
     /// How far a drag toward a new album must go to make it.
     private var newAlbumDistance: CGFloat { max(barWidth, 1) * 0.3 }
 
-    /// UIKit's pan, in the window's space (pulled up, the bar moves with the finger, and in its
-    /// own the drag would shake). SwiftUI's drag waited for the touch-and-hold menu to give up,
-    /// so a short pull held still stayed put for half a second before the bar followed.
-    private func swipeGesture(_ swipe: BarSwipe) -> BarPan {
-        BarPan(onChange: { swipeChanged($0, swipe) }, onEnd: { swipeEnded($0, predicted: $1, swipe) })
+    /// In the screen's space: pulled up, the bar moves with the finger, and in its own the drag
+    /// would shake.
+    private func swipeGesture(_ swipe: BarSwipe) -> some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
+            .onChanged { swipeChanged($0.translation, swipe) }
+            .onEnded { swipeEnded($0.translation, predicted: $0.predictedEndTranslation, swipe) }
     }
 
     private func swipeChanged(_ translation: CGSize, _ swipe: BarSwipe) {
@@ -671,48 +672,6 @@ struct BottomBarStack: View {
                 switchingFrom = nil
                 springBack()
             }
-        }
-    }
-}
-
-/// The bar's sideways and upward swipes, as UIKit's pan: it starts as soon as the finger moves
-/// (SwiftUI's drag on a view with a touch-and-hold menu waited for the menu to give up), and
-/// goes along with the bar's tap, menu and the lists' own gestures.
-struct BarPan: UIGestureRecognizerRepresentable {
-    /// How far the finger is from where it went down, in the window.
-    let onChange: @MainActor (CGSize) -> Void
-    /// Where it let go, and where it would have gone on to (from its speed).
-    let onEnd: @MainActor (_ translation: CGSize, _ predicted: CGSize) -> Void
-
-    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
-        let pan = UIPanGestureRecognizer()
-        pan.delegate = context.coordinator
-        pan.maximumNumberOfTouches = 1
-        return pan
-    }
-
-    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
-        let point = recognizer.translation(in: nil), speed = recognizer.velocity(in: nil)
-        let translation = CGSize(width: point.x, height: point.y)
-        switch recognizer.state {
-        case .began, .changed:
-            onChange(translation)
-        case .ended, .cancelled, .failed:
-            // Like SwiftUI's prediction: a quarter of a second more at the speed it left with.
-            onEnd(translation, CGSize(width: point.x + speed.x * 0.25, height: point.y + speed.y * 0.25))
-        default:
-            break
-        }
-    }
-
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
-        Coordinator()
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-            true
         }
     }
 }
