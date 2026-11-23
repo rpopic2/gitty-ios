@@ -255,7 +255,8 @@ struct ReviewDock: View {
     @State private var dragX: CGFloat = 0
 
     /// A small capsule floating at one end, above the bar (or a page's caption): the review's
-    /// icon and how many comments it has. Tap it to open the review; swipe it to the other end.
+    /// icon and how many comments it has. Tap it to open the review; swipe it to the other end;
+    /// touch and hold it to close or share it.
     var body: some View {
         Button { draft.resume(overSheet: overSheet) } label: {
             HStack(spacing: 6) {
@@ -271,6 +272,18 @@ struct ReviewDock: View {
         }
         .buttonStyle(.plain)
         .modifier(DockBackground())
+        // Touch and hold: Close (the review stays in its project's view, as the composer's X
+        // leaves it) or Share (the share sheet, as the composer's Share).
+        .contentShape(.contextMenuPreview, Capsule())
+        .contextMenu {
+            Button("Share", systemImage: "square.and.arrow.up") {
+                let draft = draft
+                TextSharer.share(draft.text) { completed in
+                    if completed { draft.didShare() }
+                }
+            }
+            Button("Close", systemImage: "xmark") { draft.putAway() }
+        }
         .offset(x: dragX)
         .gesture(
             DragGesture(minimumDistance: 10, coordinateSpace: .global)
