@@ -136,10 +136,11 @@ struct FileBar: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { tap() }
-        .contextMenu {
-            BarMenu(copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
-                    onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, onDeleteAlbum: onDeleteAlbum)
-        }
+        // TEMPORARY: the hold menu is off, to see whether it's what holds up pulling the bar up.
+        // .contextMenu {
+        //     BarMenu(copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
+        //             onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, onDeleteAlbum: onDeleteAlbum)
+        // }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityTitle)
         .accessibilityValue(isProgressVisible ? Text("Loading") : Text(""))
