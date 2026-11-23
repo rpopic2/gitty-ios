@@ -324,6 +324,8 @@ struct BarTouchLayer: UIViewRepresentable {
         var onPanEnded: (@MainActor (CGSize, CGSize) -> Void)?
         var previewInsets = UIEdgeInsets.zero
         var previewCornerRadius: CGFloat?
+        /// The bar as it was when the menu opened, to put back as it closes.
+        private var shownPreview: UITargetedPreview?
 
         @objc func tapped() {
             onTap?()
@@ -363,13 +365,17 @@ struct BarTouchLayer: UIViewRepresentable {
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     configuration: UIContextMenuConfiguration,
                                     highlightPreviewForItemWithIdentifier identifier: any NSCopying) -> UITargetedPreview? {
-            preview()
+            shownPreview = preview()
+            return shownPreview
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     configuration: UIContextMenuConfiguration,
                                     dismissalPreviewForItemWithIdentifier identifier: any NSCopying) -> UITargetedPreview? {
-            preview()
+            // The one it opened with: a new snapshot now has the lifted bar in it (moved up to
+            // make room for the menu), which then went back down a few points too high.
+            defer { shownPreview = nil }
+            return shownPreview ?? preview()
         }
 
         /// The bar's capsule as it is on screen (this layer itself is clear), lifted in place.
