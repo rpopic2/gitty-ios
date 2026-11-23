@@ -371,6 +371,8 @@ struct BottomBarStack: View {
     /// How far the bar is being pulled up (to the albums page): the neighbours' edges go out to
     /// the sides as it rises.
     @State private var liftDistance: CGFloat = 0
+    /// Where the drag was when it was first seen moving: the moves count from there.
+    @State private var dragOrigin: CGSize?
 
     /// Where it rests, not being swiped (or the albums page rising from it): only then does a
     /// tap open Project.
@@ -603,11 +605,23 @@ struct BottomBarStack: View {
     private var newAlbumDistance: CGFloat { max(barWidth, 1) * 0.3 }
 
     /// In the screen's space: pulled up, the bar moves with the finger, and in its own the drag
-    /// would shake.
+    /// would shake. Measured from where it was first seen moving: the drag starts a few points
+    /// along, and counted from where the finger went down, the bar jumped those points (and
+    /// stood still until then: a short pull held looked stuck, then caught up).
     private func swipeGesture(_ swipe: BarSwipe) -> some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .global)
-            .onChanged { swipeChanged($0.translation, swipe) }
-            .onEnded { swipeEnded($0.translation, predicted: $0.predictedEndTranslation, swipe) }
+        DragGesture(minimumDistance: 6, coordinateSpace: .global)
+            .onChanged { value in
+                let origin = dragOrigin ?? value.translation
+                if dragOrigin == nil { dragOrigin = origin }
+                // Which way, from how it moved to get here: sideways switches, otherwise up.
+                if isSwiping == nil { isSwiping = abs(value.translation.width) > abs(value.translation.height) }
+                swipeChanged(value.translation - origin, swipe)
+            }
+            .onEnded { value in
+                let origin = dragOrigin ?? .zero
+                dragOrigin = nil
+                swipeEnded(value.translation - origin, predicted: value.predictedEndTranslation - origin, swipe)
+            }
     }
 
     private func swipeChanged(_ translation: CGSize, _ swipe: BarSwipe) {
@@ -673,6 +687,12 @@ struct BottomBarStack: View {
                 springBack()
             }
         }
+    }
+}
+
+private extension CGSize {
+    static func - (lhs: CGSize, rhs: CGSize) -> CGSize {
+        CGSize(width: lhs.width - rhs.width, height: lhs.height - rhs.height)
     }
 }
 
