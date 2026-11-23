@@ -649,11 +649,14 @@ struct BottomBarStack: View {
     /// screen's sides, so it shows there's more that way; a handle on top says it pulls up.
     @ViewBuilder
     private func swipeable(_ bar: FileBar) -> some View {
-        if let swipe, !isCollapsed {
+        // The same view collapsed or not (only what's drawn around it changes): as two, the bar
+        // was swapped for the other at once instead of shrinking with the scroll's animation.
+        if let swipe {
+            let isActive = !isCollapsed
             // With an edge showing, the bar narrows to leave room for it. The bar and its
             // neighbours move as one strip, each where the next one's edge shows: a switch ends
             // with the old bar exactly where a neighbour rests.
-            let inset = edgeInset(swipe)
+            let inset = isActive ? edgeInset(swipe) : 0
             let spacing = neighbourSpacing(swipe)
             // The new album showing already (the slide over): from here, at rest.
             let switched = switchingFrom != nil && swipe.currentID != switchingFrom
@@ -668,17 +671,20 @@ struct BottomBarStack: View {
                 .padding(.horizontal, inset)
                 .offset(x: x)
                 .background {
-                    ZStack {
-                        if let previous = swipe.previous {
-                            neighbour(previous).padding(.horizontal, inset).offset(x: x - spacing - previousOut)
-                        }
-                        if let next = swipe.next {
-                            if next.isNew {
-                                newAlbumBox(inset: inset, spacing: spacing, x: x, out: nextOut)
-                            } else {
-                                neighbour(next).padding(.horizontal, inset).offset(x: x + spacing + nextOut)
+                    if isActive {
+                        ZStack {
+                            if let previous = swipe.previous {
+                                neighbour(previous).padding(.horizontal, inset).offset(x: x - spacing - previousOut)
+                            }
+                            if let next = swipe.next {
+                                if next.isNew {
+                                    newAlbumBox(inset: inset, spacing: spacing, x: x, out: nextOut)
+                                } else {
+                                    neighbour(next).padding(.horizontal, inset).offset(x: x + spacing + nextOut)
+                                }
                             }
                         }
+                        .transition(.opacity)
                     }
                 }
                 // The new album shows: the strip is at rest around it now.
@@ -697,7 +703,7 @@ struct BottomBarStack: View {
                 // The handle stays in the middle as the bars slide under it (after the offset: not
                 // moved by it).
                 .overlay(alignment: .top) {
-                    if swipe.onLift != nil { AlbumsHandle() }
+                    if isActive, swipe.onLift != nil { AlbumsHandle().transition(.opacity) }
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
                 // SwiftUI's drag for the swipes (UIKit's pan, here, never went sideways); the
