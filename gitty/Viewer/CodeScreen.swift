@@ -78,6 +78,8 @@ struct CodeScreen: View {
     /// The albums page (swiped up from the bar): open or not, and how far it's dragged. Its own
     /// object, read only by the page, so dragging it doesn't redraw this whole screen.
     @State private var albumsPageState = AlbumsPageState()
+    /// The code following the bar swiped sideways (read only by its offset).
+    @State private var albumSlide = AlbumSlideState()
 
     private struct HistoryFile: Identifiable {
         let url: URL
@@ -121,7 +123,11 @@ struct CodeScreen: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
+            // Behind the code as it slides aside with the bar.
+            Color(uiColor: RawTextStyle.backgroundColor)
+                .ignoresSafeArea()
             content
+                .modifier(AlbumSlide(state: albumSlide))
             // Under the bar: swiped up, the bar itself rises, the page hanging from it.
             albumsPage
             // Only the bar (and the banner) animate when it collapses or expands: the list keeps
@@ -151,6 +157,8 @@ struct CodeScreen: View {
         .onChange(of: AlbumStore.shared.album(id: albumID), initial: true) { _, album in
             model.show(album: album)
         }
+        // Swiped to another album: its code slides in.
+        .onChange(of: model.activeAlbum?.id) { albumSlide.albumChanged() }
         .onChange(of: AlbumStore.shared.downloadCount) { model.refreshAlbumFiles() }
         .onChange(of: mode, initial: true) {
             if mode == .project { hasShownProject = true }
@@ -980,7 +988,9 @@ struct CodeScreen: View {
             page.lift(distance)
         }, onLiftEnded: { distance, predicted in
             albumsPageState.settle(opens: distance > 120 || predicted > 320)
-        }, isAway: { albumsPageState.isActive })
+        }, isAway: { albumsPageState.isActive },
+        onDrag: { albumSlide.follow($0) },
+        onRelease: { albumSlide.release(switching: $0) })
     }
 
     // MARK: Albums page

@@ -864,6 +864,7 @@ struct BottomBarStack: View {
         // Toward a side with nothing there: a little, and less the further it goes.
         let hasNeighbour = dx < 0 ? swipe.next != nil : swipe.previous != nil
         dragX = hasNeighbour ? dx : dx / (1 + abs(dx) / 60)
+        swipe.onDrag?(dragX)  // the code follows
         // Toward a new album: a tap as it gets far enough to make one.
         let crossed = dx < 0 && swipe.next?.isNew == true && -dx > newAlbumDistance
         if crossed != makesNew {
@@ -893,9 +894,11 @@ struct BottomBarStack: View {
         // its box grows into the bar, as a neighbour slides in.
         let switches = forward && swipe.next?.isNew == true ? wasPastNew : hasNeighbour && farEnough
         guard switches else {
+            swipe.onRelease?(nil)
             springBack()
             return
         }
+        swipe.onRelease?(forward)
         // The neighbour slides into the bar's place (the bar into a neighbour's), then
         // becomes the bar once the album shows (see `onChange(of: currentID)`).
         isSettling = true
@@ -966,4 +969,63 @@ struct BarSwipe {
     var onLiftEnded: (@MainActor (_ distance: CGFloat, _ predicted: CGFloat) -> Void)? = nil
     /// The albums page is up, or on its way (the bar's taps wait).
     var isAway: (@MainActor () -> Bool)? = nil
+    /// Swiping sideways, for the code to follow: how far the bar is dragged…
+    var onDrag: (@MainActor (CGFloat) -> Void)? = nil
+    /// …and let go: switching (`true`: to the next one), or back (`nil`).
+    var onRelease: (@MainActor (_ forward: Bool?) -> Void)? = nil
+}
+
+/// The code under the bar following a sideways swipe of it: it moves with the finger, slides
+/// off to the side as the album switches, and the new album's slides in from the other.
+/// Only `AlbumSlide` reads it, so the code itself isn't drawn again as it moves.
+@MainActor @Observable
+final class AlbumSlideState {
+    private(set) var offset: CGFloat = 0
+    /// The screen's width, for how far it slides off.
+    @ObservationIgnored var width: CGFloat = 400
+    /// Switching: the new album's code comes in from this side (`true`: the right).
+    @ObservationIgnored private var comesFromRight: Bool?
+
+    func follow(_ x: CGFloat) {
+        offset = x
+    }
+
+    /// - Parameter forward: switching to the next album (the code goes off to the left), the
+    ///   one before, or `nil`: back into place.
+    func release(switching forward: Bool?) {
+        guard let forward else {
+            withAnimation(.spring(duration: 0.3)) { offset = 0 }
+            return
+        }
+        comesFromRight = forward
+        withAnimation(.smooth(duration: 0.22)) { offset = forward ? -width : width }
+        // Should the album not change after all: back.
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            guard comesFromRight != nil else { return }
+            comesFromRight = nil
+            withAnimation(.smooth(duration: 0.25)) { offset = 0 }
+        }
+    }
+
+    /// The new album shows: its code slides in.
+    func albumChanged() {
+        guard let fromRight = comesFromRight else { return }
+        comesFromRight = nil
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { offset = fromRight ? width : -width }
+        withAnimation(.smooth(duration: 0.28)) { offset = 0 }
+    }
+}
+
+/// Moves the code with `AlbumSlideState`; only this reads it.
+struct AlbumSlide: ViewModifier {
+    let state: AlbumSlideState
+
+    func body(content: Content) -> some View {
+        content
+            .offset(x: state.offset)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { state.width = $0 }
+    }
 }
