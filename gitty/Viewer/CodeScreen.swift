@@ -909,12 +909,18 @@ struct CodeScreen: View {
                 searchQuery: "",  // tapping it searches
                 onCollapseAll: collapseAllAction(true),
                 onExpandAll: collapseAllAction(false),
-                onDeleteAlbum: model.activeAlbum.map { album in { albumToDelete = album } },
+                onDeleteAlbum: deleteAlbumAction,
                 // In an album: its icon before its name.
                 titleIcon: model.activeAlbum != nil ? "rectangle.stack" : nil,
                 swipe: albumSwipe
             )
         }
+    }
+
+    /// The bar's Delete Album: an album shown (the whole project can't be deleted).
+    private var deleteAlbumAction: (@MainActor () -> Void)? {
+        guard let album = model.activeAlbum else { return nil }
+        return { albumToDelete = album }
     }
 
     /// Deletes the album shown, going to the one before it (the whole project, from the first),
