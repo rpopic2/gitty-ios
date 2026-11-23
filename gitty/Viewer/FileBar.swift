@@ -337,7 +337,7 @@ struct BottomBarStack: View {
     /// Let go, and still moving back into place or on to the neighbour.
     @State private var isSettling = false
     /// 1 at rest. Just after a switch, 0: the neighbour on the far side, new on screen, comes in
-    /// from just off it, and the old bar (a neighbour now) dims.
+    /// from just off it.
     @State private var arrival: CGFloat = 1
     /// That far side is the right one (the switch went forward).
     @State private var arrivedForward = true
@@ -424,7 +424,6 @@ struct BottomBarStack: View {
             let switched = switchingFrom != nil && swipe.currentID != switchingFrom
             let x = switched ? 0 : dragX
             let arrived = switched ? 0 : arrival
-            let progress = min(1, abs(x) / spacing)
             // Pulled up, the edges leave to the sides, gone by a few dozen points; just after a
             // switch, the far one comes in from there.
             let lifted = min(1, liftDistance / Self.liftToHideEdges)
@@ -449,8 +448,6 @@ struct BottomBarStack: View {
                             }
                         }
                     }
-                    // Dimmed at rest, full as they slide in (the old bar dims as it arrives).
-                    .opacity(1 - 0.3 * arrived * (1 - progress))
                 }
                 // The new album shows: the strip is at rest around it now.
                 .onChange(of: swipe.currentID) {
