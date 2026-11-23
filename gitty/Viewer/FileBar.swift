@@ -8,7 +8,8 @@ enum FileBarMetrics {
     static let glassCollapsedHeight: CGFloat = 30
     static let glassHorizontalMargin: CGFloat = 20
     static let glassBottomPadding: CGFloat = 4
-    static let glassGapAboveCapsule: CGFloat = 8
+    /// Room for the handle above the capsule: 3 points, the handle, 3 points.
+    static let glassGapAboveCapsule: CGFloat = 10
 
     // iOS 18: rounded field in a full-width material bar.
     static let fieldHeight: CGFloat = 44
@@ -16,6 +17,8 @@ enum FileBarMetrics {
     static let fieldCornerRadius: CGFloat = 12
     static let fieldHorizontalMargin: CGFloat = 12
     static let barVerticalPadding: CGFloat = 8
+    /// More above the field than below it, for the handle: 3 points, the handle, 3 points.
+    static let fieldTopPadding: CGFloat = 10
 
 
     static let titleFont = Font.system(size: 17)
@@ -27,7 +30,7 @@ enum FileBarMetrics {
         if #available(iOS 26.0, *) {
             return glassGapAboveCapsule + glassHeight + glassBottomPadding
         } else {
-            return fieldHeight + 2 * barVerticalPadding
+            return fieldTopPadding + fieldHeight + barVerticalPadding
         }
     }
 
@@ -142,8 +145,9 @@ struct FileBar: View {
             let margin = FileBarMetrics.glassHorizontalMargin
             return UIEdgeInsets(top: 0, left: margin, bottom: FileBarMetrics.glassBottomPadding, right: margin)
         }
-        let margin = FileBarMetrics.fieldHorizontalMargin, padding = isCollapsed ? 0 : FileBarMetrics.barVerticalPadding
-        return UIEdgeInsets(top: padding, left: margin, bottom: padding, right: margin)
+        let margin = FileBarMetrics.fieldHorizontalMargin
+        return UIEdgeInsets(top: isCollapsed ? 0 : FileBarMetrics.fieldTopPadding, left: margin,
+                            bottom: isCollapsed ? 0 : FileBarMetrics.barVerticalPadding, right: margin)
     }
 
     /// `nil`: a capsule.
@@ -508,7 +512,8 @@ private struct ClassicFileBar: View {
             .overlay(alignment: .bottom) { progress }
             .clipShape(field)
             .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
-            .padding(.vertical, isCollapsed ? 0 : FileBarMetrics.barVerticalPadding)
+            .padding(.top, isCollapsed ? 0 : FileBarMetrics.fieldTopPadding)
+            .padding(.bottom, isCollapsed ? 0 : FileBarMetrics.barVerticalPadding)
             .frame(maxWidth: .infinity)
     }
 }
@@ -924,8 +929,9 @@ struct AlbumsHandle: View {
     }
 
     private static var y: CGFloat {
-        if #available(iOS 26.0, *) { return -6 }
-        return 2
+        // 3 points from the top of the room above the capsule (or field), 3 points above it.
+        if #available(iOS 26.0, *) { return -7 }
+        return 3
     }
 }
 
