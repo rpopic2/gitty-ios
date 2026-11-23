@@ -399,12 +399,11 @@ struct BottomBarStack: View {
     @ViewBuilder
     private func swipeable(_ bar: FileBar) -> some View {
         if let swipe, !isCollapsed {
-            // How far in from a whole bar's width a neighbour sits at rest: its edge shows.
-            // With an edge showing, the bar narrows to leave room for it.
-            let showsEdges = swipe.previous != nil || (swipe.next.map { !$0.isNew } ?? false)
-            let inset = showsEdges ? Self.edgeShown + Self.edgeGap : 0
-            let peek = Self.capsuleMargin + inset + Self.edgeShown
-            let resting = peek * (1 - min(1, abs(dragX) / max(barWidth, 1)))
+            // With an edge showing, the bar narrows to leave room for it. At rest a neighbour
+            // sits its edge in from where it goes as it slides.
+            let inset = edgeInset(swipe)
+            let stride = stride(swipe)
+            let resting = Self.edgeShown * (1 - min(1, abs(dragX) / stride))
             bar
                 .padding(.horizontal, inset)
                 .overlay(alignment: .top) {
@@ -414,7 +413,7 @@ struct BottomBarStack: View {
                 .background {
                     ZStack {
                         if let previous = swipe.previous {
-                            neighbour(previous).padding(.horizontal, inset).offset(x: dragX - barWidth + resting)
+                            neighbour(previous).padding(.horizontal, inset).offset(x: dragX - stride + resting)
                         }
                         if let next = swipe.next {
                             if next.isNew {
@@ -422,7 +421,7 @@ struct BottomBarStack: View {
                                     newAlbumBox(inset: inset)
                                 }
                             } else {
-                                neighbour(next).padding(.horizontal, inset).offset(x: dragX + barWidth - resting)
+                                neighbour(next).padding(.horizontal, inset).offset(x: dragX + stride - resting)
                             }
                         }
                     }
@@ -447,6 +446,18 @@ struct BottomBarStack: View {
         } else {
             bar
         }
+    }
+
+    /// How much narrower the bar is on each side, to leave room for a neighbour's edge.
+    private func edgeInset(_ swipe: BarSwipe) -> CGFloat {
+        let showsEdges = swipe.previous != nil || (swipe.next.map { !$0.isNew } ?? false)
+        return showsEdges ? Self.edgeShown + Self.edgeGap : 0
+    }
+
+    /// From the bar's place to a neighbour's as it slides: a whole width less half the space
+    /// around the capsules, so neighbours sit half as far apart as the screen's margins.
+    private func stride(_ swipe: BarSwipe) -> CGFloat {
+        max(barWidth - Self.capsuleMargin - edgeInset(swipe), 1)
     }
 
     /// Back to where it rests (taps wait until it's there).
@@ -573,7 +584,7 @@ struct BottomBarStack: View {
                 // The neighbour slides into place, then becomes the bar.
                 isSettling = true
                 withAnimation(.smooth(duration: 0.22)) {
-                    dragX = forward ? -width : width
+                    dragX = forward ? -stride(swipe) : stride(swipe)
                 } completion: {
                     swipe.onSwitch(forward)
                     var instant = Transaction()
