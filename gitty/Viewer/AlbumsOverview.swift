@@ -51,17 +51,19 @@ struct AlbumsOverview: View {
 
     /// Done, the title and +; dragging it down closes the page.
     private var header: some View {
-        HStack {
-            Button("Done", action: onClose)
-            Spacer()
+        // The title in the middle of the page, whatever the buttons' widths.
+        ZStack {
             Text("Albums")
                 .font(.headline)
-            Spacer()
-            Button("New Album", systemImage: "plus") {
-                albumNaming?.begin(projectID: projectID, opensAlbum: true)
+            HStack {
+                Button("Done", action: onClose)
+                Spacer()
+                Button("New Album", systemImage: "plus") {
+                    albumNaming?.begin(projectID: projectID, opensAlbum: true)
+                }
+                .labelStyle(.iconOnly)
+                .font(.title3)
             }
-            .labelStyle(.iconOnly)
-            .font(.title3)
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
@@ -73,7 +75,9 @@ struct AlbumsOverview: View {
         }
         .contentShape(Rectangle())
         .gesture(
-            DragGesture(minimumDistance: 8)
+            // In the screen's space: the page moves under the finger, so in its own the drag
+            // would shake as it follows.
+            DragGesture(minimumDistance: 8, coordinateSpace: .global)
                 .onChanged { onDragDown(max(0, $0.translation.height)) }
                 .onEnded { onDragDownEnded(max(0, $0.translation.height), $0.predictedEndTranslation.height) }
         )
@@ -115,6 +119,40 @@ struct AlbumsOverview: View {
         case .commit: "smallcircle.filled.circle"
         case .comparison: "arrow.triangle.branch"
         case nil: nil
+        }
+    }
+}
+
+/// The albums page's place: open or not, how far it's dragged (up from below while opening,
+/// down while open), and its whole project tile's line, worked out as it opens.
+@MainActor @Observable
+final class AlbumsPageState {
+    var isShowing = false
+    var drag: CGFloat = 0
+    var projectDetail = ""
+
+    /// Let go (or Done, or an album chosen): it settles open or closed.
+    func settle(opens: Bool) {
+        withAnimation(.smooth(duration: 0.3)) {
+            isShowing = opens
+            drag = 0
+        }
+    }
+}
+
+/// Holds the albums page where it is: below the screen, rising with the drag, or open. Only it
+/// reads the drag, so following the finger redraws just the page.
+struct AlbumsPageHost<Page: View>: View {
+    let state: AlbumsPageState
+    @ViewBuilder let page: () -> Page
+
+    var body: some View {
+        GeometryReader { geometry in
+            let closed = geometry.size.height + geometry.safeAreaInsets.bottom + 40
+            page()
+                .offset(y: state.isShowing ? state.drag : max(0, closed - state.drag))
+                .allowsHitTesting(state.isShowing)
+                .accessibilityHidden(!state.isShowing)
         }
     }
 }

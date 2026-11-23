@@ -75,12 +75,9 @@ struct CodeScreen: View {
     @State private var historyDetent: PresentationDetent = .large
     /// Delete Album chosen in the bar's menu, waiting to be confirmed.
     @State private var albumToDelete: Album?
-    /// The albums page (swiped up from the bar) is open.
-    @State private var isShowingAlbums = false
-    /// How far it's dragged: up from below while opening, down while open.
-    @State private var albumsDrag: CGFloat = 0
-    /// Its whole project tile's line, worked out as it opens.
-    @State private var albumsProjectDetail = ""
+    /// The albums page (swiped up from the bar): open or not, and how far it's dragged. Its own
+    /// object, read only by the page, so dragging it doesn't redraw this whole screen.
+    @State private var albumsPageState = AlbumsPageState()
 
     private struct HistoryFile: Identifiable {
         let url: URL
@@ -970,10 +967,11 @@ struct CodeScreen: View {
                 openAlbum(AlbumStore.shared.createUntitled(projectID: projectID).id)
             }
         }, onLift: { distance in
-            if distance > 0, albumsDrag == 0, !isShowingAlbums { albumsProjectDetail = projectDetail() }
-            albumsDrag = distance
+            let page = albumsPageState
+            if distance > 0, page.drag == 0, !page.isShowing { page.projectDetail = projectDetail() }
+            page.drag = distance
         }, onLiftEnded: { distance, predicted in
-            settleAlbums(opens: distance > 120 || predicted > 320)
+            albumsPageState.settle(opens: distance > 120 || predicted > 320)
         })
     }
 
@@ -989,49 +987,37 @@ struct CodeScreen: View {
         return ref + " · " + count
     }
 
-    /// Let go (or Done, or an album chosen): the page settles open or closed.
-    private func settleAlbums(opens: Bool) {
-        withAnimation(.smooth(duration: 0.3)) {
-            isShowingAlbums = opens
-            albumsDrag = 0
-        }
-    }
-
     /// The albums page, over everything: below the screen until the bar is swiped up, rising
     /// with the finger; open, its top drags it down.
     @ViewBuilder
     private var albumsPage: some View {
         if let projectID = model.symbolsProjectID {
-            GeometryReader { geometry in
-                let closed = geometry.size.height + geometry.safeAreaInsets.bottom + 40
-                let y = isShowingAlbums ? albumsDrag : max(0, closed - albumsDrag)
+            let page = albumsPageState
+            AlbumsPageHost(state: page) {
                 AlbumsOverview(
                     projectID: projectID,
                     projectTitle: model.symbolsProjectTitle ?? model.fileName,
-                    projectDetail: albumsProjectDetail,
+                    projectDetail: page.projectDetail,
                     currentAlbumID: model.activeAlbum?.id,
                     onShowProject: {
                         onShowProject()
-                        settleAlbums(opens: false)
+                        page.settle(opens: false)
                     },
                     onOpen: { id in
                         onOpenAlbum(id)
-                        settleAlbums(opens: false)
+                        page.settle(opens: false)
                     },
                     onDelete: { delete($0) },
-                    onClose: { settleAlbums(opens: false) },
-                    onDragDown: { albumsDrag = $0 },
+                    onClose: { page.settle(opens: false) },
+                    onDragDown: { page.drag = $0 },
                     onDragDownEnded: { distance, predicted in
-                        settleAlbums(opens: !(distance > 120 || predicted > 320))
+                        page.settle(opens: !(distance > 120 || predicted > 320))
                     }
                 )
-                .offset(y: y)
-                .allowsHitTesting(isShowingAlbums)
-                .accessibilityHidden(!isShowingAlbums)
             }
             // A new album made on it (+) shows: the page closes for it.
             .onChange(of: AlbumStore.shared.albums(inProject: projectID).count) { old, new in
-                if new > old, isShowingAlbums { settleAlbums(opens: false) }
+                if new > old, page.isShowing { page.settle(opens: false) }
             }
         }
     }
