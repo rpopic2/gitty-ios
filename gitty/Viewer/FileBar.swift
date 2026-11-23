@@ -443,7 +443,11 @@ struct BottomBarStack: View {
             .onChanged { value in
                 let dx = value.translation.width, dy = value.translation.height
                 if isSwiping == nil { isSwiping = abs(dx) > abs(dy) }
-                guard isSwiping == true else { return }
+                guard isSwiping == true else {
+                    // Up: the albums page rises with the finger.
+                    swipe.onLift?(max(0, -dy))
+                    return
+                }
                 // Toward a side with nothing there: a little, and less the further it goes.
                 let hasNeighbour = dx < 0 ? swipe.next != nil : swipe.previous != nil
                 dragX = hasNeighbour ? dx : dx / (1 + abs(dx) / 60)
@@ -460,7 +464,10 @@ struct BottomBarStack: View {
                     isSwiping = nil
                     makesNew = false
                 }
-                guard isSwiping == true else { return }
+                guard isSwiping == true else {
+                    swipe.onLiftEnded?(max(0, -value.translation.height), -value.predictedEndTranslation.height)
+                    return
+                }
                 let dx = value.translation.width
                 let flung = value.predictedEndTranslation.width
                 let forward = dx < 0
@@ -506,4 +513,8 @@ struct BarSwipe {
     let next: Neighbour?
     /// `true`: the next one.
     let onSwitch: @MainActor (_ forward: Bool) -> Void
+    /// Swiping up instead: how far (the albums page follows), then where it was let go and
+    /// where it was flung to.
+    var onLift: (@MainActor (CGFloat) -> Void)? = nil
+    var onLiftEnded: (@MainActor (_ distance: CGFloat, _ predicted: CGFloat) -> Void)? = nil
 }

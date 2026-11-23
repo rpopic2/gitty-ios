@@ -3,7 +3,8 @@ import UIKit
 
 /// The open project in the Project tab: its row (with the space it takes on this device), the
 /// filter (`Scripts`, `*.cs *.md`, see `FileFilter`) that narrows the project's files at the Code level,
-/// Git (the branch or tag, Clone or Pull, History), its review and its albums. The files
+/// Git (the branch or tag, Clone or Pull, History) and its review (its albums are on their own
+/// page, `AlbumsOverview`). The files
 /// themselves are at the Code level. Pull down to refresh the file list, or fetch a clone.
 struct ProjectFilesView: View {
     let projectID: String
@@ -189,7 +190,7 @@ struct ProjectFilesView: View {
     private func list(project: ProjectInfo, tree: ProjectTree) -> some View {
         List {
             Section {
-                // The whole project is the first album now (see `albumsSection`).
+                // The whole project is the first album, on the albums page (`AlbumsOverview`).
                 header(project: project, tree: tree)
             }
             Section("Filter") {
@@ -202,7 +203,7 @@ struct ProjectFilesView: View {
             }
             // The files are at the Code level (by folder, every file folded); here, the albums.
             reviewSection(project: project)
-            albumsSection(project: project)
+            // The albums are on their own page: swipe up on the Code level's bar.
         }
         .listStyle(.insetGrouped)
         .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
@@ -344,68 +345,6 @@ struct ProjectFilesView: View {
         } icon: {
             Image(systemName: systemImage)
                 .foregroundStyle(.tint)
-        }
-    }
-
-    // MARK: Albums
-
-    /// The project's albums, like Photos': tap one to show only what's in it at the Code level;
-    /// swipe one to rename or delete it.
-    @ViewBuilder
-    private func albumsSection(project: ProjectInfo) -> some View {
-        let albums = AlbumStore.shared.albums(inProject: project.id)
-        Section {
-            // The whole project, first and always there (like Photos' Recents): not renamed or
-            // deleted. Swiping the bar at the Code level goes through these, in this order.
-            Button { onShowProject() } label: {
-                Label {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(project.title)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Text("Whole project")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "shippingbox")
-                        .foregroundStyle(.tint)
-                }
-            }
-            .listRowBackground(currentAlbumID == nil
-                ? Color(uiColor: .systemGray4)
-                : Color(uiColor: .secondarySystemGroupedBackground))
-            .accessibilityAddTraits(currentAlbumID == nil ? .isSelected : [])
-            ForEach(albums) { album in
-                Button { onOpenAlbum(album.id) } label: {
-                    AlbumRow(album: album)
-                }
-                .listRowBackground(album.id == currentAlbumID
-                    ? Color(uiColor: .systemGray4)
-                    : Color(uiColor: .secondarySystemGroupedBackground))
-                .accessibilityAddTraits(album.id == currentAlbumID ? .isSelected : [])
-                .swipeActions {
-                    Button(role: .destructive) { AlbumStore.shared.delete(album.id) } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    Button { albumNaming?.beginRenaming(album) } label: {
-                        Label("Rename", systemImage: "pencil")
-                    }
-                }
-            }
-            Button {
-                albumNaming?.begin(projectID: project.id, opensAlbum: true)
-            } label: {
-                Label("New Album", systemImage: "plus")
-            }
-        } header: {
-            Text("Albums")
-        } footer: {
-            if albums.isEmpty {
-                Text("An album keeps the symbols, files and lines of this project you want to see together. To add something to one, touch and hold it at the Code level, then choose Add to Album. Swipe the bar sideways to go from one album to the next.")
-            } else {
-                Text("Swipe the bar at the Code level sideways to go from one album to the next.")
-            }
         }
     }
 
@@ -815,26 +754,5 @@ struct ProjectFilesView: View {
 
     nonisolated private static func bytes(of tree: ProjectTree) -> Int64 {
         tree.entries.reduce(0) { $0 + Int64($1.size ?? 0) }
-    }
-}
-
-/// An album: its name and how many items it has.
-private struct AlbumRow: View {
-    let album: Album
-
-    var body: some View {
-        Label {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(album.name)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text("\(album.items.count) items")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        } icon: {
-            Image(systemName: "rectangle.stack")
-                .foregroundStyle(.tint)
-        }
     }
 }

@@ -75,6 +75,12 @@ struct CodeScreen: View {
     @State private var historyDetent: PresentationDetent = .large
     /// Delete Album chosen in the bar's menu, waiting to be confirmed.
     @State private var albumToDelete: Album?
+    /// The albums page (swiped up from the bar) is open.
+    @State private var isShowingAlbums = false
+    /// How far it's dragged: up from below while opening, down while open.
+    @State private var albumsDrag: CGFloat = 0
+    /// Its whole project tile's line, worked out as it opens.
+    @State private var albumsProjectDetail = ""
 
     private struct HistoryFile: Identifiable {
         let url: URL
@@ -129,6 +135,7 @@ struct CodeScreen: View {
                 .animation(.smooth(duration: 0.3), value: model.isBarCollapsed)
         }
         .overlay(alignment: .top) { StatusBarBackdrop() }
+        .overlay { albumsPage }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }
         .task(id: projectID) {
@@ -953,7 +960,7 @@ struct CodeScreen: View {
             : lastIsEmpty ? nil
             : BarSwipe.Neighbour(title: AlbumStore.shared.untitledName(projectID: projectID), icon: "plus", isNew: true)
         let showProject = onShowProject, openAlbum = onOpenAlbum
-        return BarSwipe(previous: previous, next: next) { forward in
+        return BarSwipe(previous: previous, next: next, onSwitch: { forward in
             let place = forward ? index + 1 : index - 1
             if place <= 0 {
                 showProject()
@@ -961,6 +968,70 @@ struct CodeScreen: View {
                 openAlbum(albums[place - 1].id)
             } else {
                 openAlbum(AlbumStore.shared.createUntitled(projectID: projectID).id)
+            }
+        }, onLift: { distance in
+            if distance > 0, albumsDrag == 0, !isShowingAlbums { albumsProjectDetail = projectDetail() }
+            albumsDrag = distance
+        }, onLiftEnded: { distance, predicted in
+            settleAlbums(opens: distance > 120 || predicted > 320)
+        })
+    }
+
+    // MARK: Albums page
+
+    /// Under the whole project's tile: its branch or tag, and how many files (both known here).
+    private func projectDetail() -> String {
+        let files = indexedSymbols.reduce(0) { $1.kind == .file ? $0 + 1 : $0 }
+        let count = String(localized: "\(files) files")
+        guard let projectID = model.symbolsProjectID,
+              let ref = CloneIndex.shared.record(forProject: projectID)?.ref.name ?? project?.ref
+        else { return count }
+        return ref + " · " + count
+    }
+
+    /// Let go (or Done, or an album chosen): the page settles open or closed.
+    private func settleAlbums(opens: Bool) {
+        withAnimation(.smooth(duration: 0.3)) {
+            isShowingAlbums = opens
+            albumsDrag = 0
+        }
+    }
+
+    /// The albums page, over everything: below the screen until the bar is swiped up, rising
+    /// with the finger; open, its top drags it down.
+    @ViewBuilder
+    private var albumsPage: some View {
+        if let projectID = model.symbolsProjectID {
+            GeometryReader { geometry in
+                let closed = geometry.size.height + geometry.safeAreaInsets.bottom + 40
+                let y = isShowingAlbums ? albumsDrag : max(0, closed - albumsDrag)
+                AlbumsOverview(
+                    projectID: projectID,
+                    projectTitle: model.symbolsProjectTitle ?? model.fileName,
+                    projectDetail: albumsProjectDetail,
+                    currentAlbumID: model.activeAlbum?.id,
+                    onShowProject: {
+                        onShowProject()
+                        settleAlbums(opens: false)
+                    },
+                    onOpen: { id in
+                        onOpenAlbum(id)
+                        settleAlbums(opens: false)
+                    },
+                    onDelete: { delete($0) },
+                    onClose: { settleAlbums(opens: false) },
+                    onDragDown: { albumsDrag = $0 },
+                    onDragDownEnded: { distance, predicted in
+                        settleAlbums(opens: !(distance > 120 || predicted > 320))
+                    }
+                )
+                .offset(y: y)
+                .allowsHitTesting(isShowingAlbums)
+                .accessibilityHidden(!isShowingAlbums)
+            }
+            // A new album made on it (+) shows: the page closes for it.
+            .onChange(of: AlbumStore.shared.albums(inProject: projectID).count) { old, new in
+                if new > old, isShowingAlbums { settleAlbums(opens: false) }
             }
         }
     }

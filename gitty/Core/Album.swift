@@ -298,6 +298,17 @@ final class AlbumStore {
         return name
     }
 
+    /// Reordering on the albums page: `id` takes `target`'s place (after it when moving down
+    /// the list, before it when moving up), so the bar's swipe follows the new order.
+    func move(_ id: UUID, to target: UUID) {
+        guard id != target, let from = albums.firstIndex(where: { $0.id == id }),
+              let to = albums.firstIndex(where: { $0.id == target })
+        else { return }
+        let album = albums.remove(at: from)
+        albums.insert(album, at: to)
+        save()
+    }
+
     /// Adds what isn't in the album yet, at the end.
     func add(_ items: [AlbumItem], to id: UUID) {
         update(id) { $0.items = Self.adding(items, to: $0.items) }
