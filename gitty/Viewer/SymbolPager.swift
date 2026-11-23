@@ -188,7 +188,7 @@ struct SymbolPager: View {
                 .overlay(alignment: .topTrailing) {
                     if let review, review.isDocked {
                         ReviewDock(draft: review)
-                            .alignmentGuide(.top) { $0[.bottom] }
+                            .offset(y: -ReviewDock.floatingRise)  // all of it above, clear of the bar
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }

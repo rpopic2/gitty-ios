@@ -245,6 +245,9 @@ struct ReviewDock: View {
     /// Its height on screen, with the space above it.
     static let height: CGFloat = 44
     static let reservedHeight: CGFloat = height + 8
+    /// How far above the top of what it floats over (the bar, a caption) it sits: its height,
+    /// its space below, and a little more.
+    static let floatingRise: CGFloat = reservedHeight + 6
 
     /// A small capsule floating at the end, above the bar (or a page's caption): the review's
     /// icon and how many comments it has. Tap it to open the review.
