@@ -969,7 +969,7 @@ struct CodeScreen: View {
         }, onLift: { distance in
             let page = albumsPageState
             if distance > 0, page.drag == 0, !page.isShowing { page.projectDetail = projectDetail() }
-            page.drag = distance
+            page.lift(distance)
         }, onLiftEnded: { distance, predicted in
             albumsPageState.settle(opens: distance > 120 || predicted > 320)
         })
@@ -993,7 +993,8 @@ struct CodeScreen: View {
     private var albumsPage: some View {
         if let projectID = model.symbolsProjectID {
             let page = albumsPageState
-            AlbumsPageHost(state: page) {
+            AlbumsPageHost(state: page, barTitle: barTitle,
+                           barIcon: model.activeAlbum != nil ? "rectangle.stack" : nil) {
                 AlbumsOverview(
                     projectID: projectID,
                     projectTitle: model.symbolsProjectTitle ?? model.fileName,

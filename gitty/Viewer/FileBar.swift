@@ -439,7 +439,7 @@ struct BottomBarStack: View {
     }
 
     /// How much of a neighbour's capsule shows at rest.
-    private static let edgeShown: CGFloat = 6
+    private static let edgeShown: CGFloat = 12
 
     private func neighbour(_ neighbour: BarSwipe.Neighbour) -> some View {
         FileBar(title: neighbour.title, isCollapsed: false, progressFraction: 0, isProgressVisible: false,
@@ -525,7 +525,7 @@ struct BottomBarStack: View {
 
 /// On top of the bottom bar, like a sheet's grabber: it pulls up (to the albums page). In the gap
 /// above the iOS 26 capsule; inside the iOS 18 bar's top padding.
-private struct AlbumsHandle: View {
+struct AlbumsHandle: View {
     var body: some View {
         Capsule()
             .fill(.tertiary)

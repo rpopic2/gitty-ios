@@ -30,7 +30,8 @@ struct AlbumsOverview: View {
     var body: some View {
         let albums = AlbumStore.shared.albums(inProject: projectID)
         VStack(spacing: 0) {
-            header
+            // It fades in as the page rises (the bar, on top of it, fades out).
+            AlbumsHeaderFade { header }
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 14) {
                     Button(action: onShowProject) {
@@ -46,7 +47,8 @@ struct AlbumsOverview: View {
                 .animation(.smooth(duration: 0.25), value: albums.map(\.id))
             }
         }
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        // The bar's own material: the page reads as the bar, pulled up.
+        .background(.bar, ignoresSafeAreaEdges: .all)
     }
 
     /// Done, the title and +; dragging it down closes the page.
@@ -66,7 +68,7 @@ struct AlbumsOverview: View {
             }
         }
         .padding(.horizontal, 16)
-        .frame(height: 52)
+        .frame(height: FileBarMetrics.barHeight)  // where the bar was, as the page rose
         .overlay(alignment: .top) {
             Capsule()
                 .fill(.tertiary)
@@ -129,31 +131,101 @@ struct AlbumsOverview: View {
 final class AlbumsPageState {
     var isShowing = false
     var drag: CGFloat = 0
+    /// On screen at all: from the first move up until it has settled closed.
+    var isActive = false
     var projectDetail = ""
+    /// Where the bar's top is (the page's, closed): set as it's laid out.
+    var closedTop: CGFloat = 600
+
+    /// 0 closed (the bar where it is), 1 open.
+    var progress: CGFloat {
+        let fraction = min(1, max(0, drag / max(closedTop, 1)))
+        return isShowing ? 1 - fraction : fraction
+    }
+
+    /// Swiping the bar up begins.
+    func lift(_ distance: CGFloat) {
+        if distance > 0 { isActive = true }
+        drag = distance
+    }
 
     /// Let go (or Done, or an album chosen): it settles open or closed.
     func settle(opens: Bool) {
         withAnimation(.smooth(duration: 0.3)) {
             isShowing = opens
             drag = 0
+        } completion: {
+            if !self.isShowing { self.isActive = false }
         }
     }
 }
 
-/// Holds the albums page where it is: below the screen, rising with the drag, or open. Only it
-/// reads the drag, so following the finger redraws just the page.
+/// The albums page as the bar pulled up: its top is the bar's (a copy of the bar on it, fading
+/// as it rises), it rises with the finger and settles open, or back down where the bar is.
 struct AlbumsPageHost<Page: View>: View {
     let state: AlbumsPageState
+    /// What the bar shows, for its copy.
+    let barTitle: String
+    let barIcon: String?
     @ViewBuilder let page: () -> Page
 
     var body: some View {
+        // Only the placement reads the drag: the page itself isn't made again as it moves.
+        page()
+            .environment(state)
+            .modifier(AlbumsPagePlacement(state: state, barTitle: barTitle, barIcon: barIcon))
+    }
+}
+
+private struct AlbumsPagePlacement: ViewModifier {
+    let state: AlbumsPageState
+    let barTitle: String
+    let barIcon: String?
+
+    func body(content: Content) -> some View {
         GeometryReader { geometry in
-            let closed = geometry.size.height + geometry.safeAreaInsets.bottom + 40
-            page()
-                .offset(y: state.isShowing ? state.drag : max(0, closed - state.drag))
+            let top = geometry.size.height - FileBarMetrics.barHeight
+            content
+                .overlay(alignment: .top) {
+                    BarCopy(title: barTitle, icon: barIcon)
+                        .opacity(max(0, 1 - state.progress * 2.5))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                .offset(y: state.isShowing ? state.drag : top - state.drag)
+                .opacity(state.isActive ? 1 : 0)
                 .allowsHitTesting(state.isShowing)
                 .accessibilityHidden(!state.isShowing)
+                .onAppear { state.closedTop = top }
+                .onChange(of: top) { state.closedTop = top }
         }
+    }
+}
+
+/// The bar as it is at rest, with its handle: over the page's top while it rises from the bar.
+private struct BarCopy: View {
+    let title: String
+    let icon: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            FileBar(title: title, isCollapsed: false, progressFraction: 0, isProgressVisible: false,
+                    onExpand: {}, onEdit: {}, titleIcon: icon)
+                .overlay(alignment: .top) { AlbumsHandle() }
+        }
+        .frame(height: FileBarMetrics.barHeight)
+    }
+}
+
+/// The page's header, fading in as it rises.
+private struct AlbumsHeaderFade<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @Environment(AlbumsPageState.self) private var state: AlbumsPageState?
+
+    var body: some View {
+        content()
+            .opacity(min(1, max(0, ((state?.progress ?? 1) - 0.3) / 0.5)))
     }
 }
 
