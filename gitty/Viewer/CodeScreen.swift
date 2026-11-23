@@ -972,7 +972,7 @@ struct CodeScreen: View {
             page.lift(distance)
         }, onLiftEnded: { distance, predicted in
             albumsPageState.settle(opens: distance > 120 || predicted > 320)
-        })
+        }, isAway: { albumsPageState.isActive })
     }
 
     // MARK: Albums page

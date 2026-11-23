@@ -329,6 +329,14 @@ struct BottomBarStack: View {
     @State private var barWidth: CGFloat = 0
     /// Dragged far enough to make a new album on letting go (a tap of haptics as it crosses).
     @State private var makesNew = false
+    /// Let go, and still moving back into place or on to the neighbour.
+    @State private var isSettling = false
+
+    /// Where it rests, not being swiped (or the albums page rising from it): only then does a
+    /// tap open Project.
+    private var isAtHome: Bool {
+        dragX == 0 && isSwiping == nil && !isSettling && !(swipe?.isAway?() ?? false)
+    }
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -361,7 +369,8 @@ struct BottomBarStack: View {
     var body: some View {
         let stack = VStack(spacing: 0) {
             swipeable(FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
-                              isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
+                              isProgressVisible: isProgressVisible,
+                              onExpand: { if isAtHome { onExpand() } }, onEdit: { if isAtHome { onEdit() } },
                               copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                               searchQuery: searchQuery, onClearSearch: onClearSearch,
                               onCollapseAll: onCollapseAll, onExpandAll: onExpandAll,
@@ -440,6 +449,16 @@ struct BottomBarStack: View {
         }
     }
 
+    /// Back to where it rests (taps wait until it's there).
+    private func springBack() {
+        isSettling = true
+        withAnimation(.spring(duration: 0.3)) {
+            dragX = 0
+        } completion: {
+            isSettling = false
+        }
+    }
+
     /// Between the screen's side and the bar's capsule.
     private static var capsuleMargin: CGFloat {
         if #available(iOS 26.0, *) { return FileBarMetrics.glassHorizontalMargin }
@@ -513,14 +532,15 @@ struct BottomBarStack: View {
                     // Only once it's past the threshold (a fling doesn't make one): the new
                     // album's bar springs back into place.
                     if wasPastNew { swipe.onSwitch(true) }
-                    withAnimation(.spring(duration: 0.3)) { dragX = 0 }
+                    springBack()
                     return
                 }
                 guard hasNeighbour, farEnough else {
-                    withAnimation(.spring(duration: 0.3)) { dragX = 0 }
+                    springBack()
                     return
                 }
                 // The neighbour slides into place, then becomes the bar.
+                isSettling = true
                 withAnimation(.smooth(duration: 0.22)) {
                     dragX = forward ? -width : width
                 } completion: {
@@ -528,6 +548,7 @@ struct BottomBarStack: View {
                     var instant = Transaction()
                     instant.disablesAnimations = true
                     withTransaction(instant) { dragX = 0 }
+                    isSettling = false
                 }
             }
     }
@@ -570,4 +591,6 @@ struct BarSwipe {
     /// where it was flung to.
     var onLift: (@MainActor (CGFloat) -> Void)? = nil
     var onLiftEnded: (@MainActor (_ distance: CGFloat, _ predicted: CGFloat) -> Void)? = nil
+    /// The albums page is up, or on its way (the bar's taps wait).
+    var isAway: (@MainActor () -> Bool)? = nil
 }
