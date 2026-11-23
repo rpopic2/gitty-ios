@@ -62,6 +62,8 @@ struct FileBar: View {
     /// At the Code level: Collapse All and Expand All in the menu.
     let onCollapseAll: (@MainActor () -> Void)?
     let onExpandAll: (@MainActor () -> Void)?
+    /// In an album: Delete Album in the menu (`nil`: the whole project, which can't be).
+    let onDeleteAlbum: (@MainActor () -> Void)?
     /// Before the title: an album's icon while one shows.
     let titleIcon: String?
 
@@ -73,6 +75,7 @@ struct FileBar: View {
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
+         onDeleteAlbum: (@MainActor () -> Void)? = nil,
          titleIcon: String? = nil) {
         self.title = title
         self.titleIcon = titleIcon
@@ -88,6 +91,7 @@ struct FileBar: View {
         self.onClearSearch = onClearSearch
         self.onCollapseAll = onCollapseAll
         self.onExpandAll = onExpandAll
+        self.onDeleteAlbum = onDeleteAlbum
     }
 
     private var activeSearch: String? {
@@ -144,6 +148,11 @@ struct FileBar: View {
                 Section {
                     Button("Collapse All", systemImage: "chevron.right.2") { onCollapseAll() }
                     Button("Expand All", systemImage: "chevron.down.2") { onExpandAll() }
+                }
+            }
+            if let onDeleteAlbum {
+                Section {
+                    Button("Delete Album", systemImage: "trash", role: .destructive) { onDeleteAlbum() }
                 }
             }
         }
@@ -305,6 +314,8 @@ struct BottomBarStack: View {
     let onClearSearch: (@MainActor () -> Void)?
     let onCollapseAll: (@MainActor () -> Void)?
     let onExpandAll: (@MainActor () -> Void)?
+    /// In an album: Delete Album in the menu (`nil`: the whole project, which can't be).
+    let onDeleteAlbum: (@MainActor () -> Void)?
     /// Before the title: an album's icon while one shows.
     let titleIcon: String?
     /// Swiping the bar sideways switches albums, like Safari's tabs (`nil`: it doesn't).
@@ -325,6 +336,7 @@ struct BottomBarStack: View {
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
+         onDeleteAlbum: (@MainActor () -> Void)? = nil,
          titleIcon: String? = nil, swipe: BarSwipe? = nil) {
         self.title = title
         self.titleIcon = titleIcon
@@ -341,6 +353,7 @@ struct BottomBarStack: View {
         self.onClearSearch = onClearSearch
         self.onCollapseAll = onCollapseAll
         self.onExpandAll = onExpandAll
+        self.onDeleteAlbum = onDeleteAlbum
     }
 
     var body: some View {
@@ -353,7 +366,8 @@ struct BottomBarStack: View {
                               isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
                               copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                               searchQuery: searchQuery, onClearSearch: onClearSearch,
-                              onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, titleIcon: titleIcon))
+                              onCollapseAll: onCollapseAll, onExpandAll: onExpandAll,
+                              onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon))
         }
 
         if #available(iOS 26.0, *) {

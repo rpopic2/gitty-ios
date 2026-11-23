@@ -73,6 +73,8 @@ struct CodeScreen: View {
     /// Pull or Load More History failed, for a diff album.
     @State private var diffAlbumError: String?
     @State private var historyDetent: PresentationDetent = .large
+    /// Delete Album chosen in the bar's menu, waiting to be confirmed.
+    @State private var albumToDelete: Album?
 
     private struct HistoryFile: Identifiable {
         let url: URL
@@ -194,6 +196,14 @@ struct CodeScreen: View {
             FileInfoView(url: file.url, onOpenWholeFile: file.symbol.map { symbol in { openWholeFile(from: symbol) } })
                 .presentationDetents([.medium, .large], selection: $historyDetent)
                 .presentationDragIndicator(.visible)
+        }
+        // Delete Album in the bar's menu: asked first, like Photos.
+        .confirmationDialog(albumToDelete.map { "Delete “\($0.name)”?" } ?? "",
+                            isPresented: Binding(get: { albumToDelete != nil }, set: { if !$0 { albumToDelete = nil } }),
+                            titleVisibility: .visible, presenting: albumToDelete) { album in
+            Button("Delete Album", role: .destructive) { delete(album) }
+        } message: { _ in
+            Text("What’s in it stays in the project.")
         }
         .alert("Couldn’t Refresh", isPresented: refreshAlertIsPresented, presenting: model.refreshError) { _ in
             Button("OK", role: .cancel) {}
@@ -899,11 +909,24 @@ struct CodeScreen: View {
                 searchQuery: "",  // tapping it searches
                 onCollapseAll: collapseAllAction(true),
                 onExpandAll: collapseAllAction(false),
+                onDeleteAlbum: model.activeAlbum.map { album in { albumToDelete = album } },
                 // In an album: its icon before its name.
                 titleIcon: model.activeAlbum != nil ? "rectangle.stack" : nil,
                 swipe: albumSwipe
             )
         }
+    }
+
+    /// Deletes the album shown, going to the one before it (the whole project, from the first),
+    /// like closing a Safari tab.
+    private func delete(_ album: Album) {
+        let albums = AlbumStore.shared.albums(inProject: album.projectID)
+        if let index = albums.firstIndex(where: { $0.id == album.id }), index > 0 {
+            onOpenAlbum(albums[index - 1].id)
+        } else {
+            onShowProject()
+        }
+        AlbumStore.shared.delete(album.id)
     }
 
     /// Swiping the bar sideways, like Safari's tabs: through the project's albums, the whole
