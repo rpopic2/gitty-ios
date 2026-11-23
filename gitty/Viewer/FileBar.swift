@@ -21,8 +21,8 @@ enum FileBarMetrics {
     static let fieldTopPadding: CGFloat = 10
 
 
-    static let titleFont = Font.system(size: 17)
-    static let collapsedTitleFont = Font.system(size: 12)
+    static let titleSize: CGFloat = 17
+    static let collapsedTitleSize: CGFloat = 12
     static let progressHeight: CGFloat = 3
 
     /// Height of the expanded bar alone, above the bottom safe area.
@@ -411,8 +411,10 @@ private struct BarTitle: View {
     let search: String?
     let isCollapsed: Bool
 
-    private var font: Font {
-        isCollapsed ? FileBarMetrics.collapsedTitleFont : FileBarMetrics.titleFont
+    /// Animated point by point with the bar's own collapsing, so the text shrinks with it (as
+    /// a content transition, it lagged a moment behind).
+    private var size: TitleSize {
+        TitleSize(size: isCollapsed ? FileBarMetrics.collapsedTitleSize : FileBarMetrics.titleSize)
     }
 
     var body: some View {
@@ -425,7 +427,7 @@ private struct BarTitle: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            .font(font)
+            .modifier(size)
         } else {
             HStack(spacing: 5) {
                 if let icon {
@@ -434,13 +436,27 @@ private struct BarTitle: View {
                         .accessibilityHidden(true)
                 }
                 Text(title.isEmpty ? "Enter URL" : title)
-                    .contentTransition(.interpolate)  // smooth size change between states
                     .foregroundStyle(title.isEmpty ? .secondary : .primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            .font(font)
+            .modifier(size)
         }
+    }
+}
+
+/// The bar's title's font size, animatable: each frame of the bar collapsing lays the title out
+/// at that frame's size.
+private struct TitleSize: ViewModifier, Animatable {
+    var size: CGFloat
+
+    var animatableData: CGFloat {
+        get { size }
+        set { size = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size))
     }
 }
 
