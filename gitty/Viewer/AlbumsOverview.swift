@@ -37,7 +37,8 @@ struct AlbumsOverview: View {
         let albums = AlbumStore.shared.albums(inProject: projectID)
         VStack(spacing: 0) {
             // It fades in as the page rises (the bar, on top of it, fades out).
-            AlbumsHeaderFade { header }
+            header
+                .modifier(AlbumsFade(from: 0.3, over: 0.5))
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 14) {
                     Button(action: onShowProject) {
@@ -50,6 +51,8 @@ struct AlbumsOverview: View {
                     }
                 }
                 .padding(16)
+                // The tiles come in as the page rises, and go as it's let back down.
+                .modifier(AlbumsFade(from: 0.05, over: 0.6))
                 .animation(.smooth(duration: 0.25), value: albums.map(\.id))
                 // Pulled down from the top, the page moves instead of the tiles inside it.
                 .offset(y: pullsPage == true ? -overscroll : 0)
@@ -236,14 +239,15 @@ struct AlbumsBarLift: ViewModifier {
     }
 }
 
-/// The page's header, fading in as it rises.
-private struct AlbumsHeaderFade<Content: View>: View {
-    @ViewBuilder let content: () -> Content
+/// Fading in as the page rises (and out as it goes back down): from `from` of the way up,
+/// fully in `over` later. Only this reads the drag, not what it fades.
+private struct AlbumsFade: ViewModifier {
+    let from: CGFloat
+    let over: CGFloat
     @Environment(AlbumsPageState.self) private var state: AlbumsPageState?
 
-    var body: some View {
-        content()
-            .opacity(min(1, max(0, ((state?.progress ?? 1) - 0.3) / 0.5)))
+    func body(content: Content) -> some View {
+        content.opacity(min(1, max(0, ((state?.progress ?? 1) - from) / over)))
     }
 }
 
