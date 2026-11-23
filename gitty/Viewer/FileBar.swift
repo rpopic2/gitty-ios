@@ -417,9 +417,7 @@ struct BottomBarStack: View {
                         }
                         if let next = swipe.next {
                             if next.isNew {
-                                if dragX != 0 {
-                                    newAlbumBox(inset: inset)
-                                }
+                                newAlbumBox(inset: inset, step: step)
                             } else {
                                 neighbour(next).padding(.horizontal, inset).offset(x: dragX + step - resting)
                             }
@@ -450,7 +448,8 @@ struct BottomBarStack: View {
 
     /// How much narrower the bar is on each side, to leave room for a neighbour's edge.
     private func edgeInset(_ swipe: BarSwipe) -> CGFloat {
-        let showsEdges = swipe.previous != nil || (swipe.next.map { !$0.isNew } ?? false)
+        // A new album's box shows its edge too: there's one to make.
+        let showsEdges = swipe.previous != nil || swipe.next != nil
         return showsEdges ? Self.edgeShown + Self.edgeGap : 0
     }
 
@@ -490,12 +489,18 @@ struct BottomBarStack: View {
 
     /// Past the last album, like Safari's new tab: just a +, in the middle of what the bar
     /// uncovers, stronger once letting go makes the album.
-    /// A grey box the bar's shape fills the space it leaves as it's dragged, growing with it,
-    /// the + in its middle.
-    private func newAlbumBox(inset: CGFloat) -> some View {
-        // From the bar's end, where it was, back to where its end is now, less a gap.
-        let width = max(0, -dragX - Self.newBoxGap)
-        let end = barWidth / 2 - Self.capsuleMargin - inset  // from the middle of the bar
+    /// Past the last album, like Safari's new tab: a grey box in the bar's shape, the +
+    /// in its middle. At rest just its edge shows, as a neighbour's does; dragged, its near end
+    /// follows the bar's and its far end comes in from the screen's side, so it grows into the
+    /// bar's place.
+    private func newAlbumBox(inset: CGFloat, step: CGFloat) -> some View {
+        let progress = min(1, abs(dragX) / step)
+        let margin = Self.capsuleMargin + inset
+        // From the bar's left, in its own space: where a neighbour's capsule would start, and
+        // the screen's side, moving in to the bar's end.
+        let left = dragX + step - Self.edgeShown * (1 - progress) + margin
+        let right = barWidth - margin * progress
+        let width = max(0, right - left)
         return Self.capsuleShape
             .fill(Color(uiColor: .secondarySystemFill))
             .frame(width: width, height: Self.capsuleHeight)
@@ -504,15 +509,13 @@ struct BottomBarStack: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(makesNew ? Color.primary : Color.secondary)
                     .scaleEffect(makesNew ? 1.15 : 0.9)
-                    .opacity(min(1, width / 44))
+                    .opacity(min(1, max(0, width - 20) / 30))
                     .animation(.spring(duration: 0.2), value: makesNew)
             }
-            .offset(x: end - width / 2, y: Self.capsuleCenterY)
+            .offset(x: (left + right) / 2 - barWidth / 2, y: Self.capsuleCenterY)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
-
-    private static let newBoxGap: CGFloat = 8
 
     /// The bar's capsule (iOS 26) or rounded field (iOS 18).
     private static var capsuleShape: AnyShape {
@@ -572,14 +575,10 @@ struct BottomBarStack: View {
                 let hasNeighbour = forward ? swipe.next != nil : swipe.previous != nil
                 let width = max(barWidth, 1)
                 let farEnough = abs(dx) > width * 0.3 || (abs(flung) > width * 0.5 && (flung < 0) == forward)
-                if forward, swipe.next?.isNew == true {
-                    // Only once it's past the threshold (a fling doesn't make one): the new
-                    // album's bar springs back into place.
-                    if wasPastNew { swipe.onSwitch(true) }
-                    springBack()
-                    return
-                }
-                guard hasNeighbour, farEnough else {
+                // A new album only once it's past the threshold (a fling doesn't make one): then
+                // its box grows into the bar, as a neighbour slides in.
+                let switches = forward && swipe.next?.isNew == true ? wasPastNew : hasNeighbour && farEnough
+                guard switches else {
                     springBack()
                     return
                 }
