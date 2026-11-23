@@ -402,8 +402,8 @@ struct BottomBarStack: View {
             // With an edge showing, the bar narrows to leave room for it. At rest a neighbour
             // sits its edge in from where it goes as it slides.
             let inset = edgeInset(swipe)
-            let stride = stride(swipe)
-            let resting = Self.edgeShown * (1 - min(1, abs(dragX) / stride))
+            let step = neighbourStep(swipe)
+            let resting = Self.edgeShown * (1 - min(1, abs(dragX) / step))
             bar
                 .padding(.horizontal, inset)
                 .overlay(alignment: .top) {
@@ -413,7 +413,7 @@ struct BottomBarStack: View {
                 .background {
                     ZStack {
                         if let previous = swipe.previous {
-                            neighbour(previous).padding(.horizontal, inset).offset(x: dragX - stride + resting)
+                            neighbour(previous).padding(.horizontal, inset).offset(x: dragX - step + resting)
                         }
                         if let next = swipe.next {
                             if next.isNew {
@@ -421,7 +421,7 @@ struct BottomBarStack: View {
                                     newAlbumBox(inset: inset)
                                 }
                             } else {
-                                neighbour(next).padding(.horizontal, inset).offset(x: dragX + stride - resting)
+                                neighbour(next).padding(.horizontal, inset).offset(x: dragX + step - resting)
                             }
                         }
                     }
@@ -456,7 +456,7 @@ struct BottomBarStack: View {
 
     /// From the bar's place to a neighbour's as it slides: a whole width less half the space
     /// around the capsules, so neighbours sit half as far apart as the screen's margins.
-    private func stride(_ swipe: BarSwipe) -> CGFloat {
+    private func neighbourStep(_ swipe: BarSwipe) -> CGFloat {
         max(barWidth - Self.capsuleMargin - edgeInset(swipe), 1)
     }
 
@@ -584,7 +584,7 @@ struct BottomBarStack: View {
                 // The neighbour slides into place, then becomes the bar.
                 isSettling = true
                 withAnimation(.smooth(duration: 0.22)) {
-                    dragX = forward ? -stride(swipe) : stride(swipe)
+                    dragX = forward ? -neighbourStep(swipe) : neighbourStep(swipe)
                 } completion: {
                     swipe.onSwitch(forward)
                     var instant = Transaction()
