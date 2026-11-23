@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 /// rises with the finger), the whole project first, then each album as a tile. Tap one to show
 /// it; swipe one sideways to delete it; touch and hold for Rename and Delete, or hold and drag
 /// to move it (the bar's sideways swipe goes in this order). + makes a new one. Drag the top
-/// down, or tap Done, to go back.
+/// down (or the list, from its top), or tap Done, to go back.
 struct AlbumsOverview: View {
     let projectID: String
     let projectTitle: String
@@ -24,6 +24,12 @@ struct AlbumsOverview: View {
     @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
     /// The album being dragged to a new place.
     @State private var moving: UUID?
+    /// The list is scrolled to its top (or pulled past it).
+    @State private var isAtTop = true
+    /// How far the list is pulled past its top: undone, so the tiles stay with the page.
+    @State private var overscroll: CGFloat = 0
+    /// Decided as a drag starts: down from the top pulls the page down, as its handle does.
+    @State private var pullsPage: Bool?
 
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 14)]
 
@@ -45,7 +51,26 @@ struct AlbumsOverview: View {
                 }
                 .padding(16)
                 .animation(.smooth(duration: 0.25), value: albums.map(\.id))
+                // Pulled down from the top, the page moves instead of the tiles inside it.
+                .offset(y: pullsPage == true ? -overscroll : 0)
             }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
+                isAtTop = y <= 1
+                overscroll = max(0, -y)
+            }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8, coordinateSpace: .global)
+                    .onChanged { value in
+                        if pullsPage == nil { pullsPage = isAtTop && value.translation.height > 0 }
+                        guard pullsPage == true else { return }
+                        onDragDown(max(0, value.translation.height))
+                    }
+                    .onEnded { value in
+                        defer { pullsPage = nil }
+                        guard pullsPage == true else { return }
+                        onDragDownEnded(max(0, value.translation.height), value.predictedEndTranslation.height)
+                    }
+            )
         }
         // The bar's own material: the page reads as the bar, pulled up.
         .background(.bar, ignoresSafeAreaEdges: .all)
