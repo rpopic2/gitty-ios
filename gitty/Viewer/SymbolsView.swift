@@ -508,16 +508,29 @@ struct SymbolsView: View, Equatable {
     /// file folded to its title (grouped by folder), every folder folded to its header. There's
     /// no pinching back in: unfolding everything at once hung a project as big as Linux, so
     /// folders and files unfold from their long-press menus and titles.
+    /// Fingers lifting under this fold a level.
+    private static let pinchThreshold: CGFloat = 0.8
+
     private func pinch(_ reader: ScrollViewProxy) -> some Gesture {
         MagnifyGesture()
             .onChanged { value in
                 // Spreading doesn't unfold (that could unfold a huge project at once): the list
                 // follows only fingers coming together.
                 pinchZoom.follow(min(value.magnification, 1), anchor: value.startAnchor)
+                // A tap of haptics as it passes the threshold: letting go now folds a level
+                // (when there's one left to fold).
+                let isPast = value.magnification < Self.pinchThreshold
+                if isPast != pinchZoom.isPastThreshold {
+                    pinchZoom.isPastThreshold = isPast
+                    if isPast, !collapsed.areAllFoldersFolded(scope: collapseScope) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    }
+                }
             }
             .onEnded { value in
+                pinchZoom.isPastThreshold = false
                 // One level, when the fingers lift past the threshold.
-                if value.magnification < 0.8 {
+                if value.magnification < Self.pinchThreshold {
                     let scope = collapseScope
                     if !collapsed.areAllCollapsed(scope: scope) {
                         setAllCollapsed(true, reader)

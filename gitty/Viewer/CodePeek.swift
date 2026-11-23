@@ -141,6 +141,8 @@ struct PeekShift: ViewModifier {
 final class PinchZoom {
     private(set) var scale: CGFloat = 1
     private(set) var anchor: UnitPoint = .center
+    /// The fingers are past the step's threshold (its haptic tap has played).
+    @ObservationIgnored var isPastThreshold = false
 
     /// A step happens when the fingers lift under 0.8 (see `SymbolsView.pinch`): the list is at
     /// 0.9 then.
