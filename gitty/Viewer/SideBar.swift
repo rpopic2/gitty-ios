@@ -330,7 +330,9 @@ private struct ScreenEdgePan: UIViewRepresentable {
         /// so it never closes the sidebar.)
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-            other is UIPanGestureRecognizer && other !== openRecognizer && other !== closeRecognizer
+            // Not the bottom bar's swipes: they start away from the edge, and waiting held them up.
+            other is UIPanGestureRecognizer && !(other is BarPanRecognizer)
+                && other !== openRecognizer && other !== closeRecognizer
         }
     }
 }

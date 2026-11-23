@@ -69,6 +69,10 @@ struct FileBar: View {
     /// iOS 26's glass swells and stretches under the finger: not on a bar that's swiped
     /// sideways, which should keep its size as it moves.
     let reactsToTouch: Bool
+    /// Swiping it (`BottomBarStack`): how far the finger has moved, in the window; then where it
+    /// let go and where it was flung to. `nil`: it doesn't swipe.
+    let onPan: (@MainActor (CGSize) -> Void)?
+    let onPanEnded: (@MainActor (_ translation: CGSize, _ predicted: CGSize) -> Void)?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -79,10 +83,14 @@ struct FileBar: View {
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
          onDeleteAlbum: (@MainActor () -> Void)? = nil,
-         titleIcon: String? = nil, reactsToTouch: Bool = true) {
+         titleIcon: String? = nil, reactsToTouch: Bool = true,
+         onPan: (@MainActor (CGSize) -> Void)? = nil,
+         onPanEnded: (@MainActor (_ translation: CGSize, _ predicted: CGSize) -> Void)? = nil) {
         self.title = title
         self.titleIcon = titleIcon
         self.reactsToTouch = reactsToTouch
+        self.onPan = onPan
+        self.onPanEnded = onPanEnded
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
         self.isProgressVisible = isProgressVisible
@@ -122,6 +130,28 @@ struct FileBar: View {
         if isCollapsed { onExpand() } else { onEdit() }
     }
 
+    private var menu: BarMenu {
+        BarMenu(copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
+                onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, onDeleteAlbum: onDeleteAlbum)
+    }
+
+    /// Where the capsule (iOS 26) or the field (iOS 18) is in the bar, for the menu's lifted
+    /// preview.
+    private var previewInsets: UIEdgeInsets {
+        if #available(iOS 26.0, *) {
+            let margin = FileBarMetrics.glassHorizontalMargin
+            return UIEdgeInsets(top: 0, left: margin, bottom: FileBarMetrics.glassBottomPadding, right: margin)
+        }
+        let margin = FileBarMetrics.fieldHorizontalMargin, padding = isCollapsed ? 0 : FileBarMetrics.barVerticalPadding
+        return UIEdgeInsets(top: padding, left: margin, bottom: padding, right: margin)
+    }
+
+    /// `nil`: a capsule.
+    private var previewCornerRadius: CGFloat? {
+        if #available(iOS 26.0, *) { return nil }
+        return FileBarMetrics.fieldCornerRadius
+    }
+
     var body: some View {
         Group {
             if #available(iOS 26.0, *) {
@@ -134,13 +164,14 @@ struct FileBar: View {
                                clearButton: clearButton)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture { tap() }
-        // TEMPORARY: the hold menu is off, to see whether it's what holds up pulling the bar up.
-        // .contextMenu {
-        //     BarMenu(copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
-        //             onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, onDeleteAlbum: onDeleteAlbum)
-        // }
+        // Its touches in UIKit, as Safari's bar: the tap, the touch-and-hold menu and the swipes.
+        // SwiftUI's own menu held back any drag on the bar until it knew the touch wasn't a hold:
+        // a short pull, held, stood still for half a second.
+        .overlay {
+            BarTouchLayer(onTap: { tap() }, menu: { menu.uiMenu }, onPan: onPan, onPanEnded: onPanEnded,
+                          previewInsets: previewInsets, previewCornerRadius: previewCornerRadius)
+                .padding(.trailing, clearButton == nil ? 0 : 50)  // not over the clear button
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityTitle)
         .accessibilityValue(isProgressVisible ? Text("Loading") : Text(""))
@@ -197,6 +228,170 @@ struct BarMenu: View {
         }
     }
 }
+
+extension BarMenu {
+    /// The same menu, for UIKit's touch-and-hold (the bar's `BarTouchLayer`).
+    var uiMenu: UIMenu? {
+        var items: [UIMenuElement] = []
+        if let copyText {
+            items.append(UIAction(title: String(localized: "Copy"), image: UIImage(systemName: "doc.on.doc")) { _ in
+                UIPasteboard.general.string = copyText
+            })
+        }
+        if let onPasteAndGo, Clipboard.hasAddress {
+            items.append(UIAction(title: String(localized: "Paste and Go"),
+                                  image: UIImage(systemName: "doc.on.clipboard")) { _ in onPasteAndGo() })
+        }
+        if let onOpenInBrowser {
+            items.append(UIAction(title: String(localized: "Open in Browser"),
+                                  image: UIImage(systemName: "safari")) { _ in onOpenInBrowser() })
+        }
+        if let onCollapseAll, let onExpandAll {
+            items.append(UIMenu(options: .displayInline, children: [
+                UIAction(title: String(localized: "Collapse All"), image: UIImage(systemName: "chevron.right.2")) { _ in
+                    onCollapseAll()
+                },
+                UIAction(title: String(localized: "Expand All"), image: UIImage(systemName: "chevron.down.2")) { _ in
+                    onExpandAll()
+                },
+            ]))
+        }
+        if let onDeleteAlbum {
+            items.append(UIMenu(options: .displayInline, children: [
+                UIAction(title: String(localized: "Delete Album"), image: UIImage(systemName: "trash"),
+                         attributes: .destructive) { _ in onDeleteAlbum() },
+            ]))
+        }
+        return items.isEmpty ? nil : UIMenu(children: items)
+    }
+}
+
+/// The bar's touches, in UIKit, as Safari's bar has them: a tap, the touch-and-hold menu (with
+/// the bar lifted as its preview), and a pan for the swipes, all together. A pan starts as soon
+/// as the finger moves; SwiftUI's drag on a view with SwiftUI's menu waited for the menu to
+/// give up first. Hidden from VoiceOver: the bar's own element has the actions.
+struct BarTouchLayer: UIViewRepresentable {
+    let onTap: @MainActor () -> Void
+    /// Made when the menu opens (Paste and Go depends on the clipboard then).
+    let menu: @MainActor () -> UIMenu?
+    let onPan: (@MainActor (CGSize) -> Void)?
+    let onPanEnded: (@MainActor (_ translation: CGSize, _ predicted: CGSize) -> Void)?
+    /// Where the capsule is in the bar, for the lifted preview.
+    let previewInsets: UIEdgeInsets
+    /// `nil`: a capsule.
+    let previewCornerRadius: CGFloat?
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        let coordinator = context.coordinator
+        coordinator.view = view
+        view.addInteraction(UIContextMenuInteraction(delegate: coordinator))
+        view.addGestureRecognizer(UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tapped)))
+        let pan = BarPanRecognizer(target: coordinator, action: #selector(Coordinator.panned(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = coordinator
+        view.addGestureRecognizer(pan)
+        coordinator.pan = pan
+        update(coordinator)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        update(context.coordinator)
+    }
+
+    private func update(_ coordinator: Coordinator) {
+        coordinator.onTap = onTap
+        coordinator.menu = menu
+        coordinator.onPan = onPan
+        coordinator.onPanEnded = onPanEnded
+        coordinator.previewInsets = previewInsets
+        coordinator.previewCornerRadius = previewCornerRadius
+        coordinator.pan?.isEnabled = onPan != nil
+    }
+
+    final class Coordinator: NSObject, UIContextMenuInteractionDelegate, UIGestureRecognizerDelegate {
+        weak var view: UIView?
+        weak var pan: UIPanGestureRecognizer?
+        var onTap: (@MainActor () -> Void)?
+        var menu: (@MainActor () -> UIMenu?)?
+        var onPan: (@MainActor (CGSize) -> Void)?
+        var onPanEnded: (@MainActor (CGSize, CGSize) -> Void)?
+        var previewInsets = UIEdgeInsets.zero
+        var previewCornerRadius: CGFloat?
+
+        @objc func tapped() {
+            onTap?()
+        }
+
+        @objc func panned(_ recognizer: UIPanGestureRecognizer) {
+            let point = recognizer.translation(in: nil), speed = recognizer.velocity(in: nil)
+            let translation = CGSize(width: point.x, height: point.y)
+            switch recognizer.state {
+            case .began, .changed:
+                onPan?(translation)
+            case .ended, .cancelled, .failed:
+                // Like SwiftUI's prediction: a little further at the speed it left with.
+                onPanEnded?(translation, CGSize(width: point.x + speed.x * 0.25, height: point.y + speed.y * 0.25))
+            default:
+                break
+            }
+        }
+
+        /// Not from the screen's right edge: that's the sidebar's swipe.
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard gestureRecognizer === pan, let window = view?.window else { return true }
+            return gestureRecognizer.location(in: window).x < window.bounds.width - 24
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
+
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+            guard let menu = menu?() else { return nil }
+            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in menu }
+        }
+
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    configuration: UIContextMenuConfiguration,
+                                    highlightPreviewForItemWithIdentifier identifier: any NSCopying) -> UITargetedPreview? {
+            preview()
+        }
+
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    configuration: UIContextMenuConfiguration,
+                                    dismissalPreviewForItemWithIdentifier identifier: any NSCopying) -> UITargetedPreview? {
+            preview()
+        }
+
+        /// The bar's capsule as it is on screen (this layer itself is clear), lifted in place.
+        private func preview() -> UITargetedPreview? {
+            guard let view, let window = view.window else { return nil }
+            let rect = view.bounds.inset(by: previewInsets)
+            guard rect.width > 0, rect.height > 0,
+                  let snapshot = window.resizableSnapshotView(from: view.convert(rect, to: window),
+                                                              afterScreenUpdates: false, withCapInsets: .zero)
+            else { return nil }
+            let parameters = UIPreviewParameters()
+            parameters.backgroundColor = .clear
+            parameters.visiblePath = UIBezierPath(roundedRect: snapshot.bounds,
+                                                  cornerRadius: previewCornerRadius ?? rect.height / 2)
+            let target = UIPreviewTarget(container: view, center: CGPoint(x: rect.midX, y: rect.midY))
+            return UITargetedPreview(view: snapshot, parameters: parameters, target: target)
+        }
+    }
+}
+
+/// The bar's pan: the sidebar's swipes don't make it wait (see `SideBar`), so it starts at once.
+final class BarPanRecognizer: UIPanGestureRecognizer {}
 
 /// The file name, the "Enter URL" placeholder, or the active symbol search.
 private struct BarTitle: View {
@@ -417,7 +612,8 @@ struct BottomBarStack: View {
                               copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                               searchQuery: searchQuery, onClearSearch: onClearSearch,
                               onCollapseAll: onCollapseAll, onExpandAll: onExpandAll,
-                              onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon, reactsToTouch: swipe == nil))
+                              onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon, reactsToTouch: swipe == nil,
+                              onPan: panAction, onPanEnded: panEndedAction))
         }
         // A review set aside floats above the bar, at either end (swipe it across): not part of it.
         .overlay(alignment: .top) {
@@ -492,7 +688,6 @@ struct BottomBarStack: View {
                     isSettling = false
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
-                .simultaneousGesture(swipeGesture(swipe))
                 .accessibilityActions {
                     if let previous = swipe.previous {
                         Button(String(localized: "Show \(previous.title)")) { swipe.onSwitch(false) }
@@ -605,24 +800,29 @@ struct BottomBarStack: View {
     /// How far a drag toward a new album must go to make it.
     private var newAlbumDistance: CGFloat { max(barWidth, 1) * 0.3 }
 
-    /// In the screen's space: pulled up, the bar moves with the finger, and in its own the drag
-    /// would shake. Measured from where it was first seen moving: the drag starts a few points
-    /// along, and counted from where the finger went down, the bar jumped those points (and
-    /// stood still until then: a short pull held looked stuck, then caught up).
-    private func swipeGesture(_ swipe: BarSwipe) -> some Gesture {
-        DragGesture(minimumDistance: 6, coordinateSpace: .global)
-            .onChanged { value in
-                let origin = dragOrigin ?? value.translation
-                if dragOrigin == nil { dragOrigin = origin }
-                // Which way, from how it moved to get here: sideways switches, otherwise up.
-                if isSwiping == nil { isSwiping = abs(value.translation.width) > abs(value.translation.height) }
-                swipeChanged(value.translation - origin, swipe)
-            }
-            .onEnded { value in
-                let origin = dragOrigin ?? .zero
-                dragOrigin = nil
-                swipeEnded(value.translation - origin, predicted: value.predictedEndTranslation - origin, swipe)
-            }
+    /// The bar's pan (UIKit's, in `BarTouchLayer`), in the window's space: pulled up, the bar
+    /// moves with the finger, and in its own the drag would shake. Measured from where it was
+    /// first seen moving: it starts a few points along, and counted from where the finger went
+    /// down, the bar would jump those points.
+    private var panAction: (@MainActor (CGSize) -> Void)? {
+        guard let swipe, !isCollapsed else { return nil }
+        return { translation in
+            let origin = dragOrigin ?? translation
+            if dragOrigin == nil { dragOrigin = origin }
+            // Which way, from how it moved to get here: sideways switches, otherwise up.
+            if isSwiping == nil { isSwiping = abs(translation.width) > abs(translation.height) }
+            swipeChanged(translation - origin, swipe)
+        }
+    }
+
+    private var panEndedAction: (@MainActor (CGSize, CGSize) -> Void)? {
+        guard let swipe, !isCollapsed else { return nil }
+        return { translation, predicted in
+            let origin = dragOrigin ?? .zero
+            dragOrigin = nil
+            guard isSwiping != nil else { return }  // never moved
+            swipeEnded(translation - origin, predicted: predicted - origin, swipe)
+        }
     }
 
     private func swipeChanged(_ translation: CGSize, _ swipe: BarSwipe) {
