@@ -637,20 +637,18 @@ struct CodeScreen: View {
         cardPath = Array(cardPath.prefix(through: index))
     }
 
-    /// The bar's search (over Project): a results page, the first in the stack, zooming out of
-    /// the screen, its field focused with what was typed. Swipe down goes back to the code.
+    /// The bar's search (over Project): a results page, the first in the stack, a card like
+    /// Occurrences': it zooms out of the screen, its field focused with what was typed, and a
+    /// swipe down or a pinch closes it back to the code. (Pushed without its zoom, it had no
+    /// zoom to close with either.)
     private func searchFromBar(_ query: String) {
         let search = StackSearch(query: query, source: Self.screenSourceID, startsEditing: true, model: model)
         stackedCards = [:]
         closeSearches()
         stackedSearches = [search.id: search]
-        // Straight in, not zoomed out of the screen: the page's field, on the keyboard, would
-        // zoom with it and jump into place after (the keyboard stays up: the bar's field hands
-        // it over).
+        // The keyboard stays up: the bar's field hands it over to the page's.
         KeyboardHandOff.hold()
-        var instant = Transaction()
-        instant.disablesAnimations = true
-        withTransaction(instant) { cardPath = [.results(search.id)] }
+        cardPath = [.results(search.id)]
         // Under it, the Code level it was searched from (not Project, whose field it was typed
         // in): closing it goes back to the code, as Occurrences' page does.
         mode = .code
