@@ -419,7 +419,7 @@ struct BottomBarStack: View {
                         if let next = swipe.next {
                             if next.isNew {
                                 if dragX != 0 {
-                                    newAlbumSign.offset(x: barWidth / 2 + dragX / 2)  // the middle of the gap
+                                    newAlbumBox(inset: inset)
                                 }
                             } else {
                                 neighbour(next).padding(.horizontal, inset).offset(x: dragX + barWidth - resting)
@@ -479,14 +479,45 @@ struct BottomBarStack: View {
 
     /// Past the last album, like Safari's new tab: just a +, in the middle of what the bar
     /// uncovers, stronger once letting go makes the album.
-    private var newAlbumSign: some View {
-        Image(systemName: "plus")
-            .font(.title2.weight(.semibold))
-            .foregroundStyle(makesNew ? Color.primary : Color.secondary)
-            .scaleEffect(makesNew ? 1.15 : 0.9)
-            .animation(.spring(duration: 0.2), value: makesNew)
+    /// A grey box the bar's shape fills the space it leaves as it's dragged, growing with it,
+    /// the + in its middle.
+    private func newAlbumBox(inset: CGFloat) -> some View {
+        // From the bar's end, where it was, back to where its end is now, less a gap.
+        let width = max(0, -dragX - Self.newBoxGap)
+        let end = barWidth / 2 - Self.capsuleMargin - inset  // from the middle of the bar
+        return Self.capsuleShape
+            .fill(Color(uiColor: .secondarySystemFill))
+            .frame(width: width, height: Self.capsuleHeight)
+            .overlay {
+                Image(systemName: "plus")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(makesNew ? Color.primary : Color.secondary)
+                    .scaleEffect(makesNew ? 1.15 : 0.9)
+                    .opacity(min(1, width / 44))
+                    .animation(.spring(duration: 0.2), value: makesNew)
+            }
+            .offset(x: end - width / 2, y: Self.capsuleCenterY)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+
+    private static let newBoxGap: CGFloat = 8
+
+    /// The bar's capsule (iOS 26) or rounded field (iOS 18).
+    private static var capsuleShape: AnyShape {
+        if #available(iOS 26.0, *) { return AnyShape(Capsule()) }
+        return AnyShape(RoundedRectangle(cornerRadius: FileBarMetrics.fieldCornerRadius, style: .continuous))
+    }
+
+    private static var capsuleHeight: CGFloat {
+        if #available(iOS 26.0, *) { return FileBarMetrics.glassHeight }
+        return FileBarMetrics.fieldHeight
+    }
+
+    /// Where the capsule's middle is from the bar's (iOS 26's sits on a little padding).
+    private static var capsuleCenterY: CGFloat {
+        if #available(iOS 26.0, *) { return -FileBarMetrics.glassBottomPadding / 2 }
+        return 0
     }
 
     /// How far a drag toward a new album must go to make it.
