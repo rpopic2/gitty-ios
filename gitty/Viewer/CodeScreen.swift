@@ -490,7 +490,7 @@ struct CodeScreen: View {
         let openFile = model.url
         let scope = model.collapseScope
         return StackResultsView(search: search, stackDepth: cardPath.firstIndex(of: route).map { $0 + 1 } ?? 1,
-                                stackActions: stackActions,
+                                stackActions: stackActions, barMenu: resultsBarMenu,
                                 shownCount: { results in
                                     results.filter { !search.collapsed.isHidden($0, openFile: openFile, scope: scope) }.count
                                 }) { symbols, query, bar in
@@ -516,7 +516,7 @@ struct CodeScreen: View {
             isActive: true,
             ownText: ownText,
             scrollRequest: nil,
-            collapseRequest: nil,
+            collapseRequest: bar.collapseRequest,
             onCenteredSymbolChange: { _ in },
             // Whether the capsule is hidden now: without it, the list thought it never was, so
             // scrolling up never brought it back.
@@ -741,14 +741,15 @@ struct CodeScreen: View {
     private func occurrencesView(_ search: OccurrenceSearch, route: CardRoute) -> some View {
         // The same page as a search's: the word in the capsule, edited there to look again.
         StackResultsView(search: search, stackDepth: cardPath.firstIndex(of: route).map { $0 + 1 } ?? 1,
-                         stackActions: stackActions, shownCount: { _ in search.count }) { entries, query, bar in
+                         stackActions: stackActions, barMenu: resultsBarMenu,
+                         shownCount: { _ in search.count }) { entries, query, bar in
             SymbolsView(
                 symbols: entries,
                 query: query,
                 isActive: true,
                 ownText: ownText,
                 scrollRequest: nil,
-                collapseRequest: nil,
+                collapseRequest: bar.collapseRequest,
                 onCenteredSymbolChange: { _ in },
                 isBarCollapsed: bar.isHidden,
                 barTapCount: 0,
@@ -919,6 +920,12 @@ struct CodeScreen: View {
                 swipe: albumSwipe
             )
         }
+    }
+
+    /// A results page's capsule menu: the bar's (its Collapse and Expand All are the page's).
+    private var resultsBarMenu: BarMenu {
+        BarMenu(copyText: barAddress, onPasteAndGo: onPasteAndGo, onOpenInBrowser: openInBrowserAction,
+                onDeleteAlbum: deleteAlbumAction)
     }
 
     /// The bar's Delete Album: an album shown (the whole project can't be deleted).

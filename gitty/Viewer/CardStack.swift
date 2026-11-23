@@ -196,18 +196,25 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     /// The list, for the results so far and their query.
     @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String, _ bar: ResultsBar) -> Results
 
+    /// The bar's menu, for the capsule's touch and hold (its Collapse and Expand All are the
+    /// page's own).
+    let barMenu: BarMenu?
+
     @State private var isEditing: Bool
     /// Scrolling down hides the capsule; scrolling up shows it.
     @State private var isBarHidden = false
+    /// Collapse All or Expand All in the capsule's menu, for the page's list.
+    @State private var collapseRequest: CollapseRequest?
     @Environment(\.dismiss) private var dismiss
 
-    init(search: Search, stackDepth: Int, stackActions: StackActions?,
+    init(search: Search, stackDepth: Int, stackActions: StackActions?, barMenu: BarMenu? = nil,
          shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
          @ViewBuilder list: @escaping (_ symbols: [CodeSymbol], _ query: String,
                                        _ bar: ResultsBar) -> Results) {
         self.search = search
         self.stackDepth = stackDepth
         self.stackActions = stackActions
+        self.barMenu = barMenu
         self.shownCount = shownCount
         self.list = list
         _isEditing = State(initialValue: search.startsEditing)
@@ -256,7 +263,8 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
             Color(uiColor: .systemGroupedBackground)  // waiting for the first letters
         } else {
             SearchResultsContent(search: search) { symbols, query in
-                list(symbols, query, ResultsBar(isHidden: { isBarHidden }, setHidden: { isBarHidden = $0 }))
+                list(symbols, query, ResultsBar(isHidden: { isBarHidden }, setHidden: { isBarHidden = $0 },
+                                                collapseRequest: collapseRequest))
             }
         }
     }
@@ -289,6 +297,9 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
             .frame(height: 36)
             .contentShape(Capsule())
             .onTapGesture { isEditing = true }
+            .contextMenu {
+                if let barMenu { pageMenu(barMenu) }
+            }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityHint(Text("Changes the search"))
@@ -301,6 +312,16 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
             }
             .padding(.horizontal, 24)
         }
+    }
+}
+
+extension StackResultsView {
+    /// The bar's menu, folding this page's list.
+    fileprivate func pageMenu(_ menu: BarMenu) -> BarMenu {
+        var menu = menu
+        menu.onCollapseAll = { collapseRequest = CollapseRequest(collapses: true) }
+        menu.onExpandAll = { collapseRequest = CollapseRequest(collapses: false) }
+        return menu
     }
 }
 
@@ -363,6 +384,8 @@ final class KeyboardDockController<Content: View>: UIViewController {
 struct ResultsBar {
     let isHidden: @MainActor () -> Bool
     let setHidden: @MainActor (Bool) -> Void
+    /// Collapse All or Expand All in the capsule's menu.
+    var collapseRequest: CollapseRequest? = nil
 
     /// For results with nothing to hide.
     static let none = ResultsBar(isHidden: { false }, setHidden: { _ in })

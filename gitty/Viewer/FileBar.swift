@@ -137,28 +137,8 @@ struct FileBar: View {
         .contentShape(Rectangle())
         .onTapGesture { tap() }
         .contextMenu {
-            if let copyText {
-                Button("Copy", systemImage: "doc.on.doc") {
-                    UIPasteboard.general.string = copyText
-                }
-            }
-            if let onPasteAndGo, Clipboard.hasAddress {
-                Button("Paste and Go", systemImage: "doc.on.clipboard") { onPasteAndGo() }
-            }
-            if let onOpenInBrowser {
-                Button("Open in Browser", systemImage: "safari") { onOpenInBrowser() }
-            }
-            if let onCollapseAll, let onExpandAll {
-                Section {
-                    Button("Collapse All", systemImage: "chevron.right.2") { onCollapseAll() }
-                    Button("Expand All", systemImage: "chevron.down.2") { onExpandAll() }
-                }
-            }
-            if let onDeleteAlbum {
-                Section {
-                    Button("Delete Album", systemImage: "trash", role: .destructive) { onDeleteAlbum() }
-                }
-            }
+            BarMenu(copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
+                    onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, onDeleteAlbum: onDeleteAlbum)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityTitle)
@@ -169,6 +149,43 @@ struct FileBar: View {
         .accessibilityActions {
             if activeSearch != nil, let onClearSearch {
                 Button("Clear Search") { onClearSearch() }
+            }
+        }
+    }
+}
+
+/// The bar's touch-and-hold menu: Copy (the address), Paste and Go, Open in Browser (a web
+/// page), Collapse All and Expand All, and Delete Album (an album's). The same on a results
+/// page's capsule, whose Collapse and Expand All are its own list's.
+struct BarMenu: View {
+    var copyText: String?
+    var onPasteAndGo: (@MainActor () -> Void)?
+    var onOpenInBrowser: (@MainActor () -> Void)?
+    var onCollapseAll: (@MainActor () -> Void)?
+    var onExpandAll: (@MainActor () -> Void)?
+    var onDeleteAlbum: (@MainActor () -> Void)?
+
+    var body: some View {
+        if let copyText {
+            Button("Copy", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = copyText
+            }
+        }
+        if let onPasteAndGo, Clipboard.hasAddress {
+            Button("Paste and Go", systemImage: "doc.on.clipboard") { onPasteAndGo() }
+        }
+        if let onOpenInBrowser {
+            Button("Open in Browser", systemImage: "safari") { onOpenInBrowser() }
+        }
+        if let onCollapseAll, let onExpandAll {
+            Section {
+                Button("Collapse All", systemImage: "chevron.right.2") { onCollapseAll() }
+                Button("Expand All", systemImage: "chevron.down.2") { onExpandAll() }
+            }
+        }
+        if let onDeleteAlbum {
+            Section {
+                Button("Delete Album", systemImage: "trash", role: .destructive) { onDeleteAlbum() }
             }
         }
     }
