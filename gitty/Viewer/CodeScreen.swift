@@ -122,17 +122,19 @@ struct CodeScreen: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             content
+            // Under the bar: swiped up, the bar itself rises, the page hanging from it.
+            albumsPage
             // Only the bar (and the banner) animate when it collapses or expands: the list keeps
             // scrolling undisturbed.
             bottom
                 .animation(.smooth(duration: 0.3), value: model.isBarCollapsed)
+                .modifier(AlbumsBarLift(state: albumsPageState))
         }
         .overlay(alignment: .top) {
             webPageBanner
                 .animation(.smooth(duration: 0.3), value: model.isBarCollapsed)
         }
         .overlay(alignment: .top) { StatusBarBackdrop() }
-        .overlay { albumsPage }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }
         .task(id: projectID) {
@@ -993,8 +995,7 @@ struct CodeScreen: View {
     private var albumsPage: some View {
         if let projectID = model.symbolsProjectID {
             let page = albumsPageState
-            AlbumsPageHost(state: page, barTitle: barTitle,
-                           barIcon: model.activeAlbum != nil ? "rectangle.stack" : nil) {
+            AlbumsPageHost(state: page) {
                 AlbumsOverview(
                     projectID: projectID,
                     projectTitle: model.symbolsProjectTitle ?? model.fileName,

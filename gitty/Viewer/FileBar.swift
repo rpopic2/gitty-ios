@@ -535,7 +535,9 @@ struct BottomBarStack: View {
     private var newAlbumDistance: CGFloat { max(barWidth, 1) * 0.3 }
 
     private func swipeGesture(_ swipe: BarSwipe) -> some Gesture {
-        DragGesture(minimumDistance: 12)
+        // In the screen's space: pulled up, the bar moves with the finger, and in its own the
+        // drag would shake.
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
             .onChanged { value in
                 let dx = value.translation.width, dy = value.translation.height
                 if isSwiping == nil { isSwiping = abs(dx) > abs(dy) }
