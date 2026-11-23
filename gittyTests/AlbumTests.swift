@@ -123,4 +123,16 @@ struct AlbumTests {
         #expect(store.untitledName(projectID: "q") == "New Album")  // each project's own
         #expect(store.albums(inProject: "p").allSatisfy { $0.items.isEmpty })
     }
+
+    @Test func movingAnAlbumTakesTheOthersPlace() throws {
+        let defaults = try #require(UserDefaults(suiteName: "AlbumTests-\(UUID().uuidString)"))
+        let store = AlbumStore(defaults: defaults)
+        let a = store.create(named: "A", projectID: "p"), b = store.create(named: "B", projectID: "p")
+        let c = store.create(named: "C", projectID: "p")
+        store.move(a.id, to: c.id)  // down: after it
+        #expect(store.albums(inProject: "p").map(\.name) == ["B", "C", "A"])
+        store.move(a.id, to: b.id)  // up: before it
+        #expect(store.albums(inProject: "p").map(\.name) == ["A", "B", "C"])
+        #expect(AlbumStore(defaults: defaults).albums.map(\.name) == ["A", "B", "C"])  // saved
+    }
 }
