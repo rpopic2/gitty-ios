@@ -117,8 +117,7 @@ struct SymbolPager: View {
             let pageInsets = EdgeInsets(
                 top: 0,
                 leading: safeArea.leading,
-                bottom: safeArea.bottom + SymbolCaption.reservedHeight
-                    + (review?.isDocked == true ? ReviewDock.reservedHeight : 0),
+                bottom: safeArea.bottom + SymbolCaption.reservedHeight,
                 trailing: safeArea.trailing
             )
             ZStack(alignment: .bottom) {
@@ -184,9 +183,12 @@ struct SymbolPager: View {
                                       onInfo: infoAction(for: current))
                             .padding(.bottom, 8)
                     }
+                }
+                // A review set aside floats above the caption, at its end.
+                .overlay(alignment: .topTrailing) {
                     if let review, review.isDocked {
                         ReviewDock(draft: review)
-                            .padding(.bottom, 8)
+                            .alignmentGuide(.top) { $0[.bottom] }
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }

@@ -246,34 +246,30 @@ struct ReviewDock: View {
     static let height: CGFloat = 44
     static let reservedHeight: CGFloat = height + 8
 
+    /// A small capsule floating at the end, above the bar (or a page's caption): the review's
+    /// icon and how many comments it has. Tap it to open the review.
     var body: some View {
         Button { draft.resume(overSheet: overSheet) } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 6) {
                 Image(systemName: "text.bubble")
                     .foregroundStyle(.tint)
-                    .accessibilityHidden(true)
-                Text("Review")
+                Text(draft.commentCount, format: .number)
                     .font(.subheadline.weight(.semibold))
-                Text("^[\(draft.commentCount) comment](inflect: true)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.up")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
+                    .monospacedDigit()
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 14)
             .frame(height: Self.height)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .modifier(DockBackground())
-        .padding(.horizontal, FileBarMetrics.fieldHorizontalMargin)
-        // Space above it (inside the bar's material on iOS 18); below, the bar's own space
-        // above its field keeps the same gap.
-        .padding(.top, 8)
+        .padding(.trailing, FileBarMetrics.fieldHorizontalMargin + 4)
+        .padding(.bottom, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Review, ^[\(draft.commentCount) comment](inflect: true)"))
+        .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens the review")
+        .accessibilityAction { draft.resume(overSheet: overSheet) }
     }
 }
 

@@ -360,16 +360,20 @@ struct BottomBarStack: View {
 
     var body: some View {
         let stack = VStack(spacing: 0) {
-            if !isCollapsed, let review, review.isDocked {
-                ReviewDock(draft: review)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
             swipeable(FileBar(title: title, isCollapsed: isCollapsed, progressFraction: progressFraction,
                               isProgressVisible: isProgressVisible, onExpand: onExpand, onEdit: onEdit,
                               copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                               searchQuery: searchQuery, onClearSearch: onClearSearch,
                               onCollapseAll: onCollapseAll, onExpandAll: onExpandAll,
                               onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon))
+        }
+        // A review set aside floats above the bar, at its end: not part of it.
+        .overlay(alignment: .topTrailing) {
+            if !isCollapsed, let review, review.isDocked {
+                ReviewDock(draft: review)
+                    .alignmentGuide(.top) { $0[.bottom] }
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
         }
 
         if #available(iOS 26.0, *) {
@@ -387,9 +391,13 @@ struct BottomBarStack: View {
     private func swipeable(_ bar: FileBar) -> some View {
         if let swipe, !isCollapsed {
             // How far in from a whole bar's width a neighbour sits at rest: its edge shows.
-            let peek = Self.capsuleMargin + Self.edgeShown
+            // With an edge showing, the bar narrows to leave room for it.
+            let showsEdges = swipe.previous != nil || (swipe.next.map { !$0.isNew } ?? false)
+            let inset = showsEdges ? Self.edgeShown + Self.edgeGap : 0
+            let peek = Self.capsuleMargin + inset + Self.edgeShown
             let resting = peek * (1 - min(1, abs(dragX) / max(barWidth, 1)))
             bar
+                .padding(.horizontal, inset)
                 .overlay(alignment: .top) {
                     if swipe.onLift != nil { AlbumsHandle() }
                 }
@@ -397,7 +405,7 @@ struct BottomBarStack: View {
                 .background {
                     ZStack {
                         if let previous = swipe.previous {
-                            neighbour(previous).offset(x: dragX - barWidth + resting)
+                            neighbour(previous).padding(.horizontal, inset).offset(x: dragX - barWidth + resting)
                         }
                         if let next = swipe.next {
                             if next.isNew {
@@ -405,7 +413,7 @@ struct BottomBarStack: View {
                                     newAlbumSign.offset(x: barWidth / 2 + dragX / 2)  // the middle of the gap
                                 }
                             } else {
-                                neighbour(next).offset(x: dragX + barWidth - resting)
+                                neighbour(next).padding(.horizontal, inset).offset(x: dragX + barWidth - resting)
                             }
                         }
                     }
@@ -440,6 +448,8 @@ struct BottomBarStack: View {
 
     /// How much of a neighbour's capsule shows at rest.
     private static let edgeShown: CGFloat = 12
+    /// Between a neighbour's edge and the bar.
+    private static let edgeGap: CGFloat = 6
 
     private func neighbour(_ neighbour: BarSwipe.Neighbour) -> some View {
         FileBar(title: neighbour.title, isCollapsed: false, progressFraction: 0, isProgressVisible: false,
