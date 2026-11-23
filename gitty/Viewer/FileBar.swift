@@ -381,25 +381,35 @@ struct BottomBarStack: View {
 
     /// The bar, following a sideways drag with its neighbours' bars beside it, like Safari's
     /// tabs. Let go far enough (or flung) and the neighbour slides in; where there's none, the
-    /// bar stretches a little and springs back.
+    /// bar stretches a little and springs back. At rest, the neighbours' edges peek in at the
+    /// screen's sides, so it shows there's more that way; a handle on top says it pulls up.
     @ViewBuilder
     private func swipeable(_ bar: FileBar) -> some View {
         if let swipe, !isCollapsed {
+            // How far in from a whole bar's width a neighbour sits at rest: its edge shows.
+            let peek = Self.capsuleMargin + Self.edgeShown
+            let resting = peek * (1 - min(1, abs(dragX) / max(barWidth, 1)))
             bar
+                .overlay(alignment: .top) {
+                    if swipe.onLift != nil { AlbumsHandle() }
+                }
                 .offset(x: dragX)
                 .background {
-                    if dragX != 0 {
-                        ZStack {
-                            if let previous = swipe.previous { neighbour(previous).offset(x: dragX - barWidth) }
-                            if let next = swipe.next {
-                                if next.isNew {
+                    ZStack {
+                        if let previous = swipe.previous {
+                            neighbour(previous).offset(x: dragX - barWidth + resting)
+                        }
+                        if let next = swipe.next {
+                            if next.isNew {
+                                if dragX != 0 {
                                     newAlbumSign.offset(x: barWidth / 2 + dragX / 2)  // the middle of the gap
-                                } else {
-                                    neighbour(next).offset(x: dragX + barWidth)
                                 }
+                            } else {
+                                neighbour(next).offset(x: dragX + barWidth - resting)
                             }
                         }
                     }
+                    .opacity(dragX == 0 ? 0.7 : 1)
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
                 .simultaneousGesture(swipeGesture(swipe))
@@ -410,11 +420,26 @@ struct BottomBarStack: View {
                     if let next = swipe.next {
                         Button(String(localized: "Show \(next.title)")) { swipe.onSwitch(true) }
                     }
+                    if let onLift = swipe.onLift, let onLiftEnded = swipe.onLiftEnded {
+                        Button(String(localized: "Show Albums")) {
+                            onLift(1)
+                            onLiftEnded(.greatestFiniteMagnitude, .greatestFiniteMagnitude)
+                        }
+                    }
                 }
         } else {
             bar
         }
     }
+
+    /// Between the screen's side and the bar's capsule.
+    private static var capsuleMargin: CGFloat {
+        if #available(iOS 26.0, *) { return FileBarMetrics.glassHorizontalMargin }
+        return FileBarMetrics.fieldHorizontalMargin
+    }
+
+    /// How much of a neighbour's capsule shows at rest.
+    private static let edgeShown: CGFloat = 6
 
     private func neighbour(_ neighbour: BarSwipe.Neighbour) -> some View {
         FileBar(title: neighbour.title, isCollapsed: false, progressFraction: 0, isProgressVisible: false,
@@ -495,6 +520,24 @@ struct BottomBarStack: View {
                     withTransaction(instant) { dragX = 0 }
                 }
             }
+    }
+}
+
+/// On top of the bottom bar, like a sheet's grabber: it pulls up (to the albums page). In the gap
+/// above the iOS 26 capsule; inside the iOS 18 bar's top padding.
+private struct AlbumsHandle: View {
+    var body: some View {
+        Capsule()
+            .fill(.tertiary)
+            .frame(width: 36, height: 4)
+            .offset(y: Self.y)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private static var y: CGFloat {
+        if #available(iOS 26.0, *) { return -6 }
+        return 2
     }
 }
 
