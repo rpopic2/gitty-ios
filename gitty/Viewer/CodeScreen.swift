@@ -121,7 +121,13 @@ struct CodeScreen: View {
         self.onShowProject = onShowProject
     }
 
+    // In parts: as one chain of modifiers it was too much for the compiler to type-check.
     var body: some View {
+        dialogs(on: events(on: screen))
+    }
+
+    /// The code, the albums page and the bar.
+    private var screen: some View {
         ZStack(alignment: .bottom) {
             // Behind the code as it slides aside with the bar.
             Color(uiColor: RawTextStyle.backgroundColor)
@@ -142,6 +148,12 @@ struct CodeScreen: View {
         }
         .overlay(alignment: .top) { StatusBarBackdrop() }
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    /// What the screen follows: loading, the mode, the album, the search typed in the bar, and
+    /// the stack's pages.
+    private func events<Content: View>(on screen: Content) -> some View {
+        screen
         .task { await model.load() }
         .task(id: projectID) {
             project = projectID.isEmpty ? nil : await ProjectStore.shared.project(id: projectID)
@@ -185,6 +197,11 @@ struct CodeScreen: View {
                 if let search = stackedOccurrences[id] { occurrencesView(search, route: route) }
             }
         }
+    }
+
+    /// The sheets, the confirmation and the alerts over it.
+    private func dialogs<Content: View>(on screen: Content) -> some View {
+        screen
         .sheet(isPresented: $isShowingStack, onDismiss: {
             if let jump = stackJump {
                 stackJump = nil
@@ -212,8 +229,7 @@ struct CodeScreen: View {
                 .presentationDragIndicator(.visible)
         }
         // Delete Album in the bar's menu: asked first, like Photos.
-        .confirmationDialog(albumToDelete.map { "Delete “\($0.name)”?" } ?? "",
-                            isPresented: Binding(get: { albumToDelete != nil }, set: { if !$0 { albumToDelete = nil } }),
+        .confirmationDialog(albumToDeleteTitle, isPresented: isAskingToDeleteAlbum,
                             titleVisibility: .visible, presenting: albumToDelete) { album in
             Button("Delete Album", role: .destructive) { delete(album) }
         } message: { _ in
@@ -224,13 +240,23 @@ struct CodeScreen: View {
         } message: { message in
             Text(message)
         }
-        .alert("Couldn’t Download", isPresented: Binding(get: { diffAlbumError != nil },
-                                                          set: { if !$0 { diffAlbumError = nil } }),
-               presenting: diffAlbumError) { _ in
+        .alert("Couldn’t Download", isPresented: isShowingDiffAlbumError, presenting: diffAlbumError) { _ in
             Button("OK", role: .cancel) {}
         } message: { message in
             Text(message)
         }
+    }
+
+    private var albumToDeleteTitle: String {
+        albumToDelete.map { "Delete “\($0.name)”?" } ?? ""
+    }
+
+    private var isAskingToDeleteAlbum: Binding<Bool> {
+        Binding(get: { albumToDelete != nil }, set: { if !$0 { albumToDelete = nil } })
+    }
+
+    private var isShowingDiffAlbumError: Binding<Bool> {
+        Binding(get: { diffAlbumError != nil }, set: { if !$0 { diffAlbumError = nil } })
     }
 
     private var content: some View {
