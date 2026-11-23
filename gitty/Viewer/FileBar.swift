@@ -154,6 +154,12 @@ struct FileBar: View {
     }
 }
 
+extension EnvironmentValues {
+    /// The bottom bar leaves out its iOS 18 material: something with the same material is
+    /// behind it (the albums page, rising from it).
+    @Entry var barBackgroundHidden = false
+}
+
 /// The bar's touch-and-hold menu: Copy (the address), Paste and Go, Open in Browser (a web
 /// page), Collapse All and Expand All, and Delete Album (an album's). The same on a results
 /// page's capsule, whose Collapse and Expand All are its own list's.
@@ -344,6 +350,7 @@ struct BottomBarStack: View {
     let swipe: BarSwipe?
     /// A review set aside shows above the bar, like a minimized Mail draft.
     @Environment(ReviewDraft.self) private var review: ReviewDraft?
+    @Environment(\.barBackgroundHidden) private var isBackgroundHidden
     /// How far the bar is dragged sideways (its neighbours follow it).
     @State private var dragX: CGFloat = 0
     /// Decided on the drag's first move: sideways switches, anything else is left alone.
@@ -421,7 +428,9 @@ struct BottomBarStack: View {
         if #available(iOS 26.0, *) {
             stack
         } else {
-            stack.background(.bar, ignoresSafeAreaEdges: .bottom)
+            // While the albums page rises from it, the page's own material is behind the bar:
+            // with this one too, it was darker there than above and below.
+            stack.background(Material.bar.opacity(isBackgroundHidden ? 0 : 1), ignoresSafeAreaEdges: .bottom)
         }
     }
 
@@ -480,7 +489,7 @@ struct BottomBarStack: View {
                     isSettling = false
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
-                .simultaneousGesture(swipeGesture(swipe))
+                .gesture(swipeGesture(swipe))
                 .accessibilityActions {
                     if let previous = swipe.previous {
                         Button(String(localized: "Show \(previous.title)")) { swipe.onSwitch(false) }
@@ -593,71 +602,116 @@ struct BottomBarStack: View {
     /// How far a drag toward a new album must go to make it.
     private var newAlbumDistance: CGFloat { max(barWidth, 1) * 0.3 }
 
-    private func swipeGesture(_ swipe: BarSwipe) -> some Gesture {
-        // In the screen's space: pulled up, the bar moves with the finger, and in its own the
-        // drag would shake.
-        DragGesture(minimumDistance: 12, coordinateSpace: .global)
-            .onChanged { value in
-                let dx = value.translation.width, dy = value.translation.height
-                if isSwiping == nil { isSwiping = abs(dx) > abs(dy) }
-                guard isSwiping == true else {
-                    // Up: the albums page rises with the finger.
-                    liftDistance = max(0, -dy)
-                    swipe.onLift?(max(0, -dy))
-                    return
-                }
-                // Toward a side with nothing there: a little, and less the further it goes.
-                let hasNeighbour = dx < 0 ? swipe.next != nil : swipe.previous != nil
-                dragX = hasNeighbour ? dx : dx / (1 + abs(dx) / 60)
-                // Toward a new album: a tap as it gets far enough to make one.
-                let crossed = dx < 0 && swipe.next?.isNew == true && -dx > newAlbumDistance
-                if crossed != makesNew {
-                    makesNew = crossed
-                    if crossed { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
-                }
+    /// UIKit's pan, in the window's space (pulled up, the bar moves with the finger, and in its
+    /// own the drag would shake). SwiftUI's drag waited for the touch-and-hold menu to give up,
+    /// so a short pull held still stayed put for half a second before the bar followed.
+    private func swipeGesture(_ swipe: BarSwipe) -> BarPan {
+        BarPan(onChange: { swipeChanged($0, swipe) }, onEnd: { swipeEnded($0, predicted: $1, swipe) })
+    }
+
+    private func swipeChanged(_ translation: CGSize, _ swipe: BarSwipe) {
+        let dx = translation.width, dy = translation.height
+        if isSwiping == nil { isSwiping = abs(dx) > abs(dy) }
+        guard isSwiping == true else {
+            // Up: the albums page rises with the finger.
+            liftDistance = max(0, -dy)
+            swipe.onLift?(max(0, -dy))
+            return
+        }
+        // Toward a side with nothing there: a little, and less the further it goes.
+        let hasNeighbour = dx < 0 ? swipe.next != nil : swipe.previous != nil
+        dragX = hasNeighbour ? dx : dx / (1 + abs(dx) / 60)
+        // Toward a new album: a tap as it gets far enough to make one.
+        let crossed = dx < 0 && swipe.next?.isNew == true && -dx > newAlbumDistance
+        if crossed != makesNew {
+            makesNew = crossed
+            if crossed { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+        }
+    }
+
+    private func swipeEnded(_ translation: CGSize, predicted: CGSize, _ swipe: BarSwipe) {
+        let wasPastNew = makesNew
+        defer {
+            isSwiping = nil
+            makesNew = false
+        }
+        guard isSwiping == true else {
+            swipe.onLiftEnded?(max(0, -translation.height), -predicted.height)
+            withAnimation(.smooth(duration: 0.3)) { liftDistance = 0 }
+            return
+        }
+        let dx = translation.width
+        let flung = predicted.width
+        let forward = dx < 0
+        let hasNeighbour = forward ? swipe.next != nil : swipe.previous != nil
+        let width = max(barWidth, 1)
+        let farEnough = abs(dx) > width * 0.3 || (abs(flung) > width * 0.5 && (flung < 0) == forward)
+        // A new album only once it's past the threshold (a fling doesn't make one): then
+        // its box grows into the bar, as a neighbour slides in.
+        let switches = forward && swipe.next?.isNew == true ? wasPastNew : hasNeighbour && farEnough
+        guard switches else {
+            springBack()
+            return
+        }
+        // The neighbour slides into the bar's place (the bar into a neighbour's), then
+        // becomes the bar once the album shows (see `onChange(of: currentID)`).
+        isSettling = true
+        arrivedForward = forward
+        withAnimation(.smooth(duration: 0.22)) {
+            dragX = forward ? -neighbourSpacing(swipe) : neighbourSpacing(swipe)
+        } completion: {
+            switchingFrom = swipe.currentID
+            swipe.onSwitch(forward)
+            // Should the album not change after all: back to rest.
+            Task {
+                try? await Task.sleep(for: .seconds(1))
+                guard switchingFrom != nil else { return }
+                switchingFrom = nil
+                springBack()
             }
-            .onEnded { value in
-                let wasPastNew = makesNew
-                defer {
-                    isSwiping = nil
-                    makesNew = false
-                }
-                guard isSwiping == true else {
-                    swipe.onLiftEnded?(max(0, -value.translation.height), -value.predictedEndTranslation.height)
-                    withAnimation(.smooth(duration: 0.3)) { liftDistance = 0 }
-                    return
-                }
-                let dx = value.translation.width
-                let flung = value.predictedEndTranslation.width
-                let forward = dx < 0
-                let hasNeighbour = forward ? swipe.next != nil : swipe.previous != nil
-                let width = max(barWidth, 1)
-                let farEnough = abs(dx) > width * 0.3 || (abs(flung) > width * 0.5 && (flung < 0) == forward)
-                // A new album only once it's past the threshold (a fling doesn't make one): then
-                // its box grows into the bar, as a neighbour slides in.
-                let switches = forward && swipe.next?.isNew == true ? wasPastNew : hasNeighbour && farEnough
-                guard switches else {
-                    springBack()
-                    return
-                }
-                // The neighbour slides into the bar's place (the bar into a neighbour's), then
-                // becomes the bar once the album shows (see `onChange(of: currentID)`).
-                isSettling = true
-                arrivedForward = forward
-                withAnimation(.smooth(duration: 0.22)) {
-                    dragX = forward ? -neighbourSpacing(swipe) : neighbourSpacing(swipe)
-                } completion: {
-                    switchingFrom = swipe.currentID
-                    swipe.onSwitch(forward)
-                    // Should the album not change after all: back to rest.
-                    Task {
-                        try? await Task.sleep(for: .seconds(1))
-                        guard switchingFrom != nil else { return }
-                        switchingFrom = nil
-                        springBack()
-                    }
-                }
-            }
+        }
+    }
+}
+
+/// The bar's sideways and upward swipes, as UIKit's pan: it starts as soon as the finger moves
+/// (SwiftUI's drag on a view with a touch-and-hold menu waited for the menu to give up), and
+/// goes along with the bar's tap, menu and the lists' own gestures.
+struct BarPan: UIGestureRecognizerRepresentable {
+    /// How far the finger is from where it went down, in the window.
+    let onChange: @MainActor (CGSize) -> Void
+    /// Where it let go, and where it would have gone on to (from its speed).
+    let onEnd: @MainActor (_ translation: CGSize, _ predicted: CGSize) -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.delegate = context.coordinator
+        pan.maximumNumberOfTouches = 1
+        return pan
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        let point = recognizer.translation(in: nil), speed = recognizer.velocity(in: nil)
+        let translation = CGSize(width: point.x, height: point.y)
+        switch recognizer.state {
+        case .began, .changed:
+            onChange(translation)
+        case .ended, .cancelled, .failed:
+            // Like SwiftUI's prediction: a quarter of a second more at the speed it left with.
+            onEnd(translation, CGSize(width: point.x + speed.x * 0.25, height: point.y + speed.y * 0.25))
+        default:
+            break
+        }
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
     }
 }
 

@@ -232,6 +232,7 @@ struct AlbumsBarLift: ViewModifier {
             .offset(y: state.isActive ? state.pageTop(closedTop: state.closedTop) - state.closedTop : 0)
             .opacity(state.isActive ? max(0, 1 - state.progress * 2.5) : 1)
             .allowsHitTesting(!state.isShowing)
+            .environment(\.barBackgroundHidden, state.isActive)
     }
 }
 
