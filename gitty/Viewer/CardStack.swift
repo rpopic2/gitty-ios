@@ -14,14 +14,6 @@ enum CardRoute: Hashable {
     case occurrences(UUID)
 }
 
-/// A results page in the stack: what it searches for, and what it zooms out of (the card it
-/// was searched from, or the Code level).
-struct StackedResults {
-    var query: String
-    let source: AnyHashable
-    /// Its place in the stack, as a card's.
-    let depth: Int
-}
 
 /// What a card in the stack pages through, and where it opened.
 struct StackedCard {
@@ -120,6 +112,12 @@ final class StackSearch: ResultsPageSearch {
         return String(localized: "Still reading symbols: \(progress.done.formatted()) of \(progress.total.formatted()) files.")
     }
 
+    /// Its page closed: stops looking.
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+
     private func start() {
         task?.cancel()
         task = nil
@@ -189,7 +187,7 @@ final class StackSearch: ResultsPageSearch {
 /// Swipe down to go back.
 struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     @Bindable var search: Search
-    /// Its place in the stack, shown before the search from 2 up.
+    /// Its place in the stack, shown before the search.
     let stackDepth: Int
     let stackActions: StackActions?
     /// The results shown: the ones not folded away on the page (pinch in to fold files), so
@@ -271,9 +269,8 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     .foregroundStyle(.secondary)
             }
             let label = HStack(spacing: 6) {
-                if stackDepth > 1 {
-                    StackDepthLabel(depth: stackDepth, actions: stackActions)
-                }
+                // Even as the first page: the stack's symbols, and Add to Album.
+                StackDepthLabel(depth: stackDepth, actions: stackActions)
                 Image(systemName: search.symbolName)
                     .foregroundStyle(.tint)
                 Text(search.query)

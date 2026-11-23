@@ -41,10 +41,8 @@ struct CodeScreen: View {
     @State private var stackedOccurrences: [UUID: OccurrenceSearch] = [:]
     /// The identifier highlighted on pages: Occurrences highlights what it looks for.
     @Environment(HighlightState.self) private var highlights: HighlightState?
-    /// The results pages in `cardPath`.
-    @State private var stackedResults: [UUID: StackedResults] = [:]
-    /// The search of the latest results page shown: the only one that keeps its results.
-    @State private var stackSearch: StackSearch?
+    /// The search results pages in `cardPath`, each with its own search (like Occurrences').
+    @State private var stackedSearches: [UUID: StackSearch] = [:]
     /// Tapping the bar shows Project with a search field, like Safari's start page (`mode` is
     /// `.project` while it's open): the first letters typed open a results page, as Search on
     /// a card does, the typing going on in its field.
@@ -166,7 +164,7 @@ struct CodeScreen: View {
             case .card(let id):
                 if let card = stackedCards[id] { cardView(card, id: id, route: route) }
             case .results(let id):
-                if let entry = stackedResults[id] { resultsPage(id: id, entry: entry, route: route) }
+                if let search = stackedSearches[id] { resultsView(search, route: route) }
             case .occurrences(let id):
                 if let search = stackedOccurrences[id] { occurrencesView(search, route: route) }
             }
@@ -354,8 +352,7 @@ struct CodeScreen: View {
                                         initialID: symbol.id, anchor: anchor,
                                         zoomSource: anchor == nil ? AnyHashable(symbol.id) : Self.screenSourceID,
                                         depth: 1)]
-        stackedResults = [:]
-        stackSearch = nil
+        closeSearches()
         cardPlaces.current = [:]
         cardPath = [.card(id)]
     }
@@ -371,8 +368,7 @@ struct CodeScreen: View {
                                         anchor: PageAnchor(line: line, screenY: anchor?.screenY ?? 160),
                                         zoomSource: anchor == nil ? AnyHashable(symbol.id) : Self.screenSourceID,
                                         depth: 1)]
-        stackedResults = [:]
-        stackSearch = nil
+        closeSearches()
         cardPlaces.current = [:]
         cardPath = [.card(id)]
     }
@@ -472,47 +468,27 @@ struct CodeScreen: View {
 
     /// A results page, stacked over the card it was searched from: the latest search's results,
     /// or an older page coming back (it searches again).
-    private func resultsPage(id: UUID, entry: StackedResults, route: CardRoute) -> some View {
-        Group {
-            if let search = stackSearch, search.id == id {
-                resultsView(search)
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(uiColor: .systemGroupedBackground))
-                    .toolbar(.hidden, for: .navigationBar)
-                    .onAppear { reviveSearch(id) }
-            }
-        }
-        // Its cards zoom out of it; it zooms out of (and back into) its card. Outside the `if`, so
-        // they stay the same while it searches again.
-        .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
-        .navigationTransition(.zoom(sourceID: entry.source, in: pagerNamespace))
-    }
-
-    /// An older results page is back on screen: it's the latest one now, searching again.
-    private func reviveSearch(_ id: UUID) {
-        guard stackSearch?.id != id, let entry = stackedResults[id] else { return }
-        keepQuery()
-        stackSearch = StackSearch(id: id, query: entry.query, source: entry.source, model: model)
-    }
-
-    /// The live search's query, changed on its page, for when that page comes back.
-    private func keepQuery() {
-        if let search = stackSearch { stackedResults[search.id]?.query = search.query }
-    }
-
-    /// The latest search's results.
-    private func resultsView(_ search: StackSearch) -> some View {
+    /// A search's results page: like Occurrences', each one keeps its own search and results,
+    /// so coming back to it is instant.
+    private func resultsView(_ search: StackSearch, route: CardRoute) -> some View {
         let openFile = model.url
         let scope = model.collapseScope
-        return StackResultsView(search: search, stackDepth: stackedResults[search.id]?.depth ?? 1,
+        return StackResultsView(search: search, stackDepth: cardPath.firstIndex(of: route).map { $0 + 1 } ?? 1,
                                 stackActions: stackActions,
                                 shownCount: { results in
                                     results.filter { !search.collapsed.isHidden($0, openFile: openFile, scope: scope) }.count
                                 }) { symbols, query, bar in
             resultsList(search, symbols: symbols, query: query, bar: bar)
         }
+        // Its cards zoom out of it; it zooms out of (and back into) its card.
+        .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
+        .navigationTransition(.zoom(sourceID: search.source, in: pagerNamespace))
+    }
+
+    /// Every search page is gone (a new stack starts).
+    private func closeSearches() {
+        for search in stackedSearches.values { search.cancel() }
+        stackedSearches = [:]
     }
 
     /// A search's results as code blocks, like the Code level's: tap one for its card.
@@ -646,12 +622,12 @@ struct CodeScreen: View {
     }
 
     /// The bar's search (over Project): a results page, the first in the stack, zooming out of
-    /// the screen, its field focused with what was typed. Swipe down goes back to Project.
+    /// the screen, its field focused with what was typed. Swipe down goes back to the code.
     private func searchFromBar(_ query: String) {
         let search = StackSearch(query: query, source: Self.screenSourceID, startsEditing: true, model: model)
         stackedCards = [:]
-        stackedResults = [search.id: StackedResults(query: query, source: Self.screenSourceID, depth: 1)]
-        stackSearch = search
+        closeSearches()
+        stackedSearches = [search.id: search]
         // Straight in, not zoomed out of the screen: the page's field, on the keyboard, would
         // zoom with it and jump into place after (the keyboard stays up: the bar's field hands
         // it over).
@@ -659,6 +635,9 @@ struct CodeScreen: View {
         var instant = Transaction()
         instant.disablesAnimations = true
         withTransaction(instant) { cardPath = [.results(search.id)] }
+        // Under it, the Code level it was searched from (not Project, whose field it was typed
+        // in): closing it goes back to the code, as Occurrences' page does.
+        mode = .code
     }
 
     /// The start of an https:// (or http://) address, or one.
@@ -687,11 +666,9 @@ struct CodeScreen: View {
     /// - Parameter card: `nil`: from the Code level (a symbol's hold menu), the first page.
     private func searchInStack(for query: String, from card: CardRoute?) {
         pruneStack()
-        keepQuery()
         let source = card.map { AnyHashable($0) } ?? Self.screenSourceID
         let search = StackSearch(query: query, source: source, model: model)
-        stackedResults[search.id] = StackedResults(query: query, source: source, depth: cardPath.count + 1)
-        stackSearch = search
+        stackedSearches[search.id] = search
         cardPath.append(.results(search.id))
     }
 
@@ -699,7 +676,10 @@ struct CodeScreen: View {
     /// they're still on screen while they zoom away.)
     private func pruneStack() {
         stackedCards = stackedCards.filter { cardPath.contains(.card($0.key)) }
-        stackedResults = stackedResults.filter { cardPath.contains(.results($0.key)) }
+        for (id, search) in stackedSearches where !cardPath.contains(.results(id)) {
+            search.cancel()
+            stackedSearches[id] = nil
+        }
         for (id, search) in stackedOccurrences where !cardPath.contains(.occurrences(id)) {
             search.cancel()
             stackedOccurrences[id] = nil
