@@ -182,7 +182,7 @@ final class AlbumsPageState {
 
     /// Let go (or Done, or an album chosen): it settles open or closed.
     func settle(opens: Bool) {
-        withAnimation(.smooth(duration: 0.3)) {
+        withAnimation(.smooth(duration: 0.3), completionCriteria: .removed) {
             isShowing = opens
             drag = 0
         } completion: {

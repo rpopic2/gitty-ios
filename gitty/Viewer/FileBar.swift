@@ -524,7 +524,7 @@ struct BottomBarStack: View {
     /// Back to where it rests (taps wait until it's there).
     private func springBack() {
         isSettling = true
-        withAnimation(.spring(duration: 0.3)) {
+        withAnimation(.spring(duration: 0.3), completionCriteria: .removed) {
             dragX = 0
         } completion: {
             isSettling = false
@@ -657,7 +657,9 @@ struct BottomBarStack: View {
         // becomes the bar once the album shows (see `onChange(of: currentID)`).
         isSettling = true
         arrivedForward = forward
-        withAnimation(.smooth(duration: 0.22)) {
+        // Once it's really there: "logically" complete, a spring still had a few points to go,
+        // and the new album's bar jumped them as it took over.
+        withAnimation(.smooth(duration: 0.22), completionCriteria: .removed) {
             dragX = forward ? -neighbourSpacing(swipe) : neighbourSpacing(swipe)
         } completion: {
             switchingFrom = swipe.currentID
