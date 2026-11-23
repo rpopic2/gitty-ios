@@ -73,10 +73,9 @@ struct FileBar: View {
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
-         titleIcon: String? = nil, swipe: BarSwipe? = nil) {
+         titleIcon: String? = nil) {
         self.title = title
         self.titleIcon = titleIcon
-        self.swipe = swipe
         self.isCollapsed = isCollapsed
         self.progressFraction = progressFraction
         self.isProgressVisible = isProgressVisible
