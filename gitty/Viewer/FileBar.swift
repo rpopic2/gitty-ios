@@ -339,6 +339,9 @@ struct BottomBarStack: View {
     /// How far the neighbours' edges are in at rest (1). Just after a switch they're where the
     /// slide left them, at the screen's sides, and come in from there.
     @State private var edgeReveal: CGFloat = 1
+    /// How far the bar is being pulled up (to the albums page): the neighbours' edges go out to
+    /// the sides as it rises.
+    @State private var liftDistance: CGFloat = 0
 
     /// Where it rests, not being swiped (or the albums page rising from it): only then does a
     /// tap open Project.
@@ -412,7 +415,9 @@ struct BottomBarStack: View {
             let inset = edgeInset(swipe)
             let step = neighbourStep(swipe)
             let progress = min(1, abs(dragX) / step)
-            let resting = Self.edgeShown * edgeReveal * (1 - progress)
+            // Pulled up, the edges leave to the sides, gone by a few dozen points.
+            let lifted = min(1, liftDistance / Self.liftToHideEdges)
+            let resting = Self.edgeShown * edgeReveal * (1 - progress) * (1 - lifted)
             bar
                 .padding(.horizontal, inset)
                 .overlay(alignment: .top) {
@@ -487,6 +492,8 @@ struct BottomBarStack: View {
 
     /// How much of a neighbour's capsule shows at rest.
     private static let edgeShown: CGFloat = 12
+    /// How far up the bar is pulled before the neighbours' edges are out of sight.
+    private static let liftToHideEdges: CGFloat = 60
     /// Between a neighbour's edge and the bar.
     private static let edgeGap: CGFloat = 6
 
@@ -508,7 +515,8 @@ struct BottomBarStack: View {
         let margin = Self.capsuleMargin + inset
         // From the bar's left, in its own space: where a neighbour's capsule would start, and
         // the screen's side, moving in to the bar's end.
-        let left = dragX + step - Self.edgeShown * edgeReveal * (1 - progress) + margin
+        let lifted = min(1, liftDistance / Self.liftToHideEdges)  // pulled up: it leaves too
+        let left = dragX + step - Self.edgeShown * edgeReveal * (1 - progress) * (1 - lifted) + margin
         let right = barWidth - margin * progress
         let width = max(0, right - left)
         return Self.capsuleShape
@@ -556,6 +564,7 @@ struct BottomBarStack: View {
                 if isSwiping == nil { isSwiping = abs(dx) > abs(dy) }
                 guard isSwiping == true else {
                     // Up: the albums page rises with the finger.
+                    liftDistance = max(0, -dy)
                     swipe.onLift?(max(0, -dy))
                     return
                 }
@@ -577,6 +586,7 @@ struct BottomBarStack: View {
                 }
                 guard isSwiping == true else {
                     swipe.onLiftEnded?(max(0, -value.translation.height), -value.predictedEndTranslation.height)
+                    withAnimation(.smooth(duration: 0.3)) { liftDistance = 0 }
                     return
                 }
                 let dx = value.translation.width
