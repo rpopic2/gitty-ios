@@ -187,7 +187,7 @@ final class StackSearch: ResultsPageSearch {
 /// Swipe down to go back.
 struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     @Bindable var search: Search
-    /// Its place in the stack, shown before the search.
+    /// How many cards are under it in the stack (searches don't count), shown before the search.
     let stackDepth: Int
     let stackActions: StackActions?
     /// The results shown: the ones not folded away on the page (pinch in to fold files), so
@@ -277,8 +277,11 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     .foregroundStyle(.secondary)
             }
             let label = HStack(spacing: 6) {
-                // Even as the first page: the stack's symbols, and Add to Album.
-                StackDepthLabel(depth: stackDepth, actions: stackActions)
+                // With a card under it: the stack's symbols, and Add to Album. (Searches don't
+                // count, so the first page, with none, has no number.)
+                if stackDepth > 0 {
+                    StackDepthLabel(depth: stackDepth, actions: stackActions)
+                }
                 Image(systemName: search.symbolName)
                     .foregroundStyle(.tint)
                 Text(search.query)

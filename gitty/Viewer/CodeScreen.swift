@@ -526,7 +526,7 @@ struct CodeScreen: View {
             },
             firstLine: { model.firstLine(of: $0) },
             albumMenu: albumMenuAction,
-            stackDepth: card.depth,
+            stackDepth: stackNumber(of: route),
             stackActions: stackActions
         )
         // A results page stacked on it zooms out of it.
@@ -541,7 +541,7 @@ struct CodeScreen: View {
     private func resultsView(_ search: StackSearch, route: CardRoute) -> some View {
         let openFile = model.url
         let scope = model.collapseScope
-        return StackResultsView(search: search, stackDepth: cardPath.firstIndex(of: route).map { $0 + 1 } ?? 1,
+        return StackResultsView(search: search, stackDepth: stackNumber(of: route),
                                 stackActions: stackActions, barMenu: resultsBarMenu,
                                 shownCount: { results in
                                     results.filter { !search.collapsed.isHidden($0, openFile: openFile, scope: scope) }.count
@@ -617,11 +617,24 @@ struct CodeScreen: View {
         return result
     }
 
+    /// A page's number in the stack: the cards up to it (searches and Occurrences pages don't
+    /// count). A results page's is the cards under it.
+    private func stackNumber(of route: CardRoute) -> Int {
+        let index = cardPath.firstIndex(of: route) ?? cardPath.count - 1
+        return cardPath.prefix(index + 1).filter { if case .card = $0 { true } else { false } }.count
+    }
+
     /// A page's stack icon: tap for the stack's symbols, touch and hold to add them to an album.
     private var stackActions: StackActions {
         let openFile = model.url
         return StackActions(
-            show: { isShowingStack = true },
+            show: {
+                // Its symbols start collapsed to their titles, a list to choose from.
+                let folds = CollapsedCodeStore.temporary()
+                folds.setAllCollapsed(true, scope: model.collapseScope)
+                stackSheetFolds = folds
+                isShowingStack = true
+            },
             albumItems: { stackedSymbols().map { AlbumItem($0.symbol, openFile: openFile) } },
             albumContext: albumContext
         )
@@ -792,7 +805,7 @@ struct CodeScreen: View {
 
     private func occurrencesView(_ search: OccurrenceSearch, route: CardRoute) -> some View {
         // The same page as a search's: the word in the capsule, edited there to look again.
-        StackResultsView(search: search, stackDepth: cardPath.firstIndex(of: route).map { $0 + 1 } ?? 1,
+        StackResultsView(search: search, stackDepth: stackNumber(of: route),
                          stackActions: stackActions, barMenu: resultsBarMenu,
                          shownCount: { _ in search.count }) { entries, query, bar in
             SymbolsView(
