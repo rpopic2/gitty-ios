@@ -1046,7 +1046,7 @@ struct CodeScreen: View {
         let next: BarSwipe.Neighbour? = index < albums.count ? neighbour(index + 1)
             : lastIsEmpty ? nil
             : BarSwipe.Neighbour(title: AlbumStore.shared.untitledName(projectID: projectID), icon: "plus", isNew: true)
-        let showProject = onShowProject, openAlbum = onOpenAlbum
+        let showProject = onShowProject, openAlbum = onOpenAlbum, naming = albumNaming
         return BarSwipe(previous: previous, next: next, currentID: model.activeAlbum?.id.uuidString ?? "",
                         onSwitch: { forward in
             let place = forward ? index + 1 : index - 1
@@ -1055,7 +1055,8 @@ struct CodeScreen: View {
             } else if place <= albums.count {
                 openAlbum(albums[place - 1].id)
             } else {
-                openAlbum(AlbumStore.shared.createUntitled(projectID: projectID).id)
+                // Shown by the app: an empty one goes to Project, to add to it from.
+                naming?.begin(projectID: projectID, opensAlbum: true)
             }
         }, onLift: { distance in
             let page = albumsPageState

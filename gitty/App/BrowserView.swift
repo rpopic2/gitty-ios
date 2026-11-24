@@ -79,10 +79,11 @@ struct BrowserView: View {
         .environment(highlights)
         .environment(albumNaming)
         .modifier(AlbumNamingAlert(naming: albumNaming, onCreated: { showAlbum($0.id) }))
-        // New Album from a menu that shows it (the albums page's +).
+        // New Album that shows it (the albums page's +, swiping past the last album).
         .onChange(of: albumNaming.albumToShow?.id) { _, id in
-            guard let id else { return }
-            showAlbum(id)
+            guard let id, let album = albumNaming.albumToShow else { return }
+            // Empty: Project, to add to it from (an album with something in it shows its code).
+            showAlbum(id, at: album.items.isEmpty && album.diff == nil ? .project : .code)
             albumNaming.didShowAlbum()
         }
         // Make Album, in a diff's list of files: its album at the Code level.
@@ -201,10 +202,12 @@ struct BrowserView: View {
 extension BrowserView {
     /// Shows an album: its project becomes the open one, and the Code level shows what's
     /// in it (from one of the project's files, if the open file is in another project).
-    private func showAlbum(_ id: UUID) {
+    /// - Parameter level: where to go: an album just made empty goes to Project, where its
+    ///   project's files are to add.
+    private func showAlbum(_ id: UUID, at level: ViewMode = .code) {
         guard let album = AlbumStore.shared.album(id: id) else { return }
         openAlbumIDString = id.uuidString
-        showCode(of: album.projectID)
+        showCode(of: album.projectID, at: level)
     }
 
     /// The Project tab's project row: out of the album, the whole project at the Code level.
@@ -213,16 +216,16 @@ extension BrowserView {
         showCode(of: openProjectID)
     }
 
-    private func showCode(of projectID: String) {
+    private func showCode(of projectID: String, at level: ViewMode = .code) {
         openProjectID = projectID
         isEditingAddress = false
         sideBar.close()
         let current = currentURL
         Task {
             if let start = await ProjectStartFile.find(projectID: projectID, current: current) {
-                openFile(start, at: .code)
+                openFile(start, at: level)
             } else if current != nil {
-                mode = .code
+                mode = level
             } else {
                 mode = .project  // nothing of the project to open yet
             }
