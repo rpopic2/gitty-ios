@@ -1556,7 +1556,7 @@ private struct CodeMenu: ViewModifier {
                 }
             }
             if let onSearch = textActions?.onSearch, let query = SymbolSearch.query(fromSelection: text) {
-                Button("Search", systemImage: "magnifyingglass") { onSearch(query) }
+                Button("Definition", systemImage: "magnifyingglass") { onSearch(query) }
             }
             if let onFind = textActions?.onFindOccurrences, let term = Occurrences.term(fromSelection: text) {
                 Button("Occurrences", systemImage: "text.magnifyingglass") {
@@ -1572,7 +1572,7 @@ private struct CodeMenu: ViewModifier {
                 }
             }
             if let onSearch = textActions?.onSearch {
-                Button("Search", systemImage: "magnifyingglass") {
+                Button("Definition", systemImage: "magnifyingglass") {
                     withCode { range, fileText in
                         // A long selection searches with its start, as on a page.
                         let head = NSRange(location: range.location, length: min(range.length, 500))

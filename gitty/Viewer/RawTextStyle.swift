@@ -86,7 +86,7 @@ nonisolated enum RawTextStyle {
         return [action]
     }
 
-    /// "Search" for any selection: searches symbols for it. Empty only when there's nothing to
+    /// "Definition" for any selection: searches symbols for it. Empty only when there's nothing to
     /// search with (`searchTerm` decides: no symbols for this file, or only spaces selected).
     @MainActor
     static func searchItems(
@@ -100,7 +100,7 @@ nonisolated enum RawTextStyle {
         let head = NSRange(location: range.location, length: min(range.length, 500))
         guard let term = searchTerm(textView.textStorage.attributedSubstring(from: head).string)
         else { return [] }
-        let action = UIAction(title: String(localized: "Search"),
+        let action = UIAction(title: String(localized: "Definition"),
                               image: UIImage(systemName: "magnifyingglass")) { _ in onSearch(term) }
         return [action]
     }
