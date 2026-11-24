@@ -219,20 +219,9 @@ struct CodeTable: UIViewRepresentable {
             let cell = tableView.dequeueReusableCell(withIdentifier: Self.cellID, for: indexPath)
             cell.backgroundConfiguration = .clear()
             cell.selectionStyle = .none
-            // Not animated even when asked for inside an animation (see `willDisplay`).
-            UIView.performWithoutAnimation { configure(cell, id: sections[indexPath.section].id) }
+            configure(cell, id: sections[indexPath.section].id)
+            if isAnimatingHeights { madeWhileAnimating.append(cell.contentView) }
             return cell
-        }
-
-        /// A cell that comes on screen while the heights animate (a symbol just opened: its row,
-        /// 0 high, had no cell) is laid out here, without animation. Laid out inside the
-        /// animation, its code flew in from the top left corner, from where a new view starts.
-        func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-            UIView.performWithoutAnimation { cell.layoutIfNeeded() }
-        }
-
-        func tableView(_ tableView: UITableView, willDisplayHeaderView view: UIView, forSection section: Int) {
-            UIView.performWithoutAnimation { view.layoutIfNeeded() }
         }
 
         func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
@@ -245,7 +234,8 @@ struct CodeTable: UIViewRepresentable {
                 header.addInteraction(UIContextMenuInteraction(delegate: self))
                 header.hasMenu = true
             }
-            UIView.performWithoutAnimation { configure(header, id: sections[section].id) }
+            configure(header, id: sections[section].id)
+            if isAnimatingHeights { madeWhileAnimating.append(header.contentView) }
             return header
         }
 
@@ -329,6 +319,25 @@ struct CodeTable: UIViewRepresentable {
             nil
         }
 
+        /// While the heights change (in their animation): the cells and titles made meanwhile
+        /// (`madeWhileAnimating`, their content).
+        private var isAnimatingHeights = false
+        private var madeWhileAnimating: [UIView] = []
+
+        /// A cell made in the heights' animation (a symbol just opened: its row, 0 high, had no
+        /// cell) had its content laid out in it, from where a new view starts: its code flew in
+        /// from the top left corner. Its content doesn't animate; the cell itself still moves
+        /// with the others.
+        private func stopInnerAnimations() {
+            let made = madeWhileAnimating
+            madeWhileAnimating = []
+            func stop(_ layer: CALayer) {
+                layer.removeAllAnimations()
+                layer.sublayers?.forEach(stop)
+            }
+            for view in made { stop(view.layer) }
+        }
+
         /// Heights follow what's collapsed: each change takes the rows' new heights (animated, as
         /// SwiftUI's own list did), then watches again.
         func trackHeights() {
@@ -337,12 +346,15 @@ struct CodeTable: UIViewRepresentable {
             } onChange: { [weak self] in
                 Task { @MainActor in
                     guard let self, let table = self.table else { return }
+                    self.isAnimatingHeights = true
                     // SwiftUI's `.smooth(duration: 0.25)` (a spring without bounce), as the
                     // title's chevron and the code's fade go: UIKit's own ease in and out
                     // felt different.
                     UIView.animate(springDuration: 0.25, bounce: 0) {
                         table.performBatchUpdates(nil)
                     }
+                    self.isAnimatingHeights = false
+                    self.stopInnerAnimations()
                     self.trackHeights()
                 }
             }
