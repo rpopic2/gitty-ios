@@ -196,7 +196,7 @@ struct CodeTable: UIViewRepresentable {
         }
 
         private func configure(_ cell: UITableViewCell, id: Int) {
-            cell.contentConfiguration = UIHostingConfiguration { parent.row(id) }
+            cell.contentConfiguration = UIHostingConfiguration { TopAlignedRow { parent.row(id) } }
                 .margins(.all, 0)
                 .minSize(width: 0, height: 0)
         }
@@ -435,6 +435,26 @@ struct CodeTable: UIViewRepresentable {
 }
 
 /// Titles' heights before they're made, for the table's estimates.
+/// A row's content from its top, whatever the row's height just then. Opening a symbol, its
+/// code comes into the row while it's still 0 high (the row grows a moment later, animated):
+/// centred in it, as SwiftUI puts a view bigger than the room it's given, the code showed half
+/// above its place and then moved down into it. Closing, the other way. Measured, the row is its
+/// content's height.
+private struct TopAlignedRow: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let content = subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) ?? .zero
+        let height = proposal.height.flatMap { $0.isFinite ? $0 : nil } ?? content.height
+        return CGSize(width: proposal.width ?? content.width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading,
+                          proposal: ProposedViewSize(width: bounds.width, height: nil))
+        }
+    }
+}
+
 enum SymbolTitleHeight {
     static let symbol: CGFloat = 28
     static let file: CGFloat = 44
