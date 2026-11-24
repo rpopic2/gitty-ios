@@ -38,10 +38,12 @@ final class AlbumNaming {
     /// New Album: made at once, "New Album" (numbered when that's taken), with `items` in it,
     /// without asking for a name (rename it on the albums page). `opensAlbum`: shown at the
     /// Code level then (`albumToShow`).
-    func begin(projectID: String, items: [AlbumItem] = [], opensAlbum: Bool = false) {
-        guard !projectID.isEmpty else { return }
+    @discardableResult
+    func begin(projectID: String, items: [AlbumItem] = [], opensAlbum: Bool = false) -> Album? {
+        guard !projectID.isEmpty else { return nil }
         let album = AlbumStore.shared.createUntitled(projectID: projectID, items: items)
         if opensAlbum { albumToShow = album }
+        return album
     }
 
     /// A new album to show at the Code level (the app shows it, then sets this back to `nil`).
@@ -122,6 +124,8 @@ struct AlbumMenuItems: View {
     /// The albums right in the menu, not under "Add to Album" (a menu of its own, such as an
     /// Add to Album button's).
     var isInline = false
+    /// After adding to an album (or making one): which.
+    var onAdd: (@MainActor (UUID) -> Void)? = nil
 
     @Environment(AlbumNaming.self) private var naming: AlbumNaming?
 
@@ -147,8 +151,9 @@ struct AlbumMenuItems: View {
     private var albumChoices: some View {
         Button("New Album", systemImage: "plus") {
             startDownload()
-            naming?.begin(projectID: context.projectID, items: items)
+            let album = naming?.begin(projectID: context.projectID, items: items)
             onDone?()
+            if let album { onAdd?(album.id) }
         }
         .disabled(items.isEmpty)
         Section {
@@ -162,6 +167,7 @@ struct AlbumMenuItems: View {
                         store.add(items, to: album.id)
                     }
                     onDone?()
+                    if !hasAll { onAdd?(album.id) }
                 } label: {
                     if hasAll { Label(album.name, systemImage: "checkmark") } else { Text(album.name) }
                 }

@@ -435,6 +435,8 @@ struct StackActions {
     /// The stack's symbols, as album items (read when the menu shows).
     let albumItems: @MainActor () -> [AlbumItem]
     let albumContext: AlbumMenuContext?
+    /// The stack went into an album (added, or a new one): it becomes that album.
+    var onAddedToAlbum: (@MainActor (UUID) -> Void)? = nil
 }
 
 /// A page's place in the stack, before what its caption names: "▣ 3 |". Tap it for the
@@ -449,7 +451,8 @@ struct StackDepthLabel: View {
                 if let context = actions.albumContext {
                     Menu {
                         // The albums right away, not under Add to Album.
-                        AlbumMenuItems(items: actions.albumItems(), context: context, isInline: true)
+                        AlbumMenuItems(items: actions.albumItems(), context: context, isInline: true,
+                                       onAdd: actions.onAddedToAlbum)
                     } label: {
                         count
                     } primaryAction: {
@@ -500,7 +503,8 @@ struct StackSheet<List: View>: View {
                     if let context = actions.albumContext {
                         ToolbarItem(placement: .topBarLeading) {
                             Menu {
-                                AlbumMenuItems(items: actions.albumItems(), context: context, isInline: true)
+                                AlbumMenuItems(items: actions.albumItems(), context: context, isInline: true,
+                                       onAdd: actions.onAddedToAlbum)
                             } label: {
                                 Label("Add to Album", systemImage: "rectangle.stack.badge.plus")
                             }

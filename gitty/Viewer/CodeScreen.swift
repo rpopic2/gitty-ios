@@ -636,7 +636,14 @@ struct CodeScreen: View {
                 isShowingStack = true
             },
             albumItems: { stackedSymbols().map { AlbumItem($0.symbol, openFile: openFile) } },
-            albumContext: albumContext
+            albumContext: albumContext,
+            // The stack becomes the album: every page closes, and the Code level shows it.
+            onAddedToAlbum: { id in
+                stackJump = nil
+                isShowingStack = false
+                cardPath = []
+                onOpenAlbum(id)
+            }
         )
     }
 
