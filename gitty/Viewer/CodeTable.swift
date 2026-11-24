@@ -22,6 +22,17 @@ struct CodeTableScrollRequest: Equatable {
     }
 }
 
+/// What was held: a section's title (its header), or its row.
+enum CodeTableMenuPart {
+    case title, row
+}
+
+/// A touch-and-hold menu, made as it opens, and its preview (`nil`: the cell itself, lifted).
+struct CodeTableMenu {
+    let menu: UIMenu
+    let preview: (@MainActor () -> UIViewController)?
+}
+
 /// Where the list is, for the bar collapsing as it scrolls (see `BarCollapseTracker`).
 struct CodeTableScroll {
     let offset: CGFloat
@@ -46,6 +57,9 @@ struct CodeTable: UIViewRepresentable {
     let row: @MainActor (Int) -> AnyView
     /// A row with nothing to show now (a collapsed symbol's code): no height.
     let isRowEmpty: @MainActor (Int) -> Bool
+    /// A section's title's or row's touch-and-hold menu, asked for only as it opens (SwiftUI's,
+    /// on each row, was all made every time a row was drawn).
+    let menu: @MainActor (Int, CodeTableMenuPart) -> CodeTableMenu?
     /// About how tall a row and a title will be, before they're made.
     let estimatedRowHeight: @MainActor (Int) -> CGFloat
     let estimatedHeaderHeight: @MainActor (Int) -> CGFloat
@@ -84,7 +98,7 @@ struct CodeTable: UIViewRepresentable {
         // A row's SwiftUI content growing (its code laid out) resizes it.
         table.selfSizingInvalidation = .enabledIncludingConstraints
         table.register(UITableViewCell.self, forCellReuseIdentifier: Coordinator.cellID)
-        table.register(UITableViewHeaderFooterView.self, forHeaderFooterViewReuseIdentifier: Coordinator.headerID)
+        table.register(CodeTableHeaderView.self, forHeaderFooterViewReuseIdentifier: Coordinator.headerID)
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
         context.coordinator.table = table
@@ -106,7 +120,7 @@ struct CodeTable: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate {
+    final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate, UIContextMenuInteractionDelegate {
         static let cellID = "row"
         static let headerID = "title"
 
@@ -209,11 +223,44 @@ struct CodeTable: UIViewRepresentable {
 
         func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
             guard sections.indices.contains(section), sections[section].hasHeader,
-                  let header = tableView.dequeueReusableHeaderFooterView(withIdentifier: Self.headerID)
+                  let header = tableView.dequeueReusableHeaderFooterView(withIdentifier: Self.headerID) as? CodeTableHeaderView
             else { return nil }
             header.backgroundConfiguration = .clear()
+            header.sectionID = sections[section].id
+            if !header.hasMenu {
+                header.addInteraction(UIContextMenuInteraction(delegate: self))
+                header.hasMenu = true
+            }
             configure(header, id: sections[section].id)
             return header
+        }
+
+        // MARK: Menus
+
+        /// A row held: its menu, made now.
+        func tableView(_ tableView: UITableView, contextMenuConfigurationForRowAt indexPath: IndexPath,
+                       point: CGPoint) -> UIContextMenuConfiguration? {
+            guard sections.indices.contains(indexPath.section),
+                  let made = parent.menu(sections[indexPath.section].id, .row)
+            else { return nil }
+            return configuration(made)
+        }
+
+        /// A title held (headers aren't rows: each has its own interaction).
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+            guard let header = interaction.view as? CodeTableHeaderView,
+                  let made = parent.menu(header.sectionID, .title)
+            else { return nil }
+            return configuration(made)
+        }
+
+        private func configuration(_ made: CodeTableMenu) -> UIContextMenuConfiguration {
+            let preview = made.preview
+            let menu = made.menu
+            return UIContextMenuConfiguration(identifier: nil,
+                                              previewProvider: preview.map { make in { MainActor.assumeIsolated { make() } } },
+                                              actionProvider: { _ in menu })
         }
 
         func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
@@ -362,4 +409,10 @@ struct CodeTable: UIViewRepresentable {
 enum SymbolTitleHeight {
     static let symbol: CGFloat = 28
     static let file: CGFloat = 44
+}
+
+/// A title's view in the table, knowing its section (for its menu).
+final class CodeTableHeaderView: UITableViewHeaderFooterView {
+    var sectionID = 0
+    var hasMenu = false
 }

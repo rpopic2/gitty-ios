@@ -358,8 +358,11 @@ struct SymbolsView: View, Equatable {
             guard case .symbol(let symbol, _)? = byID[id] else { return 0 }
             return symbol.kind == .file ? SymbolTitleHeight.file : SymbolTitleHeight.symbol
         }
+        let menu: @MainActor (Int, CodeTableMenuPart) -> CodeTableMenu? = { id, part in
+            view.tableMenu(byID[id], part: part)
+        }
         return CodeTable(
-            sections: sections, header: header, row: row, isRowEmpty: isRowEmpty,
+            sections: sections, header: header, row: row, isRowEmpty: isRowEmpty, menu: menu,
             estimatedRowHeight: estimatedRow, estimatedHeaderHeight: estimatedHeader,
             initialID: start, scrollRequest: tableScroll,
             // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe
@@ -440,13 +443,6 @@ struct SymbolsView: View, Equatable {
         let isOpen = collapsed.isGroupOpen(node.path, scope: scope)
         let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleGroup(node.path, scope: scope) } }
         return FolderHeader(path: label, fileCount: node.fileCount, isFolded: !isOpen, indent: indent, onToggle: toggle)
-            .contextMenu {
-                Button(isOpen ? "Fold Folder" : "Unfold Folder",
-                       systemImage: isOpen ? "chevron.right" : "chevron.down", action: toggle)
-                commentOnFolder(node.path)
-            } preview: {
-                FolderPathPreview(path: rootFolderName + "/" + node.path, fileCount: node.fileCount)
-            }
     }
 
     /// - Parameter label: its path from the group it's in ("" for the project's top files).
@@ -455,43 +451,69 @@ struct SymbolsView: View, Equatable {
         let scope = collapseScope
         let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
         let toggle = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggleFolder(group.path, scope: scope) } }
-        let fullPath = group.path.isEmpty ? rootFolderName : rootFolderName + "/" + group.path
         return FolderHeader(path: label.isEmpty ? rootFolderName : label, fileCount: group.fileCount,
                             isFolded: isFolded, indent: indent, onToggle: toggle)
-            .contextMenu {
-                folderMenu(group, isFolded: isFolded, toggle: toggle)
-            } preview: {
-                FolderPathPreview(path: fullPath, fileCount: group.fileCount)
-            }
     }
 
-    /// Comment on a folder (its path in the project): adds its path to the review.
-    @ViewBuilder
-    private func commentOnFolder(_ path: String) -> some View {
-        if let onCommentOnFolder = textActions?.onCommentOnFolder {
-            Button("Comment", systemImage: "text.bubble") { onCommentOnFolder(path) }
-        }
-    }
-
-    /// A folder's long-press menu: fold or unfold it (or all of them), comment on it, and add
-    /// its files to an album.
-    @ViewBuilder
-    private func folderMenu(_ group: FolderGroup, isFolded: Bool, toggle: @escaping () -> Void) -> some View {
+    /// A folder's or a group's touch-and-hold menu (UIKit's, made when it opens): fold or
+    /// unfold it, comment on it; a folder's also adds its files to an album, and folds or
+    /// unfolds every folder. Its preview is its whole path from the project's top (the header
+    /// cuts a long one short) and how many files it has.
+    private func folderMenu(_ header: FolderRows.Header) -> CodeTableMenu {
         let collapsed = collapsed
         let scope = collapseScope
-        Button(isFolded ? "Unfold Folder" : "Fold Folder",
-               systemImage: isFolded ? "chevron.down" : "chevron.right", action: toggle)
-        commentOnFolder(group.path)
-        if let albumContext {
-            AlbumMenuItems(items: group.files.map { AlbumItem.file($0) }, context: albumContext)
+        let comment = textActions?.onCommentOnFolder
+        func action(_ title: String.LocalizationValue, _ image: String, _ handler: @escaping @MainActor () -> Void) -> UIAction {
+            UIAction(title: String(localized: title), image: UIImage(systemName: image)) { _ in handler() }
         }
-        Section {
-            Button("Fold All Folders", systemImage: "chevron.right.2") {
-                withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(true, scope: scope) }
+        func animated(_ change: @escaping @MainActor () -> Void) -> @MainActor () -> Void {
+            { withAnimation(.smooth(duration: 0.25)) { change() } }
+        }
+        var items: [UIMenuElement] = []
+        let path: String, fileCount: Int
+        switch header {
+        case .group(let node, _, _):
+            let isOpen = collapsed.isGroupOpen(node.path, scope: scope)
+            items.append(action(isOpen ? "Fold Folder" : "Unfold Folder", isOpen ? "chevron.right" : "chevron.down",
+                                animated { collapsed.toggleGroup(node.path, scope: scope) }))
+            if let comment { items.append(action("Comment", "text.bubble") { comment(node.path) }) }
+            path = rootFolderName + "/" + node.path
+            fileCount = node.fileCount
+        case .folder(let group, _, _):
+            let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
+            items.append(action(isFolded ? "Unfold Folder" : "Fold Folder", isFolded ? "chevron.down" : "chevron.right",
+                                animated { collapsed.toggleFolder(group.path, scope: scope) }))
+            if let comment { items.append(action("Comment", "text.bubble") { comment(group.path) }) }
+            if let albumContext {
+                items += AlbumUIMenu.elements(for: group.files.map { AlbumItem.file($0) }, context: albumContext,
+                                              naming: albumNaming)
             }
-            Button("Unfold All Folders", systemImage: "chevron.down.2") {
-                withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(false, scope: scope) }
-            }
+            items.append(UIMenu(options: .displayInline, children: [
+                action("Fold All Folders", "chevron.right.2", animated { collapsed.setAllFoldersFolded(true, scope: scope) }),
+                action("Unfold All Folders", "chevron.down.2", animated { collapsed.setAllFoldersFolded(false, scope: scope) }),
+            ]))
+            path = group.path.isEmpty ? rootFolderName : rootFolderName + "/" + group.path
+            fileCount = group.fileCount
+        }
+        return CodeTableMenu(menu: UIMenu(children: items)) {
+            let controller = UIHostingController(rootView: FolderPathPreview(path: path, fileCount: fileCount))
+            controller.preferredContentSize = controller.sizeThatFits(in: CGSize(width: 320, height: 600))
+            return controller
+        }
+    }
+
+    /// A section's touch-and-hold menu, as it opens: a symbol's title's or code's, or a
+    /// folder's header's.
+    private func tableMenu(_ row: TableRow?, part: CodeTableMenuPart) -> CodeTableMenu? {
+        switch (row, part) {
+        case (.folder(let header)?, .row):
+            return folderMenu(header)
+        case (.symbol(let symbol, _)?, _):
+            let menu = contextMenu(for: symbol, part: part == .title ? .title : .code)
+            let style = codeTextStyle
+            return CodeTableMenu(menu: menu.menu(naming: albumNaming)) { menu.preview(style: style) }
+        default:
+            return nil
         }
     }
 
@@ -503,7 +525,7 @@ struct SymbolsView: View, Equatable {
             && fileCounts.count(of: symbol, in: symbols) == 0
         return SymbolCode(symbol: symbol, isWholeFile: isWholeFile, store: codeBlocks, peek: peek, blames: blames,
                    collapsed: collapsed, openFile: openFile,
-                   scope: collapseScope, contextMenu: contextMenu(for: symbol, part: .code), onTap: { onOpen(symbol) },
+                   scope: collapseScope, onTap: { onOpen(symbol) },
                    onTapAt: { anchor in
                        if let onOpenAt { onOpenAt(symbol, anchor) } else { onOpen(symbol) }
                    })
@@ -516,8 +538,7 @@ struct SymbolsView: View, Equatable {
                    symbolCount: symbol.kind == .file ? fileCounts.count(of: symbol, in: symbols) : 0,
                    isDownloading: symbol.fileURL.map(downloadingFiles.contains) ?? false,
                    onDownload: onDownloadFile,
-                   onNeedsSymbols: onNeedsSymbols,
-                   contextMenu: contextMenu(for: symbol, part: .title))
+                   onNeedsSymbols: onNeedsSymbols)
     }
 
     /// The long-press menu of a symbol's title or code: a small preview (not a snapshot of what
@@ -694,8 +715,6 @@ private struct CodeHeader: View {
     let onDownload: (@MainActor (URL) -> Void)?
     /// A file's title showed before its symbols were known.
     let onNeedsSymbols: (@MainActor (URL) -> Void)?
-    /// Touch and hold (the same menu as the code's).
-    let contextMenu: CodeMenu
 
     var body: some View {
         VStack(spacing: 0) {
@@ -725,7 +744,6 @@ private struct CodeHeader: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .modifier(contextMenu)
             }
         }
     }
@@ -1485,15 +1503,13 @@ private struct SymbolCode: View {
     let collapsed: CollapsedCodeStore
     let openFile: URL
     let scope: String
-    /// Touch and hold (the same menu as the title's).
-    let contextMenu: CodeMenu
     let onTap: @MainActor () -> Void
     let onTapAt: @MainActor (PageAnchor) -> Void
     /// Read so a new theme makes it take its new block.
     @Environment(\.codeTextStyle) private var codeTextStyle
 
     init(symbol: CodeSymbol, isWholeFile: Bool = false, store: CodeBlockStore, peek: CodePeek, blames: BlameStore,
-         collapsed: CollapsedCodeStore, openFile: URL, scope: String, contextMenu: CodeMenu,
+         collapsed: CollapsedCodeStore, openFile: URL, scope: String,
          onTap: @escaping @MainActor () -> Void, onTapAt: @escaping @MainActor (PageAnchor) -> Void) {
         self.symbol = symbol
         self.isWholeFile = isWholeFile
@@ -1503,7 +1519,6 @@ private struct SymbolCode: View {
         self.collapsed = collapsed
         self.openFile = openFile
         self.scope = scope
-        self.contextMenu = contextMenu
         self.onTap = onTap
         self.onTapAt = onTapAt
     }
@@ -1517,7 +1532,6 @@ private struct SymbolCode: View {
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
-                    .modifier(contextMenu)
             }
         }
     }
@@ -1549,10 +1563,12 @@ struct CodeTextActions {
 }
 
 /// The long-press menu of a symbol's title and code: a small preview, then Open (its page) and
-/// Show History; then the items selecting text on its page has (Comment, Search, Occurrences,
-/// Copy, Share), for what was held: a title's text (its declaration, or a file's name), or for
-/// the code, the title and its code together (all a block shows); then Add to Album.
-private struct CodeMenu: ViewModifier {
+/// Show History; then the items selecting text on its page has (Comment, Definition,
+/// Occurrences, Copy, Share), for what was held: a title's text (its declaration, or a file's
+/// name), or for the code, the title and its code together (all a block shows); then Add to
+/// Album. UIKit's menu, made only when it opens (the table asks for it): as SwiftUI's on every
+/// row, every row on screen made all of it each time it was drawn.
+private struct CodeMenu {
     enum Part { case title, code }
 
     let symbol: CodeSymbol
@@ -1570,73 +1586,82 @@ private struct CodeMenu: ViewModifier {
     /// A file's title: Expand All in it.
     let onExpandAll: (@MainActor () -> Void)?
 
-    func body(content: Content) -> some View {
+    func menu(naming: AlbumNaming?) -> UIMenu {
         let file = symbol.fileURL ?? openFile
-        content.contextMenu {
-            Section {
-                Button("Open", systemImage: "arrow.up.left.and.arrow.down.right") { onOpen(symbol) }
-                if albumContext != nil, let onShowHistory {
-                    Button("Show History", systemImage: "clock.arrow.circlepath") {
-                        onShowHistory(file, symbol.kind == .file ? nil : symbol)
-                    }
-                }
-                if part == .title, let onExpandAll {
-                    Button("Expand All", systemImage: "chevron.down.2", action: onExpandAll)
-                }
-            }
-            Section {
-                if let diff = symbol.diff {
-                    diffItems(diff)
-                } else {
-                    textItems
-                }
-            }
-            // A diff's card belongs to its diff album only.
-            if let albumContext, symbol.diff == nil {
-                AlbumMenuItems(items: [AlbumItem(symbol, openFile: openFile)], context: albumContext,
-                               download: symbol.isDownloaded ? nil : symbol.fileURL)
-            }
-        } preview: {
-            CodeMenuPreview(symbol: symbol, fileExtension: file.pathExtension)
+        var first: [UIMenuElement] = [action("Open", "arrow.up.left.and.arrow.down.right") { onOpen(symbol) }]
+        if albumContext != nil, let onShowHistory {
+            first.append(action("Show History", "clock.arrow.circlepath") {
+                onShowHistory(file, symbol.kind == .file ? nil : symbol)
+            })
         }
+        if part == .title, let onExpandAll {
+            first.append(action("Expand All", "chevron.down.2", onExpandAll))
+        }
+        var sections: [UIMenuElement] = [
+            UIMenu(options: .displayInline, children: first),
+            UIMenu(options: .displayInline, children: symbol.diff.map(diffItems) ?? textItems),
+        ]
+        // A diff's card belongs to its diff album only.
+        if let albumContext, symbol.diff == nil {
+            sections += AlbumUIMenu.elements(for: [AlbumItem(symbol, openFile: openFile)], context: albumContext,
+                                             download: symbol.isDownloaded ? nil : symbol.fileURL, naming: naming)
+        }
+        return UIMenu(children: sections)
+    }
+
+    /// The small preview: the title and first lines (not a snapshot of what may be hundreds of
+    /// lines).
+    func preview(style: CodeTextStyle) -> UIViewController {
+        let file = symbol.fileURL ?? openFile
+        let controller = UIHostingController(rootView: CodeMenuPreview(symbol: symbol, fileExtension: file.pathExtension)
+            .environment(\.codeTextStyle, style))
+        controller.preferredContentSize = controller.sizeThatFits(in: CGSize(width: 320, height: 600))
+        return controller
+    }
+
+    private func action(_ title: String.LocalizationValue, _ image: String,
+                        _ handler: @escaping @MainActor () -> Void) -> UIAction {
+        UIAction(title: String(localized: title), image: UIImage(systemName: image)) { _ in handler() }
     }
 
     /// Like the page's text menu. A title's text is known at once (from the list); the code's
     /// is read from its file when an item is chosen.
-    @ViewBuilder private var textItems: some View {
+    private var textItems: [UIMenuElement] {
+        var items: [UIMenuElement] = []
         switch part {
         case .title:
             let text = symbol.kind == .file ? symbol.name : CodeHeader.declaration(of: symbol)
             if symbol.kind == .file, let onCommentOnFile = textActions?.onCommentOnFile {
-                Button("Comment", systemImage: "text.bubble") { onCommentOnFile(symbol.fileURL ?? openFile) }
+                let file = symbol.fileURL ?? openFile
+                items.append(action("Comment", "text.bubble") { onCommentOnFile(file) })
             }
             if symbol.kind != .file, symbol.isDownloaded, let onComment = textActions?.onComment {
-                Button("Comment", systemImage: "text.bubble") {
+                items.append(action("Comment", "text.bubble") {
                     withFileText { fileText in
                         if let range = Self.declarationRange(of: symbol, in: fileText) {
                             onComment(range, symbol.fileURL, fileText)
                         }
                     }
-                }
+                })
             }
             if let onSearch = textActions?.onSearch, let query = SymbolSearch.query(fromSelection: text) {
-                Button("Definition", systemImage: "magnifyingglass") { onSearch(query) }
+                items.append(action("Definition", "magnifyingglass") { onSearch(query) })
             }
             if let onFind = textActions?.onFindOccurrences, let term = Occurrences.term(fromSelection: text) {
-                Button("Occurrences", systemImage: "text.magnifyingglass") {
+                items.append(action("Occurrences", "text.magnifyingglass") {
                     onFind(OccurrenceTerm(text: term, identifier: nil))
-                }
+                })
             }
-            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
-            Button("Share", systemImage: "square.and.arrow.up") { TextSharer.share(text) { _ in } }
+            items.append(action("Copy", "doc.on.doc") { UIPasteboard.general.string = text })
+            items.append(action("Share", "square.and.arrow.up") { TextSharer.share(text) { _ in } })
         case .code:
             if let onComment = textActions?.onComment {
-                Button("Comment", systemImage: "text.bubble") {
+                items.append(action("Comment", "text.bubble") {
                     withCode { range, fileText in onComment(range, symbol.fileURL, fileText) }
-                }
+                })
             }
             if let onSearch = textActions?.onSearch {
-                Button("Definition", systemImage: "magnifyingglass") {
+                items.append(action("Definition", "magnifyingglass") {
                     withCode { range, fileText in
                         // A long selection searches with its start, as on a page.
                         let head = NSRange(location: range.location, length: min(range.length, 500))
@@ -1644,30 +1669,31 @@ private struct CodeMenu: ViewModifier {
                             onSearch(query)
                         }
                     }
-                }
+                })
             }
-            Button("Copy", systemImage: "doc.on.doc") {
+            items.append(action("Copy", "doc.on.doc") {
                 withCode { range, fileText in UIPasteboard.general.string = fileText.substring(with: range) }
-            }
-            Button("Share", systemImage: "square.and.arrow.up") {
+            })
+            items.append(action("Share", "square.and.arrow.up") {
                 withCode { range, fileText in TextSharer.share(fileText.substring(with: range)) { _ in } }
-            }
+            })
         }
+        return items
     }
 
     /// A diff album's card: Copy and Share the change as a unified diff (a hunk's lines, or a
     /// file's path for its title). Its text is the diff's, not the file's, so nothing reads it
     /// from the file.
-    @ViewBuilder
-    private func diffItems(_ diff: DiffPart) -> some View {
-        let text = diff.lines.isEmpty
-            ? diff.path
-            : DiffAlbumContents.unified(diff.lines, header: symbol.name)
+    private func diffItems(_ diff: DiffPart) -> [UIMenuElement] {
+        let text = diff.lines.isEmpty ? diff.path : DiffAlbumContents.unified(diff.lines, header: symbol.name)
+        var items: [UIMenuElement] = []
         if !diff.lines.isEmpty, let onCommentOnDiff = textActions?.onCommentOnDiff {
-            Button("Comment", systemImage: "text.bubble") { onCommentOnDiff(symbol) }
+            let symbol = symbol
+            items.append(action("Comment", "text.bubble") { onCommentOnDiff(symbol) })
         }
-        Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
-        Button("Share", systemImage: "square.and.arrow.up") { TextSharer.share(text) { _ in } }
+        items.append(action("Copy", "doc.on.doc") { UIPasteboard.general.string = text })
+        items.append(action("Share", "square.and.arrow.up") { TextSharer.share(text) { _ in } })
+        return items
     }
 
     /// The code's range and its file's text, once read (at once for the open file's).

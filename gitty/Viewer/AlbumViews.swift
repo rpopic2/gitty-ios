@@ -205,6 +205,63 @@ struct AlbumMenuItems: View {
     }
 }
 
+/// `AlbumMenuItems` for UIKit's touch-and-hold menus (the Code level's table): Remove from
+/// Album in the album shown, then Add to Album, with New Album and the project's albums (a
+/// checkmark at those that have it all already: choosing one takes it out). Made when the menu
+/// opens, so the albums are as they are then.
+enum AlbumUIMenu {
+    /// - Parameter download: a file to download first, so its symbols can be listed.
+    @MainActor
+    static func elements(for items: [AlbumItem], context: AlbumMenuContext, download: URL? = nil,
+                         naming: AlbumNaming?, onAdd: (@MainActor (UUID) -> Void)? = nil) -> [UIMenuElement] {
+        guard !items.isEmpty else { return [] }
+        let store = AlbumStore.shared
+        var result: [UIMenuElement] = []
+        if let album = store.album(id: context.shownAlbumID) {
+            let direct = items.filter { album.contains($0) }
+            if !direct.isEmpty {
+                result.append(UIAction(title: String(localized: "Remove from Album"), image: UIImage(systemName: "minus.circle"),
+                                       attributes: .destructive) { _ in store.remove(direct, from: album.id) })
+            } else if items.count == 1, let file = items.first?.file, album.containsFile(file) {
+                result.append(UIAction(title: String(localized: "Remove \(file.displayFileName) from Album"),
+                                       image: UIImage(systemName: "minus.circle"), attributes: .destructive) { _ in
+                    store.remove([.file(file)], from: album.id)
+                })
+            }
+        }
+        let new = UIAction(title: String(localized: "New Album"), image: UIImage(systemName: "plus")) { _ in
+            startDownload(download)
+            if let album = naming?.begin(projectID: context.projectID, items: items) { onAdd?(album.id) }
+        }
+        let albums = store.albums(inProject: context.projectID).map { album in
+            let hasAll = items.allSatisfy { album.contains($0) }
+            return UIAction(title: album.name, state: hasAll ? .on : .off) { _ in
+                if hasAll {
+                    store.remove(items, from: album.id)
+                } else {
+                    startDownload(download)
+                    store.add(items, to: album.id)
+                    onAdd?(album.id)
+                }
+            }
+        }
+        result.append(UIMenu(title: String(localized: "Add to Album"), image: UIImage(systemName: "rectangle.stack.badge.plus"),
+                             children: [new] + (albums.isEmpty ? [] : [UIMenu(options: .displayInline, children: albums)])))
+        return result
+    }
+
+    @MainActor
+    private static func startDownload(_ file: URL?) {
+        guard let file else { return }
+        Task {
+            if await DocumentStore.shared.cached(file) == nil,
+               (try? await DocumentStore.shared.fetch(file)) != nil {
+                AlbumStore.shared.fileDownloaded()
+            }
+        }
+    }
+}
+
 /// The text menu's "Add to Album" on a page, for the selected lines (UIKit's edit menu).
 enum AlbumTextMenu {
     @MainActor
