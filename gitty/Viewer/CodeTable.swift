@@ -196,7 +196,7 @@ struct CodeTable: UIViewRepresentable {
         }
 
         private func configure(_ cell: UITableViewCell, id: Int) {
-            cell.contentConfiguration = UIHostingConfiguration { TopAlignedRow { parent.row(id) } }
+            cell.contentConfiguration = UIHostingConfiguration { parent.row(id) }
                 .margins(.all, 0)
                 .minSize(width: 0, height: 0)
         }
@@ -219,8 +219,20 @@ struct CodeTable: UIViewRepresentable {
             let cell = tableView.dequeueReusableCell(withIdentifier: Self.cellID, for: indexPath)
             cell.backgroundConfiguration = .clear()
             cell.selectionStyle = .none
-            configure(cell, id: sections[indexPath.section].id)
+            // Not animated even when asked for inside an animation (see `willDisplay`).
+            UIView.performWithoutAnimation { configure(cell, id: sections[indexPath.section].id) }
             return cell
+        }
+
+        /// A cell that comes on screen while the heights animate (a symbol just opened: its row,
+        /// 0 high, had no cell) is laid out here, without animation. Laid out inside the
+        /// animation, its code flew in from the top left corner, from where a new view starts.
+        func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+            UIView.performWithoutAnimation { cell.layoutIfNeeded() }
+        }
+
+        func tableView(_ tableView: UITableView, willDisplayHeaderView view: UIView, forSection section: Int) {
+            UIView.performWithoutAnimation { view.layoutIfNeeded() }
         }
 
         func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
@@ -233,7 +245,7 @@ struct CodeTable: UIViewRepresentable {
                 header.addInteraction(UIContextMenuInteraction(delegate: self))
                 header.hasMenu = true
             }
-            configure(header, id: sections[section].id)
+            UIView.performWithoutAnimation { configure(header, id: sections[section].id) }
             return header
         }
 
@@ -435,26 +447,6 @@ struct CodeTable: UIViewRepresentable {
 }
 
 /// Titles' heights before they're made, for the table's estimates.
-/// A row's content from its top, whatever the row's height just then. Opening a symbol, its
-/// code comes into the row while it's still 0 high (the row grows a moment later, animated):
-/// centred in it, as SwiftUI puts a view bigger than the room it's given, the code showed half
-/// above its place and then moved down into it. Closing, the other way. Measured, the row is its
-/// content's height.
-private struct TopAlignedRow: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let content = subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) ?? .zero
-        let height = proposal.height.flatMap { $0.isFinite ? $0 : nil } ?? content.height
-        return CGSize(width: proposal.width ?? content.width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for subview in subviews {
-            subview.place(at: bounds.origin, anchor: .topLeading,
-                          proposal: ProposedViewSize(width: bounds.width, height: nil))
-        }
-    }
-}
-
 enum SymbolTitleHeight {
     static let symbol: CGFloat = 28
     static let file: CGFloat = 44
