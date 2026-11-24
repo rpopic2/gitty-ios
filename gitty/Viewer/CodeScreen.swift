@@ -349,6 +349,10 @@ struct CodeScreen: View {
                 )
             }
         case .ready:
+            // The list's own place, fixed as it's made: a list on its way out (the album just
+            // switched) saved its middle card as the new album's place, so coming back to that
+            // album found no such card and started at the top.
+            let place = listPlace
             SymbolsView(
                 symbols: model.listSymbols,
                 query: "",
@@ -357,7 +361,7 @@ struct CodeScreen: View {
                 scrollRequest: listScrollRequest,
                 collapseRequest: collapseRequest,
                 initialID: { savedListSymbolID() },
-                onCenteredSymbolChange: { saveListPosition($0) },
+                onCenteredSymbolChange: { saveListPosition($0, at: place) },
                 isBarCollapsed: { model.isBarCollapsed },
                 barTapCount: model.barTapCount,
                 openFile: model.url,
@@ -914,12 +918,23 @@ struct CodeScreen: View {
     /// Saves the card in the middle of the Symbols list, like File saves its place. It changes
     /// only when another card reaches the middle (a few times a second at most), and the save is
     /// a few bytes. (Searches go on results pages, so this list is always the whole one.)
-    private func saveListPosition(_ symbol: CodeSymbol) {
-        if let album = model.activeAlbum {
-            ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), forAlbum: album.id)
-        } else {
-            ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), for: model.url)
+    private func saveListPosition(_ symbol: CodeSymbol, at place: ListPlace) {
+        switch place {
+        case .album(let id):
+            ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), forAlbum: id)
+        case .file(let url):
+            ReadingPositionStore.standard.saveSymbolsPosition(SymbolsPosition(symbol), for: url)
         }
+    }
+
+    /// Where the list's place is kept: an album's own, or (the whole project) the open file's.
+    private enum ListPlace {
+        case album(UUID)
+        case file(URL)
+    }
+
+    private var listPlace: ListPlace {
+        model.activeAlbum.map { .album($0.id) } ?? .file(model.url)
     }
 
     /// Full-screen, opaque, so the hidden file text never shows through.
