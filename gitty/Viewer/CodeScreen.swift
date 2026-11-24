@@ -598,20 +598,31 @@ struct CodeScreen: View {
 
     // MARK: The stack's symbols
 
-    /// Each card's symbol as it is now, bottom card first, with the card to go back to (the
-    /// topmost one showing it, when two cards show the same symbol).
+    /// Each card's symbol as it is now, and each search or Occurrences page's results, bottom
+    /// page first, with the page to go back to (the topmost one showing it, when two show the
+    /// same symbol).
     private func stackedSymbols() -> [(symbol: CodeSymbol, card: CardRoute)] {
         var result: [(symbol: CodeSymbol, card: CardRoute)] = []
         var places: [Int: Int] = [:]
-        for route in cardPath {
-            guard case .card(let id) = route, let card = stackedCards[id] else { continue }
-            let current = cardPlaces.current[id] ?? card.initialID
-            guard let symbol = card.symbols.first(where: { $0.id == current }) else { continue }
+        func add(_ symbol: CodeSymbol, _ route: CardRoute) {
             if let place = places[symbol.id] {
                 result[place].card = route
             } else {
                 places[symbol.id] = result.count
                 result.append((symbol, route))
+            }
+        }
+        for route in cardPath {
+            switch route {
+            case .card(let id):
+                guard let card = stackedCards[id] else { continue }
+                let current = cardPlaces.current[id] ?? card.initialID
+                if let symbol = card.symbols.first(where: { $0.id == current }) { add(symbol, route) }
+            // A search or Occurrences page: what it found (tap one to go back to the page).
+            case .results(let id):
+                for symbol in stackedSearches[id]?.results ?? [] { add(symbol, route) }
+            case .occurrences(let id):
+                for symbol in stackedOccurrences[id]?.results ?? [] { add(symbol, route) }
             }
         }
         return result

@@ -187,7 +187,8 @@ final class StackSearch: ResultsPageSearch {
 /// Swipe down to go back.
 struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     @Bindable var search: Search
-    /// How many cards are under it in the stack (searches don't count), shown before the search.
+    /// How many cards are under it in the stack (searches don't count), shown before the search
+    /// (0: the stack's icon alone).
     let stackDepth: Int
     let stackActions: StackActions?
     /// The results shown: the ones not folded away on the page (pinch in to fold files), so
@@ -277,11 +278,9 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     .foregroundStyle(.secondary)
             }
             let label = HStack(spacing: 6) {
-                // With a card under it: the stack's symbols, and Add to Album. (Searches don't
-                // count, so the first page, with none, has no number.)
-                if stackDepth > 0 {
-                    StackDepthLabel(depth: stackDepth, actions: stackActions)
-                }
+                // The stack's symbols (its results among them), and Add to Album. Searches don't
+                // count: with no card under it, just the icon.
+                StackDepthLabel(depth: stackDepth, actions: stackActions)
                 Image(systemName: search.symbolName)
                     .foregroundStyle(.tint)
                 Text(search.query)
@@ -475,13 +474,16 @@ struct StackDepthLabel: View {
     private var count: some View {
         HStack(spacing: 2) {
             Image(systemName: "square.stack")
-            Text(depth, format: .number)
-                .monospacedDigit()
+            // No number with no card in the stack (a search page at the bottom).
+            if depth > 0 {
+                Text(depth, format: .number)
+                    .monospacedDigit()
+            }
         }
         .foregroundStyle(.secondary)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("Page \(depth) in the stack"))
+        .accessibilityLabel(depth > 0 ? Text("Page \(depth) in the stack") : Text("The stack"))
     }
 }
 
