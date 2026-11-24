@@ -1112,10 +1112,7 @@ private struct SymbolTitle: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
-            Image(systemName: symbol.kind.systemImage)
-                .font(.caption)
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
+            // EXPERIMENT: no kind icon, to see whether titles are made faster without it.
             if canCollapse {
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
