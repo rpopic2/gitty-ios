@@ -2,6 +2,7 @@ import Foundation
 import SwiftTreeSitter
 import TreeSitterC
 import TreeSitterCSharp
+import TreeSitterProto
 import TreeSitterSwift
 
 /// What Symbols mode and syntax highlighting need to know about one language. Adding a language
@@ -89,7 +90,20 @@ nonisolated struct SymbolLanguage: Sendable {
         containerNodeTypes: ["class_declaration", "protocol_declaration"]
     )
 
-    static let all: [SymbolLanguage] = [.c, .cSharp, .swift]
+    static let proto = SymbolLanguage(
+        name: "Protocol Buffers",
+        fileExtensions: ["proto"],
+        language: Language(tree_sitter_proto()),
+        queryResource: "symbols-proto",
+        highlightsResource: "highlights-proto",
+        // Nothing inside these defines anything (an rpc's options, a field's).
+        bodyNodeTypes: ["field_options", "enum_value_option"],
+        // Their members get cards too: `Person.name`, `People.Get`, `Status.STATUS_OK`. A oneof
+        // isn't one: its fields are the message's.
+        containerNodeTypes: ["message", "group", "enum", "service", "extend"]
+    )
+
+    static let all: [SymbolLanguage] = [.c, .cSharp, .swift, .proto]
 
     /// Every file extension that has symbols (for the project tree's code icon).
     static let symbolFileExtensions: Set<String> = Set(all.flatMap(\.fileExtensions))
