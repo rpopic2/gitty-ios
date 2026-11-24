@@ -219,6 +219,9 @@ struct CodeTable: UIViewRepresentable {
             let cell = tableView.dequeueReusableCell(withIdentifier: Self.cellID, for: indexPath)
             cell.backgroundConfiguration = .clear()
             cell.selectionStyle = .none
+            // The code shows as its row grows and hides as it shrinks, not over the titles below
+            // as they slide (SwiftUI's list moved them as one).
+            cell.clipsToBounds = true
             configure(cell, id: sections[indexPath.section].id)
             return cell
         }
@@ -325,7 +328,10 @@ struct CodeTable: UIViewRepresentable {
             } onChange: { [weak self] in
                 Task { @MainActor in
                     guard let self, let table = self.table else { return }
-                    UIView.animate(withDuration: 0.25) {
+                    // SwiftUI's `.smooth(duration: 0.25)` (a spring without bounce), as the
+                    // title's chevron and the code's fade go: UIKit's own ease in and out
+                    // felt different.
+                    UIView.animate(springDuration: 0.25, bounce: 0) {
                         table.performBatchUpdates(nil)
                     }
                     self.trackHeights()
