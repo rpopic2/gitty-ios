@@ -13,9 +13,16 @@ struct ReviewTextTests {
         #expect(ReviewText.block(for: one, format: .compact) == "alc/main.c:12: ")
     }
 
-    @Test func markdownQuotesTheCode() {
-        #expect(ReviewText.block(for: selection, format: .markdown)
-                == "### alc/main.c:12-14\n\n```c\nint a;\nint b;\nint c;\n```\n\n")
+    @Test func markdownIsTheFileItsLineAndThatLine() {
+        #expect(ReviewText.block(for: selection, format: .markdown) == "### alc/main.c:12\n```c\nint a;\n```\n\n")
+        // A selection starting with a blank line: the first line with something on it.
+        var spaced = selection
+        spaced.code = "\n   \nint b;  \n"
+        #expect(ReviewText.block(for: spaced, format: .markdown) == "### alc/main.c:14\n```c\nint b;\n```\n\n")
+        // No language known: a plain fence.
+        var plain = selection
+        plain.language = nil
+        #expect(ReviewText.block(for: plain, format: .markdown) == "### alc/main.c:12\n```\nint a;\n```\n\n")
     }
 
     @Test func aFileOrFolderIsJustItsPath() {
@@ -122,10 +129,13 @@ struct ReviewContextTests {
         #expect(diffSelection.label == "src/parse.c@3f2a9c1 (before 40-42, after 40-44)")
         #expect(ReviewText.block(for: diffSelection, format: .compact)
                 == "src/parse.c@3f2a9c1 (before 40-42, after 40-44): ")
+        // Markdown: the first change's line (removed: its number before the commit) and that line.
         #expect(ReviewText.block(for: diffSelection, format: .markdown)
-                == "### src/parse.c@3f2a9c1 (before 40-42, after 40-44)\n\n"
-                + "Commit 3f2a9c1e0b7d4a5f6e8c9d0a1b2c3d4e5f6a7b8c: Fix overflow in parser\n\n"
-                + "```diff\n int n;\n-int a;\n+long a;\n+long b;\n```\n\n")
+                == "### src/parse.c:41\n```diff\n-int a;\n```\n\n")
+        var addedOnly = diffSelection
+        addedOnly.diff = " int n;\n+long b;"
+        #expect(ReviewText.block(for: addedOnly, format: .markdown)
+                == "### src/parse.c:41\n```diff\n+long b;\n```\n\n")
         var added = diffSelection
         added.oldLines = nil
         added.newLines = 7...7
@@ -138,15 +148,12 @@ struct ReviewContextTests {
         #expect(ReviewText.block(for: selection, format: .compact) == "a.c@abcdef0:3: ")
     }
 
-    @Test func theRepositoryIsNamedOnceAtTheTop() {
+    @Test func thereIsNoRepositoryHeading() {
         let repository = ReviewRepository(name: "o/r", ref: "main", commit: "3f2a9c1e0b")
-        #expect(repository.heading == "Review of o/r (branch main, at 3f2a9c1)")
         let first = ReviewText.appending("a.c:1: ", to: "", format: .compact, repository: repository)
-        #expect(first == "Review of o/r (branch main, at 3f2a9c1)\na.c:1: ")
-        let second = ReviewText.appending("a.c:2: ", to: first + "Typo.", format: .compact, repository: repository)
-        #expect(second == first + "Typo.\na.c:2: ")
+        #expect(first == "a.c:1: ")
         let markdown = ReviewText.appending("### a.c:1\n\n", to: "", format: .markdown, repository: repository)
-        #expect(markdown == "## Review of o/r (branch main, at 3f2a9c1)\n\n### a.c:1\n\n")
+        #expect(markdown == "### a.c:1\n\n")
     }
 
     @Test func aDiffSelectionGetsItsLinesBack() {

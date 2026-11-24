@@ -6,7 +6,8 @@ nonisolated enum ReviewFormat: String, CaseIterable, Identifiable, Sendable {
     /// `alc/main.c:12-14: ` then your comment, like a compiler message. Short; the reader needs
     /// the code at hand.
     case compact
-    /// A heading with the file and lines, the selected code in a fenced block, then your comment.
+    /// A heading with the file and its line, that line in a fenced block (with its language),
+    /// then your comment.
     case markdown
 
     var id: Self { self }
@@ -94,10 +95,25 @@ nonisolated enum ReviewText {
         case .compact:
             return "\(selection.label): "
         case .markdown:
-            let code = selection.code.trimmingCharacters(in: .newlines)
-            return "### \(selection.label)\n\n"
-                + "```\(selection.language ?? "")\n\(code)\n```\n\n"
+            // The selection's first line with something on it, and its number.
+            let lines = selection.code.components(separatedBy: "\n")
+            let index = lines.firstIndex { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? 0
+            let line = lines.indices.contains(index) ? trimmingTrailingWhitespace(lines[index]) : ""
+            return markdownBlock(location: selection.location, line: selection.startLine + index,
+                                 preview: line, language: selection.language)
         }
+    }
+
+    /// `### path:line`, then the line in a fenced block, then room for the comment.
+    private static func markdownBlock(location: String, line: Int, preview: String, language: String?) -> String {
+        guard !preview.isEmpty else { return "### \(location):\(line)\n\n" }
+        return "### \(location):\(line)\n```\(language ?? "")\n\(preview)\n```\n\n"
+    }
+
+    private static func trimmingTrailingWhitespace(_ text: String) -> String {
+        var text = text
+        while let last = text.last, last.isWhitespace { text.removeLast() }
+        return text
     }
 
     /// A comment on a whole file or folder: just its path (a folder's ends with `/`), no code.
@@ -108,32 +124,39 @@ nonisolated enum ReviewText {
         }
     }
 
-    /// A comment on lines of a diff: compact, the label alone; Markdown, the label, the commit
-    /// (full hash and message), and the selected change in a `diff` fence.
+    /// A comment on lines of a diff: compact, the label alone; Markdown, the file and the line
+    /// of its first change (after the commit; before it, for a removed line), and that line,
+    /// `+` or `-` first, in a `diff` fence.
     static func block(for selection: ReviewDiffSelection, format: ReviewFormat) -> String {
         switch format {
         case .compact:
             return "\(selection.label): "
         case .markdown:
-            let renamed = selection.oldPath.map { " (renamed from \($0))" } ?? ""
-            let diff = selection.diff.trimmingCharacters(in: .newlines)
-            return "### \(selection.label)\n\n"
-                + "Commit \(selection.commit)\(renamed): \(selection.summary)\n\n"
-                + "```diff\n\(diff)\n```\n\n"
+            let lines = selection.diff.components(separatedBy: "\n").filter { !$0.isEmpty }
+            let index = lines.firstIndex { $0.hasPrefix("+") || $0.hasPrefix("-") } ?? 0
+            guard lines.indices.contains(index) else {
+                return "### \(selection.path):\(selection.newLines?.lowerBound ?? selection.oldLines?.lowerBound ?? 1)\n\n"
+            }
+            let before = lines[..<index]
+            let line: Int
+            if lines[index].hasPrefix("-") {
+                // Its number before the commit: the lines before it there (all but added ones).
+                line = (selection.oldLines?.lowerBound ?? 1) + before.filter { !$0.hasPrefix("+") }.count
+            } else {
+                line = (selection.newLines?.lowerBound ?? 1) + before.filter { !$0.hasPrefix("-") }.count
+            }
+            return markdownBlock(location: selection.path, line: line,
+                                 preview: trimmingTrailingWhitespace(lines[index]), language: "diff")
         }
     }
 
     /// The review with a new comment added at the end: on its own line (compact) or after a
-    /// blank line (Markdown). Trailing blank lines of the draft are dropped first. The first
-    /// comment on a repository brings its heading (`ReviewRepository.heading`).
+    /// blank line (Markdown). Trailing blank lines of the draft are dropped first. There's no
+    /// heading for the repository: each comment names its file.
     static func appending(_ block: String, to draft: String, format: ReviewFormat,
                           repository: ReviewRepository? = nil) -> String {
         var trimmed = draft
         while let last = trimmed.last, last.isWhitespace { trimmed.removeLast() }
-        var block = block
-        if let repository, !trimmed.contains(ReviewRepository.headingPrefix(repository.name)) {
-            block = (format == .compact ? repository.heading + "\n" : "## " + repository.heading + "\n\n") + block
-        }
         guard !trimmed.isEmpty else { return block }
         return trimmed + (format == .compact ? "\n" : "\n\n") + block
     }
