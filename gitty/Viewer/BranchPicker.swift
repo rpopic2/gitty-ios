@@ -43,8 +43,19 @@ struct BranchPicker: View {
     var title: LocalizedStringKey? = nil
     /// Touch and hold a branch or tag: Compare with Checked Out (`nil`: not offered).
     var onCompare: (@MainActor (_ name: String, _ isTag: Bool) -> Void)? = nil
+    /// Choosing one the clone hasn't downloaded: asked right here (Pull downloads it and shows
+    /// it), instead of once the picker has gone. `nil`: `onChoose` decides.
+    var onPull: (@MainActor (_ name: String, _ isTag: Bool) -> Void)? = nil
 
     @State private var query = ""
+    /// A branch or tag that isn't downloaded, chosen: Pull it?
+    @State private var toPull: PendingPull?
+
+    private struct PendingPull: Identifiable {
+        let name: String
+        let isTag: Bool
+        var id: String { name }
+    }
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -58,6 +69,16 @@ struct BranchPicker: View {
                 }
             }
             .navigationTitle(title ?? (onChooseSide == nil ? "Branches and Tags" : "Compare"))
+            .confirmationDialog(toPull.map { String(localized: "“\($0.name)” isn’t downloaded") } ?? "",
+                                isPresented: Binding(get: { toPull != nil }, set: { if !$0 { toPull = nil } }),
+                                titleVisibility: .visible, presenting: toPull) { ref in
+                Button("Pull \(ref.name)") {
+                    dismiss()
+                    onPull?(ref.name, ref.isTag)
+                }
+            } message: { _ in
+                Text("Pull downloads its latest commit into the clone and shows its files.")
+            }
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: onChooseSide == nil ? Text("Search Branches and Tags")
@@ -126,6 +147,10 @@ struct BranchPicker: View {
     private func row(_ name: String, isTag: Bool) -> some View {
         let isDownloaded = downloaded?.contains(name) ?? true
         return Button {
+            if onChooseSide == nil, !isDownloaded, name != current, onPull != nil {
+                toPull = PendingPull(name: name, isTag: isTag)
+                return
+            }
             dismiss()
             if let onChooseSide {
                 onChooseSide(isTag ? .tag(name) : .branch(name))

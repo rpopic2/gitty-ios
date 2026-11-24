@@ -683,7 +683,12 @@ struct ProjectFilesView: View {
         return BranchPicker(refs: refs, current: current, recent: RecentRefsStore.standard.names(for: projectID),
                             downloaded: downloaded,
                             onChoose: { name, isTag in switchRef(to: name, isTag: isTag) },
-                            onCompare: onCompare)
+                            onCompare: onCompare,
+                            // Not downloaded: asked in the picker itself, then pulled.
+                            onPull: { name, isTag in
+                                RecentRefsStore.standard.add(name, for: projectID)
+                                pullRef(RefToPull(name: name, isTag: isTag))
+                            })
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
     }
