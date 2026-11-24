@@ -360,6 +360,28 @@ actor CloneStore {
         }) ?? []
     }
 
+    /// Fetch in the branch picker: the remote's branches and tags listed again, and the
+    /// downloaded ones it doesn't have any more deleted (except the one checked out). Nothing
+    /// is downloaded.
+    @discardableResult
+    func refreshRefs(projectID: String) async throws -> ProjectRefs {
+        guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        let folder = index.folder(of: record)
+        let token = await GitHubAuth.shared.token()
+        let ref = record.ref
+        let refs = try await serially(projectID) { () throws -> ProjectRefs in
+            let repository = try GitRepository(at: folder)
+            let refs = try repository.remoteRefs(token: token)
+            repository.pruneRefs(notIn: refs, keeping: ref)
+            return refs
+        }
+        if var latest = index.record(forProject: projectID) {
+            latest.remoteRefs = refs
+            index.save(latest)
+        }
+        return refs
+    }
+
     /// Pull down in the project: lists the remote's branches and tags again, deletes the
     /// downloaded ones it doesn't have any more (like `git fetch --prune`, except the one checked
     /// out), and downloads the branch or tag's latest commits (as much history as before) without

@@ -46,10 +46,15 @@ struct BranchPicker: View {
     /// Choosing one the clone hasn't downloaded: asked right here (Pull downloads it and shows
     /// it), instead of once the picker has gone. `nil`: `onChoose` decides.
     var onPull: (@MainActor (_ name: String, _ isTag: Bool) -> Void)? = nil
+    /// Fetch, top right: the remote's branches and tags listed again (the ones it doesn't have
+    /// any more go). Returns why it failed, or `nil`.
+    var onFetch: (@MainActor () async -> String?)? = nil
 
     @State private var query = ""
     /// A branch or tag that isn't downloaded, chosen: Pull it?
     @State private var toPull: PendingPull?
+    @State private var isFetching = false
+    @State private var fetchError: String?
 
     private struct PendingPull: Identifiable {
         let name: String
@@ -79,6 +84,12 @@ struct BranchPicker: View {
             } message: { _ in
                 Text("Pull downloads its latest commit into the clone and shows its files.")
             }
+            .alert("Couldn’t Fetch", isPresented: Binding(get: { fetchError != nil }, set: { if !$0 { fetchError = nil } }),
+                   presenting: fetchError) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { message in
+                Text(message)
+            }
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: onChooseSide == nil ? Text("Search Branches and Tags")
@@ -86,8 +97,21 @@ struct BranchPicker: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                // Swipe the sheet down to close it. Fetch lists GitHub's branches and tags again.
+                if let onFetch {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if isFetching {
+                            ProgressView()
+                        } else {
+                            Button("Fetch") {
+                                isFetching = true
+                                Task {
+                                    fetchError = await onFetch()
+                                    isFetching = false
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

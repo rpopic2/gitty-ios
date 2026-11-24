@@ -666,7 +666,8 @@ struct ProjectFilesView: View {
         BranchPicker(refs: refs, current: current, recent: RecentRefsStore.standard.names(for: projectID),
                      downloaded: fetchedRefs, onChoose: { _, _ in },
                      onChooseSide: { side in pendingComparison = Comparing(head: side) },
-                     offersCheckedOut: false, title: "Compare Against")
+                     offersCheckedOut: false, title: "Compare Against",
+                     onFetch: { await fetchRefs() })
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
     }
@@ -688,9 +689,27 @@ struct ProjectFilesView: View {
                             onPull: { name, isTag in
                                 RecentRefsStore.standard.add(name, for: projectID)
                                 pullRef(RefToPull(name: name, isTag: isTag))
-                            })
+                            },
+                            onFetch: { await fetchRefs() })
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+    }
+
+    /// Fetch in the branch picker: the branches and tags listed again from GitHub (a clone's
+    /// gone ones deleted), nothing downloaded. Returns why it failed, or `nil`.
+    private func fetchRefs() async -> String? {
+        do {
+            if clone != nil {
+                try await CloneStore.shared.refreshRefs(projectID: projectID)
+                clone = await CloneStore.shared.record(forProject: projectID)
+                await loadRefs()
+            } else {
+                refs = try await ProjectStore.shared.refs(for: projectID, refresh: true)
+            }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     /// The branches and tags: a cloned project's from the clone (listed from the remote when
