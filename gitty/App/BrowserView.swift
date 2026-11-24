@@ -45,7 +45,29 @@ struct BrowserView: View {
         UUID(uuidString: openAlbumIDString)
     }
 
+    // In parts: as one chain of modifiers it was too much for the compiler to type-check.
     var body: some View {
+        albumEvents(on: screen)
+            .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize), theme: syntaxTheme))
+            .sheet(isPresented: $isShowingSettings) { SettingsView() }
+            .onOpenURL(perform: openShared)
+            // Another file: its own Code level, with nothing stacked on it.
+            .onChange(of: currentURLString) { cardPath = [] }
+            // Swiping from the right edge pages cards (and scrolls results), so it doesn't open the
+            // sidebar while anything is stacked.
+            .onChange(of: cardPath.isEmpty) { sideBar.isEdgeSwipeEnabled = cardPath.isEmpty }
+            .task(id: [openProjectID, currentURLString]) {
+                let current = currentURL
+                projectStartURL = nil  // until it's known: the open file stays
+                projectStartURL = await ProjectStartFile.find(projectID: openProjectID, current: current)
+            }
+            .onChange(of: isEditingAddress) { _, isEditing in
+                if !isEditing { rejectedAddress = nil }
+            }
+    }
+
+    /// The screen in the sidebar's container, with what its views share.
+    private var screen: some View {
         SideBarContainer(state: sideBar) {
             NavigationStack(path: $cardPath) {
                 if let url = currentURL {
@@ -78,40 +100,38 @@ struct BrowserView: View {
         .environment(review)
         .environment(highlights)
         .environment(albumNaming)
-        .modifier(AlbumNamingAlert(naming: albumNaming, onCreated: { showAlbum($0.id) }))
-        // New Album that shows it (the albums page's +, swiping past the last album).
-        .onChange(of: albumNaming.albumToShow?.id) { _, id in
-            guard let id, let album = albumNaming.albumToShow else { return }
-            // Empty: Project, to add to it from (an album with something in it shows its code).
-            showAlbum(id, at: album.items.isEmpty && album.diff == nil ? .project : .code)
-            albumNaming.didShowAlbum()
-        }
-        // Make Album, in a diff's list of files: its album at the Code level.
-        .onChange(of: albumNaming.madeDiffAlbum?.id) { _, id in
-            guard let id else { return }
-            showAlbum(id)
-            albumNaming.didShowDiffAlbum()
-        }
-        // The open album was deleted (from the Project tab, or with its project).
-        .onChange(of: AlbumStore.shared.albums) {
-            if !openAlbumIDString.isEmpty, AlbumStore.shared.album(id: openAlbumID) == nil { openAlbumIDString = "" }
-        }
-        .environment(\.codeTextStyle, CodeTextStyle(font: codeFont, size: CGFloat(codeFontSize), theme: syntaxTheme))
-        .sheet(isPresented: $isShowingSettings) { SettingsView() }
-        .onOpenURL(perform: openShared)
-        // Another file: its own Code level, with nothing stacked on it.
-        .onChange(of: currentURLString) { cardPath = [] }
-        // Swiping from the right edge pages cards (and scrolls results), so it doesn't open the
-        // sidebar while anything is stacked.
-        .onChange(of: cardPath.isEmpty) { sideBar.isEdgeSwipeEnabled = cardPath.isEmpty }
-        .task(id: [openProjectID, currentURLString]) {
-            let current = currentURL
-            projectStartURL = nil  // until it's known: the open file stays
-            projectStartURL = await ProjectStartFile.find(projectID: openProjectID, current: current)
-        }
-        .onChange(of: isEditingAddress) { _, isEditing in
-            if !isEditing { rejectedAddress = nil }
-        }
+    }
+
+    /// Albums made or deleted elsewhere: the one to show, or the open one gone.
+    private func albumEvents<Content: View>(on content: Content) -> some View {
+        content
+            .modifier(AlbumNamingAlert(naming: albumNaming, onCreated: { showAlbum($0.id) }))
+            // New Album that shows it (the albums page's +, swiping past the last album).
+            .onChange(of: albumNaming.albumToShow?.id) { _, id in
+                guard let id, let album = albumNaming.albumToShow else { return }
+                showMadeAlbum(id, album)
+            }
+            // Make Album, in a diff's list of files: its album at the Code level.
+            .onChange(of: albumNaming.madeDiffAlbum?.id) { _, id in
+                guard let id else { return }
+                showAlbum(id)
+                albumNaming.didShowDiffAlbum()
+            }
+            // The open album was deleted (from the Project tab, or with its project).
+            .onChange(of: AlbumStore.shared.albums) { closeOpenAlbumIfGone() }
+    }
+
+    /// A new album: empty, Project, to add to it from (one with something in it shows its code).
+    private func showMadeAlbum(_ id: UUID, _ album: Album) {
+        let isEmpty = album.items.isEmpty && album.diff == nil
+        let level: ViewMode = isEmpty ? .project : .code
+        showAlbum(id, at: level)
+        albumNaming.didShowAlbum()
+    }
+
+    private func closeOpenAlbumIfGone() {
+        guard !openAlbumIDString.isEmpty, AlbumStore.shared.album(id: openAlbumID) == nil else { return }
+        openAlbumIDString = ""
     }
 
     private func openShared(_ link: URL) {
