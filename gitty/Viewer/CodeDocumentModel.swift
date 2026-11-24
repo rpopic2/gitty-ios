@@ -149,14 +149,34 @@ final class CodeDocumentModel {
             refreshError = error.localizedDescription
             return false
         }
-        await FileTextCache.shared.forget(under: location.record.rawPrefix)
+        await reloadAfterPull(under: location.record.rawPrefix)
+        return true
+    }
+
+    /// The project was pulled in Project: its checked-out files may have changed.
+    func clonePulled() async {
+        guard let projectID = symbolsProjectID, let record = CloneIndex.shared.record(forProject: projectID)
+        else { return }
+        await reloadAfterPull(under: record.rawPrefix)
+    }
+
+    /// The project was fetched in Project: a comparison's diff album shows its branches as
+    /// they are now.
+    func cloneFetched() {
+        if activeAlbum?.diff != nil { reloadDiffAlbum() }
+    }
+
+    /// After a pull: the new text of the open file, the project's files indexed again (the
+    /// album shown follows them), and a diff album worked out again.
+    private func reloadAfterPull(under rawPrefix: String) async {
+        await FileTextCache.shared.forget(under: rawPrefix)
         albumTexts.removeAll()
         otherTexts.removeAll()
         textOrder.removeAll()
-        if let document = await store.cached(url) { await show(document) }
+        if url.absoluteString.hasPrefix(rawPrefix), let document = await store.cached(url) { await show(document) }
         loadedFilter = nil  // index the project's files again
         loadProjectSymbols()
-        return true
+        if activeAlbum?.diff != nil { reloadDiffAlbum() }
     }
 
     /// The code font changed: style the text again (the same text, so the symbols stay). Other

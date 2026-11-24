@@ -530,6 +530,7 @@ struct ProjectFilesView: View {
                     await loadRefs()
                     throw error
                 }
+                CloneChanges.shared.didFetch(projectID)  // a comparison's album follows its branches
                 clone = await CloneStore.shared.record(forProject: projectID)
                 await loadRefs()
             }
@@ -554,6 +555,7 @@ struct ProjectFilesView: View {
         guard case .loaded(let project, _) = state, let ref = clone?.ref else { return }
         startDownload(String(localized: "Pulling…"), estimate: estimate) { progress in
             try await CloneStore.shared.pull(projectID: projectID, progress: progress)
+            CloneChanges.shared.didPull(projectID)  // the Code level shows the new files
             clone = await CloneStore.shared.record(forProject: projectID)
             if let tree = try? await CloneStore.shared.tree(projectID: projectID) {
                 let (moved, tree) = try await ProjectStore.shared.setRef(ref.name, for: project.id, tree: tree)

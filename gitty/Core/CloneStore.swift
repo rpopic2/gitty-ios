@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Observation
 
 /// A project cloned with Git (Clone, in the Project tab): which branch or tag, how much history,
 /// and where its files are on this device.
@@ -618,5 +619,24 @@ actor CloneStore {
         } onCancel: {
             task.cancel()
         }
+    }
+}
+
+/// Pulls and fetches made in Project, for the Code level showing the project to follow: a pull
+/// changes the checked-out files, and a fetch moves the branches a comparison's diff album
+/// follows. Counted per project.
+@MainActor @Observable
+final class CloneChanges {
+    static let shared = CloneChanges()
+
+    private(set) var pulls: [String: Int] = [:]
+    private(set) var fetches: [String: Int] = [:]
+
+    func didPull(_ projectID: String) {
+        pulls[projectID, default: 0] += 1
+    }
+
+    func didFetch(_ projectID: String) {
+        fetches[projectID, default: 0] += 1
     }
 }

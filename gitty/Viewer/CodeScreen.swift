@@ -171,6 +171,7 @@ struct CodeScreen: View {
         }
         // Swiped to another album: its code slides in.
         .onChange(of: model.activeAlbum?.id) { albumSlide.albumChanged() }
+        .modifier(FollowsCloneChanges(model: model))
         .onChange(of: AlbumStore.shared.downloadCount) { model.refreshAlbumFiles() }
         .onChange(of: mode, initial: true) {
             if mode == .project { hasShownProject = true }
@@ -244,6 +245,19 @@ struct CodeScreen: View {
             Button("OK", role: .cancel) {}
         } message: { message in
             Text(message)
+        }
+    }
+
+    /// Pulled or fetched in Project: the open file, the project's files and the album shown
+    /// (a diff album too) as the clone has them now.
+    private struct FollowsCloneChanges: ViewModifier {
+        let model: CodeDocumentModel
+
+        func body(content: Content) -> some View {
+            let projectID = model.symbolsProjectID ?? ""
+            content
+                .onChange(of: CloneChanges.shared.pulls[projectID]) { Task { await model.clonePulled() } }
+                .onChange(of: CloneChanges.shared.fetches[projectID]) { model.cloneFetched() }
         }
     }
 
