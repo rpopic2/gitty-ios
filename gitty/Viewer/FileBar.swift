@@ -1028,10 +1028,17 @@ final class AlbumSlideState {
     func albumChanged() {
         guard let fromRight = comesFromRight else { return }
         comesFromRight = nil
-        var instant = Transaction()
-        instant.disablesAnimations = true
-        withTransaction(instant) { offset = fromRight ? width : -width }
-        withAnimation(.smooth(duration: 0.28)) { offset = 0 }
+        // Not here, in the change of album itself: moving the code in the same update made
+        // SwiftUI lay the new album's list out there and then, and again in the next update
+        // (half a second, a hang). A moment later, the list is laid out once, still off to the
+        // side, and only moves in.
+        Task { @MainActor in
+            await Task.yield()
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) { offset = fromRight ? width : -width }
+            withAnimation(.smooth(duration: 0.28)) { offset = 0 }
+        }
     }
 }
 
