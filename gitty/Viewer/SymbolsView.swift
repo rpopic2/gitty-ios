@@ -1565,8 +1565,8 @@ struct CodeTextActions {
     var onCommentOnDiff: (@MainActor (CodeSymbol) -> Void)? = nil
 }
 
-/// The long-press menu of a symbol's title and code: a small preview, then Open (its page) and
-/// Show History; then the items selecting text on its page has (Comment, Definition,
+/// The long-press menu of a symbol's title and code: a small preview (tap it to open the
+/// card), then Show History; then the items selecting text on its page has (Comment, Definition,
 /// Occurrences, Copy, Share), for what was held: a title's text (its declaration, or a file's
 /// name), or for the code, the title and its code together (all a block shows); then Add to
 /// Album. UIKit's menu, made only when it opens (the table asks for it): as SwiftUI's on every
@@ -1591,7 +1591,8 @@ private struct CodeMenu {
 
     func menu(naming: AlbumNaming?) -> UIMenu {
         let file = symbol.fileURL ?? openFile
-        var first: [UIMenuElement] = [action("Open", "arrow.up.left.and.arrow.down.right") { onOpen(symbol) }]
+        // No Open: tapping the preview opens the card.
+        var first: [UIMenuElement] = []
         if albumContext != nil, let onShowHistory {
             first.append(action("Show History", "clock.arrow.circlepath") {
                 onShowHistory(file, symbol.kind == .file ? nil : symbol)
