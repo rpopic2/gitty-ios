@@ -448,7 +448,8 @@ struct StackDepthLabel: View {
             if let actions {
                 if let context = actions.albumContext {
                     Menu {
-                        AlbumMenuItems(items: actions.albumItems(), context: context)
+                        // The albums right away, not under Add to Album.
+                        AlbumMenuItems(items: actions.albumItems(), context: context, isInline: true)
                     } label: {
                         count
                     } primaryAction: {
@@ -510,7 +511,7 @@ struct StackSheet<List: View>: View {
                     }
                 }
         }
-        // New Album… asks for the name over this sheet, not the app: its alert can't show while
+        // Rename asks for the name over this sheet, not the app: its alert can't show while
         // the sheet is up, and trying closed the sheet.
         .modifier(OptionalAlbumNamingAlert(naming: naming))
         .onAppear { naming?.host = Self.namingHost }

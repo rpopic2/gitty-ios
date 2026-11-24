@@ -279,11 +279,11 @@ final class AlbumStore {
         ReadingPositionStore.standard.removeSymbolsPosition(forAlbum: id)
     }
 
-    /// Swiping past the last album: an empty one, "New Album" (numbered when that's taken),
-    /// without asking for a name (rename it in Project).
+    /// New Album, anywhere (swiping past the last album, a menu's New Album): "New Album"
+    /// (numbered when that's taken), without asking for a name (rename it on the albums page).
     @discardableResult
-    func createUntitled(projectID: String) -> Album {
-        create(named: untitledName(projectID: projectID), projectID: projectID)
+    func createUntitled(projectID: String, items: [AlbumItem] = []) -> Album {
+        create(named: untitledName(projectID: projectID), projectID: projectID, items: items)
     }
 
     /// What `createUntitled` would call it.

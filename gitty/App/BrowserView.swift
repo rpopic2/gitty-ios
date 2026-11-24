@@ -79,6 +79,12 @@ struct BrowserView: View {
         .environment(highlights)
         .environment(albumNaming)
         .modifier(AlbumNamingAlert(naming: albumNaming, onCreated: { showAlbum($0.id) }))
+        // New Album from a menu that shows it (the albums page's +).
+        .onChange(of: albumNaming.albumToShow?.id) { _, id in
+            guard let id else { return }
+            showAlbum(id)
+            albumNaming.didShowAlbum()
+        }
         // Make Album, in a diff's list of files: its album at the Code level.
         .onChange(of: albumNaming.madeDiffAlbum?.id) { _, id in
             guard let id else { return }

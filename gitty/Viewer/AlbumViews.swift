@@ -35,13 +35,20 @@ final class AlbumNaming {
         madeDiffAlbum = nil
     }
 
+    /// New Album: made at once, "New Album" (numbered when that's taken), with `items` in it,
+    /// without asking for a name (rename it on the albums page). `opensAlbum`: shown at the
+    /// Code level then (`albumToShow`).
     func begin(projectID: String, items: [AlbumItem] = [], opensAlbum: Bool = false) {
-        renamingID = nil
-        self.projectID = projectID
-        self.items = items
-        self.opensAlbum = opensAlbum
-        name = ""
-        isPresented = true
+        guard !projectID.isEmpty else { return }
+        let album = AlbumStore.shared.createUntitled(projectID: projectID, items: items)
+        if opensAlbum { albumToShow = album }
+    }
+
+    /// A new album to show at the Code level (the app shows it, then sets this back to `nil`).
+    private(set) var albumToShow: Album?
+
+    func didShowAlbum() {
+        albumToShow = nil
     }
 
     func beginRenaming(_ album: Album) {
@@ -138,7 +145,7 @@ struct AlbumMenuItems: View {
 
     @ViewBuilder
     private var albumChoices: some View {
-        Button("New Album…", systemImage: "plus") {
+        Button("New Album", systemImage: "plus") {
             startDownload()
             naming?.begin(projectID: context.projectID, items: items)
             onDone?()
@@ -197,7 +204,7 @@ enum AlbumTextMenu {
     @MainActor
     static func menu(for item: AlbumItem, projectID: String, store: AlbumStore = .shared,
                      naming: AlbumNaming?) -> UIMenu {
-        let new = UIAction(title: String(localized: "New Album…"), image: UIImage(systemName: "plus")) { _ in
+        let new = UIAction(title: String(localized: "New Album"), image: UIImage(systemName: "plus")) { _ in
             naming?.begin(projectID: projectID, items: [item])
         }
         let albums = store.albums(inProject: projectID).map { album in
