@@ -41,6 +41,12 @@
       "version": {
         "version": "1.9.2",
       },
+    }, {
+      "kind": "remote",
+      "repository": "https://github.com/coder3101/tree-sitter-proto",
+      "version": {
+        "version": "0.6.1",
+      },
     },
   ],
   "files": [
@@ -120,6 +126,10 @@
         }, {
           "package": "tree-sitter-c-sharp",
           "product-name": "TreeSitterCSharp",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "package": "tree-sitter-proto",
+          "product-name": "TreeSitterProto",
           "build-phase": { "build-phase": "frameworks" },
         }, {
           "package": "tree-sitter-swift",
