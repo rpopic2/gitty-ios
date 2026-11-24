@@ -74,13 +74,13 @@ struct BrowserView: View {
                     CodeScreen(url: url, mode: modeBinding, projectID: openProjectID,
                                opensAtFile: url == openedURL, albumID: openAlbumID, cardPath: $cardPath,
                                isEditingAddress: $isEditingAddress, rejectedAddress: rejectedAddress,
-                               onOpen: open, onPasteAndGo: pasteAndGo, onOpenAlbum: showAlbum,
+                               onOpen: open, onPasteAndGo: pasteAndGo, onOpenAlbum: { showAlbum($0) },
                                onShowProject: showWholeProject)
                         .id(url)  // a new URL gets a fresh screen and model
                 } else {
                     StartScreen(projectID: openProjectID, isEditingAddress: $isEditingAddress,
                                 rejectedAddress: rejectedAddress, onOpen: open, onPasteAndGo: pasteAndGo,
-                                onOpenAlbum: showAlbum, onShowProject: showWholeProject)
+                                onOpenAlbum: { showAlbum($0) }, onShowProject: showWholeProject)
                 }
             }
             // Like Mail's compose window: swiping it down sets the review aside, docked above the bar.
