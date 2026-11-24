@@ -511,7 +511,10 @@ struct SymbolsView: View, Equatable {
         case (.symbol(let symbol, _)?, _):
             let menu = contextMenu(for: symbol, part: part == .title ? .title : .code)
             let style = codeTextStyle
-            return CodeTableMenu(menu: menu.menu(naming: albumNaming)) { menu.preview(style: style) }
+            // Tapping the preview opens the card, as Open does.
+            return CodeTableMenu(menu: menu.menu(naming: albumNaming),
+                                 preview: { menu.preview(style: style) },
+                                 onPreviewTap: { menu.onOpen(symbol) })
         default:
             return nil
         }

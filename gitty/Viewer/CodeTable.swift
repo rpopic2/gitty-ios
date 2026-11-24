@@ -31,6 +31,8 @@ enum CodeTableMenuPart {
 struct CodeTableMenu {
     let menu: UIMenu
     let preview: (@MainActor () -> UIViewController)?
+    /// A tap on the preview (a symbol's: its card opens, as Open does). `nil`: it just closes.
+    var onPreviewTap: (@MainActor () -> Void)? = nil
 }
 
 /// Where the list is, for the bar collapsing as it scrolls (see `BarCollapseTracker`).
@@ -258,9 +260,33 @@ struct CodeTable: UIViewRepresentable {
         private func configuration(_ made: CodeTableMenu) -> UIContextMenuConfiguration {
             let preview = made.preview
             let menu = made.menu
+            previewTap = made.onPreviewTap
             return UIContextMenuConfiguration(identifier: nil,
                                               previewProvider: preview.map { make in { MainActor.assumeIsolated { make() } } },
                                               actionProvider: { _ in menu })
+        }
+
+        /// The open menu's preview tap.
+        private var previewTap: (@MainActor () -> Void)?
+
+        /// The preview tapped (a row's): the menu closes, then what it opens.
+        func tableView(_ tableView: UITableView,
+                       willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration,
+                       animator: any UIContextMenuInteractionCommitAnimating) {
+            commitPreview(animator)
+        }
+
+        /// The preview tapped (a title's).
+        func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                    willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration,
+                                    animator: any UIContextMenuInteractionCommitAnimating) {
+            commitPreview(animator)
+        }
+
+        private func commitPreview(_ animator: any UIContextMenuInteractionCommitAnimating) {
+            guard let tap = previewTap else { return }
+            animator.preferredCommitStyle = .dismiss
+            animator.addCompletion { tap() }
         }
 
         func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
