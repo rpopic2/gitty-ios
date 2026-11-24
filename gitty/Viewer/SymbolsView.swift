@@ -354,16 +354,18 @@ struct SymbolsView: View, Equatable {
             case nil: 0
             }
         }
-        let estimatedHeader: @MainActor (Int) -> CGFloat = { id in
+        let symbolTitle = SymbolTitleHeight.symbol(lineHeight: lineHeight)
+        let fileTitle = SymbolTitleHeight.fileForCurrentTextSize
+        let headerHeight: @MainActor (Int) -> CGFloat = { id in
             guard case .symbol(let symbol, _)? = byID[id] else { return 0 }
-            return symbol.kind == .file ? SymbolTitleHeight.file : SymbolTitleHeight.symbol
+            return symbol.kind == .file ? fileTitle : symbolTitle
         }
         let menu: @MainActor (Int, CodeTableMenuPart) -> CodeTableMenu? = { id, part in
             view.tableMenu(byID[id], part: part)
         }
         return CodeTable(
             sections: sections, header: header, row: row, isRowEmpty: isRowEmpty, menu: menu,
-            estimatedRowHeight: estimatedRow, estimatedHeaderHeight: estimatedHeader,
+            estimatedRowHeight: estimatedRow, headerHeight: headerHeight,
             initialID: start, scrollRequest: tableScroll,
             // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe
             // that closes the search mustn't scroll; scrolling comes back for the next swipe.

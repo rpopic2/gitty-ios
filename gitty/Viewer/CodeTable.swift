@@ -64,7 +64,9 @@ struct CodeTable: UIViewRepresentable {
     let menu: @MainActor (Int, CodeTableMenuPart) -> CodeTableMenu?
     /// About how tall a row and a title will be, before they're made.
     let estimatedRowHeight: @MainActor (Int) -> CGFloat
-    let estimatedHeaderHeight: @MainActor (Int) -> CGFloat
+    /// A title's height, given rather than measured: titles are one line, and the table asking
+    /// each title's SwiftUI view for its size was most of a new list's time (hang reports).
+    let headerHeight: @MainActor (Int) -> CGFloat
     /// Where the list starts, asked once (`nil`: the top).
     let initialID: @MainActor () -> Int?
     let scrollRequest: CodeTableScrollRequest?
@@ -290,12 +292,13 @@ struct CodeTable: UIViewRepresentable {
         }
 
         func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-            sections.indices.contains(section) && sections[section].hasHeader ? UITableView.automaticDimension : 0
+            guard sections.indices.contains(section), sections[section].hasHeader else { return 0 }
+            return parent.headerHeight(sections[section].id)
         }
 
         func tableView(_ tableView: UITableView, estimatedHeightForHeaderInSection section: Int) -> CGFloat {
             guard sections.indices.contains(section), sections[section].hasHeader else { return 0 }
-            return parent.estimatedHeaderHeight(sections[section].id)
+            return parent.headerHeight(sections[section].id)
         }
 
         func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
@@ -431,10 +434,23 @@ struct CodeTable: UIViewRepresentable {
     }
 }
 
-/// Titles' heights before they're made, for the table's estimates.
+/// Titles' heights: one line each.
 enum SymbolTitleHeight {
     static let symbol: CGFloat = 28
     static let file: CGFloat = 44
+
+    /// A symbol's title: its declaration in the code font, a little padding above and below, at
+    /// least `symbol`.
+    @MainActor
+    static func symbol(lineHeight: CGFloat) -> CGFloat {
+        max(symbol, (lineHeight + 8).rounded(.up))
+    }
+
+    /// A file's title: its name in the headline font (bigger with Dynamic Type), at least `file`.
+    @MainActor
+    static var fileForCurrentTextSize: CGFloat {
+        max(file, (UIFont.preferredFont(forTextStyle: .headline).lineHeight + 12).rounded(.up))
+    }
 }
 
 /// A title's view in the table, knowing its section (for its menu).
