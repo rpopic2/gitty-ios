@@ -219,9 +219,6 @@ struct CodeTable: UIViewRepresentable {
             let cell = tableView.dequeueReusableCell(withIdentifier: Self.cellID, for: indexPath)
             cell.backgroundConfiguration = .clear()
             cell.selectionStyle = .none
-            // The code shows as its row grows and hides as it shrinks, not over the titles below
-            // as they slide (SwiftUI's list moved them as one).
-            cell.clipsToBounds = true
             configure(cell, id: sections[indexPath.section].id)
             return cell
         }
