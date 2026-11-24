@@ -99,6 +99,12 @@ struct SymbolsView: View, Equatable {
     @Environment(\.colorScheme) private var colorScheme
     /// The font and syntax colors: a new theme colors the blocks again.
     @Environment(\.codeTextStyle) private var codeTextStyle
+    /// Handed to the table's titles and rows: its cells don't get the environment around it.
+    @Environment(\.codeMark) private var codeMark
+    @Environment(HighlightState.self) private var highlights: HighlightState?
+    @Environment(AlbumNaming.self) private var albumNaming: AlbumNaming?
+    /// Scrolls the table: the pager closing on another symbol.
+    @State private var tableScroll: CodeTableScrollRequest?
 
     // An explicit init (not the memberwise one) so passing in an existing `@MainActor` closure
     // doesn't warn about converting it to `@Sendable`.
@@ -176,71 +182,50 @@ struct SymbolsView: View, Equatable {
     }
 
     var body: some View {
-        ScrollViewReader { reader in
-            scrollContainer { fullCode }
-                .overlay(alignment: .leading) {
-                    BlameStrip(peek: peek, blames: blames, onTap: openBlameCommit(at:),
-                               onClone: cloneForBlame)
-                }
-                .modifier(PinchScale(zoom: pinchZoom))
-                .onAppear { moveToStart(reader) }
-                .simultaneousGesture(pinch(reader), including: isActive ? .all : .subviews)
-                .onChange(of: scrollRequest) { _, request in
-                    guard let request else { return }
-                    reader.scrollTo(request.id, anchor: .top)
-                }
-                .onChange(of: collapseRequest) { _, request in
-                    guard let request else { return }
-                    setAllCollapsed(request.collapses, reader)
-                }
+        container { fullCode }
+            .overlay(alignment: .leading) {
+                BlameStrip(peek: peek, blames: blames, onTap: openBlameCommit(at:),
+                           onClone: cloneForBlame)
+            }
+            .modifier(PinchScale(zoom: pinchZoom))
+            .simultaneousGesture(pinch, including: isActive ? .all : .subviews)
+            .onChange(of: scrollRequest) { _, request in
+                guard let request else { return }
+                tableScroll = CodeTableScrollRequest(request.id)
+            }
+            .onChange(of: collapseRequest) { _, request in
+                guard let request else { return }
+                setAllCollapsed(request.collapses)
+            }
+    }
+
+    /// Where the table starts: the first time, the saved place (search results start at the
+    /// top, with the best match); a fresh table after that (Collapse All, folding every file),
+    /// where the list was.
+    private var start: @MainActor () -> Int? {
+        let scroll = scroll
+        let query = query
+        let initialID = initialID
+        return {
+            if scroll.isPositioned { return scroll.centeredID }
+            return query.isEmpty ? initialID() ?? scroll.centeredID : nil
         }
     }
 
-    /// `scrollPosition(id:)` ignores a starting value during the first layout and opens on the
-    /// first item, so move to the start explicitly: the saved place. Search results start at the
-    /// top, with the best match.
-    private func moveToStart(_ reader: ScrollViewProxy) {
-        let target = query.isEmpty ? initialID() ?? scroll.centeredID : nil
-        if let target { reader.scrollTo(target, anchor: .top) }
-        scroll.centeredID = target
-        scroll.isPositioned = true
-    }
-
-    /// The symbol at the top, kept in the unobserved `scroll`, so a new one reaching the top
-    /// redraws nothing, and reported to `onCenteredSymbolChange` once the list has moved to
-    /// where it starts (its first layout, on the first symbol, isn't).
-    private var centeredID: Binding<Int?> {
-        let report = onCenteredSymbolChange
-        let blocks = codeBlocks
-        // The symbol, found from its id with the list's own map (not by looking through it).
-        scroll.report = { id in if let symbol = blocks.symbol(withID: id) { report(symbol) } }
-        return scroll.centeredBinding
-    }
-
-    /// Collapse All or Expand All, keeping the symbol at the top where it is.
-    private func setAllCollapsed(_ isCollapsed: Bool, _ reader: ScrollViewProxy) {
-        let anchor = scroll.centeredID
+    /// Collapse All or Expand All, keeping the symbol at the top where it is (a fresh table
+    /// starts at it).
+    private func setAllCollapsed(_ isCollapsed: Bool) {
         collapsed.setAllCollapsed(isCollapsed, scope: collapseScope)
-        keep(anchor, reader)
     }
 
     /// Folds (or unfolds) every file to its title, keeping the file at the top where it is.
-    private func setAllFilesFolded(_ isFolded: Bool, _ reader: ScrollViewProxy) {
-        // The top symbol's file: its symbols go away.
-        let anchor = scroll.centeredID.flatMap { id -> Int? in
-            guard let index = symbols.firstIndex(where: { $0.id == id }) else { return id }
-            return symbols[...index].last { $0.kind == .file }?.id ?? id
+    private func setAllFilesFolded(_ isFolded: Bool) {
+        // The top symbol's file: its symbols go away, and the fresh table starts at it.
+        if let id = scroll.centeredID, let index = symbols.firstIndex(where: { $0.id == id }),
+           let file = symbols[...index].last(where: { $0.kind == .file }) {
+            scroll.centeredID = file.id
         }
         collapsed.setAllFilesFolded(isFolded, scope: collapseScope)
-        keep(anchor, reader)
-    }
-
-    private func keep(_ anchor: Int?, _ reader: ScrollViewProxy) {
-        guard let anchor else { return }
-        Task { @MainActor in
-            await Task.yield()  // once the list has its new heights
-            reader.scrollTo(anchor, anchor: .top)
-        }
     }
 
     // MARK: Layout
@@ -272,37 +257,41 @@ struct SymbolsView: View, Equatable {
             : nil
         return Group {
             if collapsed.areAllFilesFolded(scope: scope) {
-                groupedByFolder
+                table(groupedRows)
             } else {
-                // A fresh list when Collapse All turns on or off (`keep` brings the top symbol
-                // back): in the same one, every section changing at once made it match each
-                // row's old place against its new one, over a second on a big list.
-                outline
+                // A fresh table when Collapse All turns on or off: it starts at the symbol that
+                // was at the top (`start`).
+                table(outlineRows)
                     .id(collapsed.areAllCollapsed(scope: scope))
             }
         }
-        .scrollTargetLayout()
         .modifier(PeekShift(peek: peek))  // the whole list slides while peeking
     }
 
-    /// Each symbol under its title, which sticks while you read its code.
-    private var outline: some View {
-        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-            ForEach(symbols) { symbol in
-                Section {
-                    code(for: symbol)
-                } header: {
-                    // Tap to collapse: a symbol's code, or a whole file's symbols.
-                    header(for: symbol)
-                }
-            }
+    /// What a section of the table is: a symbol (its title, then its code), or in the grouped
+    /// view a folder's header.
+    private enum TableRow {
+        case symbol(CodeSymbol, indent: Int)
+        case folder(FolderRows.Header)
+    }
+
+    /// Each symbol under its title, which sticks while you read its code. A folded file's
+    /// symbols aren't in the table at all (thousands of empty rows made scrolling lag).
+    private var outlineRows: [(id: Int, row: TableRow)] {
+        let collapsed = collapsed
+        let openFile = openFile
+        let scope = collapseScope
+        var rows: [(id: Int, row: TableRow)] = []
+        for symbol in symbols where !collapsed.isHidden(symbol, openFile: openFile, scope: scope) {
+            rows.append((id: symbol.id, row: TableRow.symbol(symbol, indent: 0)))
         }
+        return rows
     }
 
     /// Every file folded: the files grouped by folder, each folder's header (tap it to fold the
-    /// folder) a plain row above its files. The titles stick, as in the outline: a file's, and
-    /// a symbol's under a file unfolded here.
-    private var groupedByFolder: some View {
+    /// folder) a row above its files. The titles stick, as in the outline: a file's, and a
+    /// symbol's under a file unfolded here.
+    private var groupedRows: [(id: Int, row: TableRow)] {
         let collapsed = collapsed
         let scope = collapseScope
         let openFile = openFile
@@ -311,33 +300,129 @@ struct SymbolsView: View, Equatable {
         let layout = FolderRows(groups: groups, tree: tree,
                                 isGroupOpen: { collapsed.isGroupOpen($0, scope: scope) },
                                 isFolded: { collapsed.isFolderFolded($0.path, scope: scope) },
-                                // A folded file's symbols aren't items at all: thousands of empty
-                                // ones made scrolling here lag.
                                 isShown: { !collapsed.isHidden($0, openFile: openFile, scope: scope) })
-        // Each header is an item of its own, like each symbol: made only as it scrolls in. (As
-        // part of the symbol before it, every header after the last unfolded file was made at
-        // once, thousands in a project as big as Linux: unfolding a folder took seconds.)
-        // Every item is a section of exactly one view and one header, whatever it is (a folder's
-        // header is the section's content, under an empty header), so the lazy list counts the
-        // items from their types alone. With a header item that wasn't a section, it ran this
-        // closure for every item in each layout pass: unfolding something hung for seconds.
-        return LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-            ForEach(layout.items) { item in
-                Section {
-                    switch item.content {
-                    case .header(let folder): folderRowHeader(folder)
-                    case .symbol(let symbol, _): code(for: symbol)
-                    }
-                } header: {
-                    switch item.content {
-                    // One view all the same (an empty one would make the count vary), with no height.
-                    case .header: Color.clear.frame(height: 0)
-                    // In line with its folder's header (inside a group); the code stays edge to edge.
-                    case .symbol(let symbol, let indent): header(for: symbol, indent: indent)
-                    }
-                }
+        var rows: [(id: Int, row: TableRow)] = []
+        for item in layout.items {
+            switch item.content {
+            case .header(let header): rows.append((id: item.id, row: TableRow.folder(header)))
+            case .symbol(let symbol, let indent): rows.append((id: item.id, row: TableRow.symbol(symbol, indent: indent)))
             }
         }
+        return rows
+    }
+
+    /// The rows as the table's sections, each title and row made as it comes on screen.
+    private func table(_ rows: [(id: Int, row: TableRow)]) -> some View {
+        var byID: [Int: TableRow] = [:]
+        var sections: [CodeTableSection] = []
+        byID.reserveCapacity(rows.count)
+        sections.reserveCapacity(rows.count)
+        for entry in rows {
+            if byID[entry.id] == nil { byID[entry.id] = entry.row }
+            switch entry.row {
+            case .folder:
+                sections.append(CodeTableSection(id: entry.id, hasHeader: false, hasRow: true))
+            case .symbol(let symbol, _):
+                sections.append(CodeTableSection(id: entry.id, hasHeader: true, hasRow: hasCode(symbol)))
+            }
+        }
+        let view = self
+        let scroll = scroll
+        let report = onCenteredSymbolChange
+        let blocks = codeBlocks
+        let lineHeight = codeTextStyle.lineHeight
+        let header: @MainActor (Int) -> AnyView = { id in
+            guard case .symbol(let symbol, let indent)? = byID[id] else { return AnyView(EmptyView()) }
+            return view.inEnvironment(view.header(for: symbol, indent: indent), id: id)
+        }
+        let row: @MainActor (Int) -> AnyView = { id in
+            switch byID[id] {
+            case .symbol(let symbol, _)?: view.inEnvironment(view.code(for: symbol), id: id)
+            case .folder(let folder)?: view.inEnvironment(view.folderRowHeader(folder), id: id)
+            case nil: AnyView(EmptyView())
+            }
+        }
+        let isRowEmpty: @MainActor (Int) -> Bool = { id in
+            guard case .symbol(let symbol, _)? = byID[id] else { return false }
+            return !view.isCodeShown(symbol)
+        }
+        let estimatedRow: @MainActor (Int) -> CGFloat = { id in
+            switch byID[id] {
+            case .folder?: 50
+            case .symbol(let symbol, _)?:
+                CGFloat(blocks.estimatedLineCount(of: symbol)) * lineHeight + 16
+            case nil: 0
+            }
+        }
+        let estimatedHeader: @MainActor (Int) -> CGFloat = { id in
+            guard case .symbol(let symbol, _)? = byID[id] else { return 0 }
+            return symbol.kind == .file ? SymbolTitleHeight.file : SymbolTitleHeight.symbol
+        }
+        return CodeTable(
+            sections: sections, header: header, row: row, isRowEmpty: isRowEmpty,
+            estimatedRowHeight: estimatedRow, estimatedHeaderHeight: estimatedHeader,
+            initialID: start, scrollRequest: tableScroll,
+            // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe
+            // that closes the search mustn't scroll; scrolling comes back for the next swipe.
+            isScrollEnabled: isActive && !closesSearchOnSwipe,
+            scrollsToTop: isActive,
+            bottomInset: FileBarMetrics.expandedHeight,
+            onTopSectionChange: { id in
+                guard id != scroll.centeredID else { return }
+                scroll.centeredID = id
+                if scroll.isPositioned, let symbol = blocks.symbol(withID: id) { report(symbol) }
+            },
+            onPositioned: { scroll.isPositioned = true },
+            onScroll: { position in view.scrolled(position) },
+            onBeginDragging: { scroll.tracker.beginDrag(at: $0) },
+            onScrollingChange: onScrollingChange,
+            observeHeights: { [collapsed] in
+                _ = collapsed.flipped
+                _ = collapsed.collapsedScopes
+                _ = collapsed.files
+            }
+        )
+    }
+
+    /// A row under the title: a symbol's code, or a file's whole text (one without symbols).
+    private func hasCode(_ symbol: CodeSymbol) -> Bool {
+        symbol.kind != .file || isWholeFile(symbol)
+    }
+
+    private func isWholeFile(_ symbol: CodeSymbol) -> Bool {
+        showsWholeFiles && symbol.kind == .file && symbol.diff == nil && symbol.isDownloaded && symbol.isIndexed
+            && fileCounts.count(of: symbol, in: symbols) == 0
+    }
+
+    /// Whether a symbol's code (or a whole file's text) shows now: not collapsed or folded.
+    private func isCodeShown(_ symbol: CodeSymbol) -> Bool {
+        if symbol.kind == .file {
+            return isWholeFile(symbol) && !collapsed.isFileCollapsed(symbol.fileURL ?? openFile, scope: collapseScope)
+        }
+        return !collapsed.isCollapsed(symbol, openFile: openFile, scope: collapseScope)
+    }
+
+    /// A title or row for a table cell: with this list's environment (the cells don't get the
+    /// one around the table), and its own identity, so a cell used again for another section
+    /// starts that one afresh (its appearing, its state).
+    private func inEnvironment(_ content: some View, id: Int) -> AnyView {
+        AnyView(content
+            .environment(\.codeTextStyle, codeTextStyle)
+            .environment(\.codeMark, codeMark)
+            .environment(highlights)
+            .environment(albumNaming)
+            .id(id))
+    }
+
+    /// The list moved: the bar collapses or expands with it, like Safari's.
+    private func scrolled(_ position: CodeTableScroll) {
+        scroll.tracker.isCollapsed = isBarCollapsed()
+        let change = scroll.tracker.scrolled(
+            to: position.offset, top: position.top, bottom: position.bottom,
+            isUserScrolling: position.isUserScrolling, isCoasting: position.isCoasting,
+            contentHeight: position.contentHeight
+        )
+        if isActive, let change { onBarCollapsedChange(change) }
     }
 
     @ViewBuilder
@@ -511,7 +596,7 @@ struct SymbolsView: View, Equatable {
     /// Fingers lifting under this fold a level.
     private static let pinchThreshold: CGFloat = 0.8
 
-    private func pinch(_ reader: ScrollViewProxy) -> some Gesture {
+    private var pinch: some Gesture {
         MagnifyGesture()
             .onChanged { value in
                 // Spreading doesn't unfold (that could unfold a huge project at once): the list
@@ -533,9 +618,9 @@ struct SymbolsView: View, Equatable {
                 if value.magnification < Self.pinchThreshold {
                     let scope = collapseScope
                     if !collapsed.areAllCollapsed(scope: scope) {
-                        setAllCollapsed(true, reader)
+                        setAllCollapsed(true)
                     } else if !collapsed.areAllFilesFolded(scope: scope) {
-                        setAllFilesFolded(true, reader)
+                        setAllFilesFolded(true)
                     } else if !collapsed.areAllFoldersFolded(scope: scope) {
                         withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(true, scope: scope) }
                     }
@@ -550,57 +635,28 @@ struct SymbolsView: View, Equatable {
         isActive && onCloseSearch != nil
     }
 
-    /// The scroll view: its place, the bar collapsing as you scroll, the swipe that closes the
-    /// search, and the peek.
-    private func scrollContainer<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        ScrollView {
-            content()
-        }
-        .modifier(PositionTracking(position: centeredID))
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        // Hidden: stays put, and leaves status-bar taps to File. While searching, the swipe that
-        // closes the search mustn't scroll; scrolling comes back for the next swipe.
-        .scrollDisabled(!isActive || closesSearchOnSwipe)
-        .gesture(
-            DragGesture(minimumDistance: 10).onChanged { _ in
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                to: nil, from: nil, for: nil)
-                onCloseSearch?()
-            },
-            including: closesSearchOnSwipe ? .all : .subviews
-        )
-        .simultaneousGesture(peekGesture, including: isActive ? .all : .subviews)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-            if width != codeWidth { codeWidth = width }
-        }
-        .contentMargins(.bottom, FileBarMetrics.expandedHeight, for: .scrollContent)
-        // The strip a peek uncovers is the code's background.
-        .background(Color(uiColor: RawTextStyle.backgroundColor))
-        .onScrollPhaseChange { _, phase, context in
-            scroll.isUserScrolling = phase == .interacting || phase == .decelerating
-            scroll.isCoasting = phase == .decelerating
-            onScrollingChange?(phase != .idle)
-            if phase == .interacting {
-                scroll.tracker.beginDrag(at: context.geometry.contentOffset.y)
-            }
-        }
-        // Gone mid-scroll, it never says it stopped: new lists would wait for good.
-        .onDisappear { onScrollingChange?(false) }
-        .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in
-            scroll.tracker.isCollapsed = isBarCollapsed()
-            let change = scroll.tracker.scrolled(
-                to: geometry.contentOffset.y,
-                top: -geometry.contentInsets.top,
-                bottom: geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom,
-                isUserScrolling: scroll.isUserScrolling,
-                isCoasting: scroll.isCoasting,
-                contentHeight: geometry.contentSize.height
+    /// Around the table: the swipe that closes the search, the peek, the list's width (which
+    /// the code wraps in), and the code's background where a peek uncovers it.
+    private func container<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .gesture(
+                DragGesture(minimumDistance: 10).onChanged { _ in
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                    to: nil, from: nil, for: nil)
+                    onCloseSearch?()
+                },
+                including: closesSearchOnSwipe ? .all : .subviews
             )
-            if isActive, let change { onBarCollapsedChange(change) }
-        }
-        .onChange(of: barTapCount) {
-            scroll.tracker.holdOpen()
-        }
+            .simultaneousGesture(peekGesture, including: isActive ? .all : .subviews)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                if width != codeWidth { codeWidth = width }
+            }
+            .background(Color(uiColor: RawTextStyle.backgroundColor))
+            // Gone mid-scroll, it never says it stopped: new lists would wait for good.
+            .onDisappear { onScrollingChange?(false) }
+            .onChange(of: barTapCount) {
+                scroll.tracker.holdOpen()
+            }
     }
 }
 
@@ -1310,6 +1366,14 @@ private final class CodeBlockStore {
         return max(0, next.line - symbol.line - 2)
     }
 
+    /// About how many lines a symbol's code shows, for the table's estimate before it's made:
+    /// up to the next symbol of its file, or its preview's.
+    func estimatedLineCount(of symbol: CodeSymbol) -> Int {
+        updatePositions()
+        if let lines = estimatedLines(of: symbol) { return lines }
+        return max(1, symbol.preview.split(separator: "\n", omittingEmptySubsequences: false).count - 1)
+    }
+
     /// What a symbol's block shows. A type (a class and its members) stops where its first
     /// member starts: the members follow as their own blocks, so the type isn't shown twice
     /// (and a big class isn't one huge block). Members follow their type in the full list;
@@ -1788,20 +1852,8 @@ private struct SymbolCodeText: View {
     }
 }
 
-/// Which symbol is at the top, for coming back to it. The blocks vary a lot in height (a
-/// one-line macro, a 300-line function), and `scrollPosition(id:)` keeps its symbol anchored
-/// while the ones scrolling in are measured, which stalled scrolling each time a long one came
-/// in. So the list is only watched: the first symbol on screen is reported.
-private struct PositionTracking: ViewModifier {
-    let position: Binding<Int?>
-
-    func body(content: Content) -> some View {
-        content.onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.01) { ids in
-            if let first = ids.first { position.wrappedValue = first }
-        }
-    }
-}
-
+/// Which symbol is at the top (for coming back to it), and the bar's tracking as the list
+/// scrolls. Not observed: updated every scroll frame without redrawing anything.
 private final class ScrollTracking {
     var tracker = BarCollapseTracker()
     var isUserScrolling = false
@@ -1811,18 +1863,6 @@ private final class ScrollTracking {
     var centeredID: Int?
     /// The list has moved to where it starts, so `centeredID` changes are the reader's.
     var isPositioned = false
-    /// Told about each new card in the middle (the latest closure from the view).
-    var report: (@MainActor (Int) -> Void)?
-
-    /// `centeredID` for `scrollPosition`, made once.
-    private(set) lazy var centeredBinding = Binding<Int?>(
-        get: { [unowned self] in self.centeredID },
-        set: { [unowned self] id in
-            guard id != self.centeredID else { return }
-            self.centeredID = id
-            if self.isPositioned, let id { self.report?(id) }
-        }
-    )
 }
 
 /// A request to bring a card into view in Symbols. A new request (a new `token`) scrolls
