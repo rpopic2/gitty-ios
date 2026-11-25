@@ -220,7 +220,14 @@ struct CodeTable: UIViewRepresentable {
             cell.backgroundConfiguration = .clear()
             cell.selectionStyle = .none
             configure(cell, id: sections[indexPath.section].id)
-            if isAnimatingHeights { madeWhileAnimating.append(cell.contentView) }
+            // Made as the heights animate (a symbol just opened): hidden while the rows slide,
+            // then faded in (`fadeInHidden`). Otherwise shown, also if it was hidden when reused.
+            let content = cell.contentView
+            UIView.performWithoutAnimation { content.alpha = isAnimatingHeights ? 0 : 1 }
+            if isAnimatingHeights {
+                hiddenWhileSliding.append(content)
+                madeWhileAnimating.append(content)
+            }
             return cell
         }
 
@@ -323,6 +330,20 @@ struct CodeTable: UIViewRepresentable {
         /// (`madeWhileAnimating`, their content).
         private var isAnimatingHeights = false
         private var madeWhileAnimating: [UIView] = []
+        /// The cells' content made meanwhile: hidden until the rows have slid.
+        private var hiddenWhileSliding: [UIView] = []
+
+        /// The code of a symbol just opened comes in once the rows below have slid down: a cell
+        /// made in the heights' animation could still be laid out in it and fly in from the top
+        /// left (see `stopInnerAnimations`), so it isn't seen until then.
+        private func fadeInHidden() {
+            let views = hiddenWhileSliding
+            hiddenWhileSliding = []
+            guard !views.isEmpty else { return }
+            UIView.animate(withDuration: 0.15, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+                for view in views { view.alpha = 1 }
+            }
+        }
 
         /// A cell made in the heights' animation (a symbol just opened: its row, 0 high, had no
         /// cell) had its content laid out in it, from where a new view starts: its code flew in
@@ -352,6 +373,8 @@ struct CodeTable: UIViewRepresentable {
                     // felt different.
                     UIView.animate(springDuration: 0.25, bounce: 0) {
                         table.performBatchUpdates(nil)
+                    } completion: { _ in
+                        self.fadeInHidden()
                     }
                     self.isAnimatingHeights = false
                     self.stopInnerAnimations()
