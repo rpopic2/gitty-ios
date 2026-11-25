@@ -514,13 +514,27 @@ struct SymbolsView: View, Equatable {
         case (.symbol(let symbol, _)?, _):
             let menu = contextMenu(for: symbol, part: part == .title ? .title : .code)
             let style = codeTextStyle
+            // A file's: where it is, not the start of its text.
+            let path = symbol.kind == .file ? pathInProject(symbol.fileURL ?? openFile) : nil
             // Tapping the preview opens the card, as Open does.
             return CodeTableMenu(menu: menu.menu(naming: albumNaming),
-                                 preview: { menu.preview(style: style) },
+                                 preview: { path.map { FilePathPreview.controller(name: symbol.name, path: $0) }
+                                     ?? menu.preview(style: style) },
                                  onPreviewTap: { menu.onOpen(symbol) })
         default:
             return nil
         }
+    }
+
+    /// A file's path from the top of its project (the list's scope); a file outside one, its
+    /// whole path or address.
+    private func pathInProject(_ file: URL) -> String {
+        let address = file.absoluteString
+        if address.hasPrefix(collapseScope), address.count > collapseScope.count {
+            let relative = String(address.dropFirst(collapseScope.count))
+            return relative.removingPercentEncoding ?? relative
+        }
+        return file.isFileURL ? file.path : (address.removingPercentEncoding ?? address)
     }
 
     /// A file with no symbols (a README, a config file) shows its whole text under its title
@@ -1771,6 +1785,33 @@ private struct CodeMenuPreview: View {
         .padding(16)
         .frame(width: 320, alignment: .leading)
         .background(Color(uiColor: RawTextStyle.backgroundColor))
+    }
+}
+
+/// A file title's long-press preview: its name, and its path in full (wrapped, not cut off).
+private struct FilePathPreview: View {
+    let name: String
+    let path: String
+
+    static func controller(name: String, path: String) -> UIViewController {
+        let controller = UIHostingController(rootView: FilePathPreview(name: name, path: path))
+        controller.preferredContentSize = controller.sizeThatFits(in: CGSize(width: 320, height: 600))
+        return controller
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(name, systemImage: "doc")
+                .font(.headline)
+                .lineLimit(1)
+            Text(verbatim: path)
+                .font(.subheadline.monospaced())
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(width: 320, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemBackground))
     }
 }
 
