@@ -342,9 +342,11 @@ struct SymbolsView: View, Equatable {
             case nil: AnyView(EmptyView())
             }
         }
+        // Closed, or nothing under its title once laid out (a one-line symbol, opened by Expand
+        // All): 0 high. Left to size itself, an empty row kept a gap under its title.
         let isRowEmpty: @MainActor (Int) -> Bool = { id in
             guard case .symbol(let symbol, _)? = byID[id] else { return false }
-            return !view.isCodeShown(symbol)
+            return !view.isCodeShown(symbol) || blocks.block(for: symbol).layouts?.isEmpty == true
         }
         let estimatedRow: @MainActor (Int) -> CGFloat = { id in
             switch byID[id] {
@@ -379,7 +381,8 @@ struct SymbolsView: View, Equatable {
             onScroll: { position in view.scrolled(position) },
             onBeginDragging: { scroll.tracker.beginDrag(at: $0) },
             onScrollingChange: onScrollingChange,
-            observeHeights: { [collapsed] in
+            observeHeights: { [collapsed, blocks] in
+                _ = blocks.emptied.count
                 _ = collapsed.flipped
                 _ = collapsed.collapsedScopes
                 _ = collapsed.files
@@ -1319,6 +1322,12 @@ private final class CodeBlock {
     }
 }
 
+/// See `CodeBlockStore.emptied`.
+@Observable
+private final class EmptiedBlocks {
+    var count = 0
+}
+
 /// The Code level's blocks, made as symbols scroll in and kept for this list. Not observed.
 ///
 /// Kept by what they show (the file, the part of it, and how), not by the symbol's id: ids are
@@ -1335,6 +1344,8 @@ private final class CodeBlockStore {
 
     /// The list's symbols and the open file's text, set as the list is drawn.
     var symbols: [CodeSymbol] = []
+    /// Counts the blocks on screen found to have nothing in them, so the list's heights follow.
+    let emptied = EmptiedBlocks()
     var ownText: NSString?
     private var blocks: [Key: CodeBlock] = [:]
     private var theme = SyntaxTheme.none
@@ -1532,6 +1543,10 @@ private struct SymbolCode: View {
                     .onAppear { store.appeared(symbol) }
                     // A new theme's block, while this is on screen.
                     .onChange(of: ObjectIdentifier(block)) { store.appeared(symbol) }
+                    // Nothing under the title after all (a one-line symbol): its row closes up.
+                    .onChange(of: block.layouts?.isEmpty == true) { _, isEmpty in
+                        if isEmpty { store.emptied.count += 1 }
+                    }
             }
         }
     }
