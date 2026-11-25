@@ -459,7 +459,20 @@ struct SymbolsView: View, Equatable {
                         textActions: textActions,
                         ownText: ownText,
                         codeRange: codeRange,
-                        onExpandAll: onExpandAll)
+                        onExpandAll: onExpandAll,
+                        // A file's: where it is, not the start of its text.
+                        filePath: symbol.kind == .file ? pathInProject(symbol.fileURL ?? openFile) : nil)
+    }
+
+    /// A file's path from the top of its project (the list's scope); a file outside one, its
+    /// whole path or address.
+    private func pathInProject(_ file: URL) -> String {
+        let address = file.absoluteString
+        if address.hasPrefix(collapseScope), address.count > collapseScope.count {
+            let relative = String(address.dropFirst(collapseScope.count))
+            return relative.removingPercentEncoding ?? relative
+        }
+        return file.isFileURL ? file.path : (address.removingPercentEncoding ?? address)
     }
 
     /// A file title's Expand All: the file unfolded, and all its symbols' code showing.
@@ -1505,6 +1518,8 @@ private struct CodeMenu: ViewModifier {
     let codeRange: @MainActor () -> NSRange
     /// A file's title: Expand All in it.
     let onExpandAll: (@MainActor () -> Void)?
+    /// A file's path in its project: its preview, instead of its first lines.
+    var filePath: String? = nil
 
     func body(content: Content) -> some View {
         let file = symbol.fileURL ?? openFile
@@ -1533,7 +1548,11 @@ private struct CodeMenu: ViewModifier {
                                download: symbol.isDownloaded ? nil : symbol.fileURL)
             }
         } preview: {
-            CodeMenuPreview(symbol: symbol, fileExtension: file.pathExtension)
+            if let filePath {
+                FilePathPreview(name: symbol.name, path: filePath)
+            } else {
+                CodeMenuPreview(symbol: symbol, fileExtension: file.pathExtension)
+            }
         }
     }
 
@@ -1645,6 +1664,27 @@ private struct CodeMenu: ViewModifier {
 }
 
 /// The long-press preview of a symbol's code: its title and first lines.
+/// A file title's long-press preview: its name, and its path in full (wrapped, not cut off).
+private struct FilePathPreview: View {
+    let name: String
+    let path: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(name, systemImage: "doc")
+                .font(.headline)
+                .lineLimit(1)
+            Text(verbatim: path)
+                .font(.subheadline.monospaced())
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(width: 320, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemBackground))
+    }
+}
+
 private struct CodeMenuPreview: View {
 
     let symbol: CodeSymbol
