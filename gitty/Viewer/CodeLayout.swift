@@ -258,8 +258,20 @@ final class CodePieceUIView: UIView {
         numbers.isHidden = !isPeeking
     }
 
+    /// Not yet put in place: see `layoutSubviews`.
+    private var isPlaced = false
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        // A new piece (an opened symbol's code, or its laid-out code replacing the placeholder)
+        // was put in place inside the list's animation of its rows' heights, so it flew in from
+        // the top left corner, from where a new view starts. Its first place isn't animated: it
+        // (and SwiftUI's view around it) is just there.
+        if !isPlaced, window != nil {
+            isPlaced = true
+            layer.removeAllAnimations()
+            superview?.layer.removeAllAnimations()
+        }
         let width = Self.gutterWidth
         numbers.frame = CGRect(x: -width, y: 0, width: width, height: bounds.height)
         let margin = RawTextStyle.insets.left
