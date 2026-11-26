@@ -104,13 +104,14 @@ struct SetAsideChips: View {
                 // The oldest at the top, the latest just over the chip.
                 ForEach(stacks) { stack in
                     SetAsideChip(title: stack.title, symbolImage: stack.symbolImage, count: stack.cardCount,
-                                 onTap: { open(stack) }, onDrop: { onDrop(stack) }, onSwipe: fan)
+                                 onTap: { open(stack) }, onDrop: { onDrop(stack) }, onSwipe: { up in fan(up) })
                         .frame(maxWidth: 260)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             if let latest = stacks.last {
                 let several = stacks.count > 1
+                let swipe: (@MainActor (Bool) -> Void)? = several ? { up in fan(up) } : nil
                 SetAsideChip(title: several ? String(localized: "\(stacks.count) Stacks") : latest.title,
                              symbolImage: several ? (isFannedOut ? "chevron.down" : "square.stack.3d.up")
                                                   : latest.symbolImage,
@@ -124,14 +125,14 @@ struct SetAsideChips: View {
                              },
                              // Several: swiping the folded chip away throws them all away.
                              onDrop: { for stack in stacks { onDrop(stack) } },
-                             onSwipe: several ? fan : nil)
+                             onSwipe: swipe)
                     .frame(maxWidth: 220)
                     .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
         }
         .animation(.smooth(duration: 0.25), value: stacks.map(\.id))
         // Down to one (or none): nothing to fan out.
-        .onChange(of: stacks.count) { if stacks.count < 2 { isFannedOut = false } }
+        .onChange(of: stacks.count) { _, count in if count < 2 { isFannedOut = false } }
     }
 
     private func open(_ stack: SetAsideStack) {
@@ -245,19 +246,20 @@ struct StackCaptionSwipes: ViewModifier {
             content
                 .offset(x: drag.width, y: drag.height)
                 .sensoryFeedback(.impact(weight: .light), trigger: isPastThreshold) { old, new in new && !old }
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 12)
-                        .onChanged { value in
-                            let t = value.translation
+                // UIKit's, so the card's own swipes (down to close it, sideways to page) wait for it
+                // when the swipe starts on the caption. As a SwiftUI gesture, the swipe down closed
+                // the card instead, and this one was cancelled.
+                .background {
+                    CaptionPan(
+                        onChange: { t in
                             // One way at a time: the way it went first, dampened.
                             if abs(t.width) > abs(t.height) {
                                 drag = CGSize(width: t.width / (1 + abs(t.width) / 160), height: 0)
                             } else {
                                 drag = CGSize(width: 0, height: t.height / (1 + abs(t.height) / 120))
                             }
-                        }
-                        .onEnded { value in
-                            let t = value.translation, flung = value.predictedEndTranslation
+                        },
+                        onEnd: { t, flung in
                             withAnimation(.spring(duration: 0.3)) { drag = .zero }
                             if abs(t.width) > abs(t.height) {
                                 let goes = abs(t.width) > Self.sideDistance || abs(flung.width) > Self.sideDistance * 2.5
@@ -267,7 +269,8 @@ struct StackCaptionSwipes: ViewModifier {
                                 actions.setAside?()
                             }
                         }
-                )
+                    )
+                }
         } else {
             content
         }
@@ -276,6 +279,91 @@ struct StackCaptionSwipes: ViewModifier {
     private var isPastThreshold: Bool {
         // In the dampened offset, about where the finger's thresholds are.
         abs(drag.height) > Self.upDistance * 0.7 || abs(drag.width) > Self.sideDistance * 0.65
+    }
+}
+
+/// A drag that starts on the view (the caption), recognised on the window: the other drags there
+/// (the card closing with a swipe down, the pager's paging, the sidebar's) wait for it to fail,
+/// so it wins whichever way it goes. Taps and holds aren't held up: they don't wait for it.
+private struct CaptionPan: UIViewRepresentable {
+    /// How far the finger has moved.
+    let onChange: @MainActor (CGSize) -> Void
+    /// Where it was let go, and where it was going (a fling).
+    let onEnd: @MainActor (_ translation: CGSize, _ predicted: CGSize) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> InstallerView {
+        let view = InstallerView()
+        view.isUserInteractionEnabled = false  // touches go to the caption; the drag is the window's
+        view.recognizer = context.coordinator.pan
+        context.coordinator.area = view
+        return view
+    }
+
+    func updateUIView(_ view: InstallerView, context: Context) {
+        context.coordinator.onChange = onChange
+        context.coordinator.onEnd = onEnd
+    }
+
+    final class InstallerView: UIView {
+        var recognizer: UIGestureRecognizer?
+
+        override func willMove(toWindow newWindow: UIWindow?) {
+            super.willMove(toWindow: newWindow)
+            guard let recognizer else { return }
+            recognizer.view?.removeGestureRecognizer(recognizer)
+            newWindow?.addGestureRecognizer(recognizer)
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        let pan = UIPanGestureRecognizer()
+        weak var area: UIView?
+        var onChange: (@MainActor (CGSize) -> Void)?
+        var onEnd: (@MainActor (CGSize, CGSize) -> Void)?
+
+        override init() {
+            super.init()
+            pan.addTarget(self, action: #selector(panned(_:)))
+            pan.delegate = self
+            pan.cancelsTouchesInView = true  // once it's a drag, the caption's tap doesn't fire
+        }
+
+        @objc private func panned(_ recognizer: UIPanGestureRecognizer) {
+            guard let view = recognizer.view else { return }
+            let point = recognizer.translation(in: view)
+            let translation = CGSize(width: point.x, height: point.y)
+            switch recognizer.state {
+            case .changed:
+                onChange?(translation)
+            case .ended:
+                let velocity = recognizer.velocity(in: view)
+                // Roughly where a fling would have taken it.
+                onEnd?(translation, CGSize(width: point.x + velocity.x * 0.2, height: point.y + velocity.y * 0.2))
+            case .cancelled, .failed:
+                onEnd?(.zero, .zero)
+            default:
+                break
+            }
+        }
+
+        /// Only touches that start on the caption, while it's on screen.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let area, area.window != nil, !area.isHidden, area.alpha > 0.01 else { return false }
+            return area.bounds.contains(touch.location(in: area))
+        }
+
+        /// The other drags wait for it: pans (paging, the sidebar), and the card's zoom closing
+        /// (whatever UIKit calls its recognizer). Taps and holds don't, so the caption's tap and
+        /// menu work as before.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            guard other !== pan else { return false }
+            if other is UIPanGestureRecognizer { return true }
+            let name = String(describing: type(of: other))
+            return ["Zoom", "Transition", "Dismiss"].contains { name.contains($0) }
+        }
     }
 }
 
