@@ -110,6 +110,10 @@ struct CodeTable: UIViewRepresentable {
 
     func updateUIView(_ table: UITableView, context: Context) {
         let coordinator = context.coordinator
+        // Scrolling it does from here (reloading, keeping the top section in place) is reported
+        // after this update, not during it (see `scrollViewDidScroll`).
+        coordinator.isInSwiftUIUpdate = true
+        defer { coordinator.isInSwiftUIUpdate = false }
         coordinator.parent = self
         table.isScrollEnabled = isScrollEnabled
         table.scrollsToTop = scrollsToTop
@@ -445,7 +449,24 @@ struct CodeTable: UIViewRepresentable {
 
         // MARK: Scrolling
 
+        /// In `updateUIView`: SwiftUI is updating the view.
+        var isInSwiftUIUpdate = false
+        private var isScrollReportPending = false
+
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            // Moved by an update (a reload, the top section kept in place): reported once it's
+            // over. Reporting it there and then changed the bar's state (and the top symbol) in
+            // the middle of SwiftUI's update ("Modifying state during view update").
+            if isInSwiftUIUpdate {
+                guard !isScrollReportPending else { return }
+                isScrollReportPending = true
+                DispatchQueue.main.async { [weak self, weak scrollView] in
+                    guard let self, let scrollView else { return }
+                    self.isScrollReportPending = false
+                    self.scrollViewDidScroll(scrollView)
+                }
+                return
+            }
             let inset = scrollView.adjustedContentInset
             parent.onScroll(CodeTableScroll(
                 offset: scrollView.contentOffset.y,
