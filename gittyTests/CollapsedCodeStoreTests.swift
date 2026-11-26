@@ -31,6 +31,21 @@ struct CollapsedCodeStoreTests {
         #expect(!reopened.areAllFoldersFolded(scope: scope))
     }
 
+    @Test func overloadsCollapseOnTheirOwn() throws {
+        let (store, _) = try store()
+        func overload(_ declaration: String, at line: Int) -> CodeSymbol {
+            CodeSymbol(id: line, name: "draw", kind: .method, range: NSRange(location: line * 10, length: 5),
+                       line: line, preview: declaration + " {\n    body();\n}", fileURL: open)
+        }
+        let first = overload("void draw(Point p)", at: 3)
+        let second = overload("void draw(Point p, int size)", at: 9)
+        store.toggle(first, openFile: open, scope: scope)
+        #expect(store.isCollapsed(first, openFile: open, scope: scope))
+        #expect(!store.isCollapsed(second, openFile: open, scope: scope))
+        // Moved down by code added above it: still collapsed.
+        #expect(store.isCollapsed(overload("void draw(Point p)", at: 20), openFile: open, scope: scope))
+    }
+
     @Test func anAlbumFoldsOnItsOwn() throws {
         let defaults = try #require(UserDefaults(suiteName: "CollapsedCodeStoreTests-\(UUID().uuidString)"))
         let project = CollapsedCodeStore(defaults: defaults)
