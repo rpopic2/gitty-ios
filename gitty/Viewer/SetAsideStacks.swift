@@ -98,41 +98,62 @@ struct SetAsideChips: View {
     /// A chip's height.
     static let chipHeight: CGFloat = 36
 
+    // In parts: as one expression, it was too much for the type checker.
     var body: some View {
-        VStack(spacing: 8) {
-            if isFannedOut, stacks.count > 1 {
-                // The oldest at the top, the latest just over the chip.
-                ForEach(stacks) { stack in
-                    SetAsideChip(title: stack.title, symbolImage: stack.symbolImage, count: stack.cardCount,
-                                 onTap: { open(stack) }, onDrop: { onDrop(stack) }, onSwipe: { up in fan(up) })
-                        .frame(maxWidth: 260)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+        let stackCount: Int = stacks.count
+        let ids: [UUID] = stacks.map(\.id)
+        return VStack(spacing: 8) {
+            if isFannedOut, stackCount > 1 {
+                fannedOut
             }
             if let latest = stacks.last {
-                let several = stacks.count > 1
-                let swipe: (@MainActor (Bool) -> Void)? = several ? { up in fan(up) } : nil
-                SetAsideChip(title: several ? String(localized: "\(stacks.count) Stacks") : latest.title,
-                             symbolImage: several ? (isFannedOut ? "chevron.down" : "square.stack.3d.up")
-                                                  : latest.symbolImage,
-                             count: several ? nil : latest.cardCount,
-                             onTap: {
-                                 if several {
-                                     withAnimation(.smooth(duration: 0.25)) { isFannedOut.toggle() }
-                                 } else {
-                                     open(latest)
-                                 }
-                             },
-                             // Several: swiping the folded chip away throws them all away.
-                             onDrop: { for stack in stacks { onDrop(stack) } },
-                             onSwipe: swipe)
-                    .frame(maxWidth: 220)
-                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                mainChip(latest)
             }
         }
-        .animation(.smooth(duration: 0.25), value: stacks.map(\.id))
+        .animation(.smooth(duration: 0.25), value: ids)
         // Down to one (or none): nothing to fan out.
-        .onChange(of: stacks.count) { _, count in if count < 2 { isFannedOut = false } }
+        .onChange(of: stackCount) { _, new in
+            if new < 2 { isFannedOut = false }
+        }
+    }
+
+    /// The stacks, one chip each: the oldest at the top, the latest just over the main chip.
+    private var fannedOut: some View {
+        ForEach(stacks) { stack in
+            chip(for: stack)
+                .frame(maxWidth: 260)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func chip(for stack: SetAsideStack) -> SetAsideChip {
+        SetAsideChip(title: stack.title, symbolImage: stack.symbolImage, count: stack.cardCount,
+                     onTap: { open(stack) }, onDrop: { onDrop(stack) }, onSwipe: { up in fan(up) })
+    }
+
+    /// The latest stack's chip, or, with several, how many there are (tap or swipe up to fan them
+    /// out).
+    private func mainChip(_ latest: SetAsideStack) -> some View {
+        let several: Bool = stacks.count > 1
+        var chip = SetAsideChip(title: latest.title, symbolImage: latest.symbolImage, count: latest.cardCount,
+                                onTap: { open(latest) }, onDrop: { onDrop(latest) })
+        if several {
+            let all = stacks
+            let title = String(localized: "\(all.count) Stacks")
+            chip = SetAsideChip(title: title, symbolImage: isFannedOut ? "chevron.down" : "square.stack.3d.up",
+                                count: nil,
+                                onTap: { toggleFan() },
+                                // Swiping the folded chip away throws them all away.
+                                onDrop: { for stack in all { onDrop(stack) } },
+                                onSwipe: { up in fan(up) })
+        }
+        return chip
+            .frame(maxWidth: 220)
+            .transition(.scale(scale: 0.8).combined(with: .opacity))
+    }
+
+    private func toggleFan() {
+        withAnimation(.smooth(duration: 0.25)) { isFannedOut.toggle() }
     }
 
     private func open(_ stack: SetAsideStack) {
