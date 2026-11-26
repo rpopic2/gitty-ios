@@ -368,9 +368,18 @@ private struct SymbolCaption: View {
     var body: some View {
         capsule
             .onTapGesture { onInfo() }
+            // Touch and hold: Set Aside, as swiping it up does.
+            .contextMenu {
+                if let setAside = stackActions?.setAside {
+                    Button("Set Aside", systemImage: "square.stack.3d.down.right", action: setAside)
+                }
+            }
+            // Up: the stack set aside; sideways: on to the album beside.
+            .stackCaptionSwipes(stackActions)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityHint(Text("Shows the file’s info and history"))
+            .accessibilityAction(named: Text("Set Aside")) { stackActions?.setAside?() }
     }
 
     @ViewBuilder
