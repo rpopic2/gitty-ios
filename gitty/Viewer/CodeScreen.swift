@@ -688,7 +688,9 @@ struct CodeScreen: View {
                 onOpenAlbum(id)
             },
             setAside: { setAsideStack() },
-            switchAlbum: { setAsideStack(goingTo: $0) },
+            // Not for now: going to another album from a card (setting the stack aside) was
+            // confusing. The caption's sideways swipe does nothing.
+            switchAlbum: nil,
             // Every page closes, back to the Code level (nothing kept).
             close: { cardPath = [] }
         )

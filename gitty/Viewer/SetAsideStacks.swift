@@ -309,6 +309,9 @@ struct StackCaptionSwipes: ViewModifier {
                 // the card instead, and this one was cancelled.
                 .background {
                     CaptionPan(
+                        // Sideways only when it goes to the album beside: otherwise the drag is
+                        // left to the card (paging).
+                        allowsSideways: actions.switchAlbum != nil,
                         onChange: { t in
                             // One way at a time: the way it went first, dampened.
                             if abs(t.width) > abs(t.height) {
@@ -344,6 +347,8 @@ struct StackCaptionSwipes: ViewModifier {
 /// (the card closing with a swipe down, the pager's paging, the sidebar's) wait for it to fail,
 /// so it wins whichever way it goes. Taps and holds aren't held up: they don't wait for it.
 private struct CaptionPan: UIViewRepresentable {
+    /// Sideways drags too (`false`: only up and down; sideways is the card's).
+    let allowsSideways: Bool
     /// How far the finger has moved.
     let onChange: @MainActor (CGSize) -> Void
     /// Where it was let go, and where it was going (a fling).
@@ -360,6 +365,7 @@ private struct CaptionPan: UIViewRepresentable {
     }
 
     func updateUIView(_ view: InstallerView, context: Context) {
+        context.coordinator.allowsSideways = allowsSideways
         context.coordinator.onChange = onChange
         context.coordinator.onEnd = onEnd
     }
@@ -378,6 +384,7 @@ private struct CaptionPan: UIViewRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let pan = UIPanGestureRecognizer()
         weak var area: UIView?
+        var allowsSideways = true
         var onChange: (@MainActor (CGSize) -> Void)?
         var onEnd: (@MainActor (CGSize, CGSize) -> Void)?
 
@@ -404,6 +411,13 @@ private struct CaptionPan: UIViewRepresentable {
             default:
                 break
             }
+        }
+
+        /// Up or down; sideways only when allowed.
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard !allowsSideways else { return true }
+            let velocity = pan.velocity(in: pan.view)
+            return abs(velocity.y) > abs(velocity.x)
         }
 
         /// Only touches that start on the caption, while it's on screen.
