@@ -229,7 +229,8 @@ private struct SideBarDim: View {
 }
 
 /// The sidebar's swipes, on the whole window: UIKit's screen-edge swipe from the right edge opens
-/// it, and a swipe to the right anywhere closes it while it's open. They're attached to the
+/// it (on a Mac, a two-finger swipe to the left near the window's right side), and a swipe to
+/// the right anywhere closes it while it's open. They're attached to the
 /// window (not to a view in front of the content), so they don't take touches from anything,
 /// and scroll views wait for them to fail before they start scrolling. Neither starts for a
 /// vertical swipe, so the sidebar's list scrolls as usual.
@@ -241,7 +242,8 @@ private struct ScreenEdgePan: UIViewRepresentable {
     func makeUIView(context: Context) -> InstallerView {
         let view = InstallerView()
         view.isUserInteractionEnabled = false
-        view.recognizers = [context.coordinator.openRecognizer, context.coordinator.closeRecognizer]
+        view.recognizers = [context.coordinator.openRecognizer, context.coordinator.closeRecognizer,
+                            context.coordinator.trackpadOpenRecognizer]
         return view
     }
 
@@ -266,6 +268,9 @@ private struct ScreenEdgePan: UIViewRepresentable {
         var state: SideBarState?
         let openRecognizer = UIScreenEdgePanGestureRecognizer()
         let closeRecognizer = UIPanGestureRecognizer()
+        /// On a Mac (or an iPad with a trackpad), where there's no screen edge to swipe from:
+        /// a two-finger swipe to the left, with the pointer near the window's right side.
+        let trackpadOpenRecognizer = UIPanGestureRecognizer()
 
         override init() {
             super.init()
@@ -274,6 +279,31 @@ private struct ScreenEdgePan: UIViewRepresentable {
             openRecognizer.delegate = self
             closeRecognizer.addTarget(self, action: #selector(closePan(_:)))
             closeRecognizer.delegate = self
+            // A two-finger swipe to the right closes it too.
+            closeRecognizer.allowedScrollTypesMask = .continuous
+            trackpadOpenRecognizer.allowedScrollTypesMask = .continuous
+            trackpadOpenRecognizer.allowedTouchTypes = []  // a trackpad's swipes only, never a touch
+            trackpadOpenRecognizer.addTarget(self, action: #selector(trackpadOpenPan(_:)))
+            trackpadOpenRecognizer.delegate = self
+        }
+
+        @objc private func trackpadOpenPan(_ recognizer: UIPanGestureRecognizer) {
+            guard let state, let view = recognizer.view else { return }
+            switch recognizer.state {
+            case .changed:
+                state.track(-recognizer.translation(in: view).x)
+            case .ended:
+                state.settle(velocity: -recognizer.velocity(in: view).x)
+            case .cancelled, .failed:
+                state.close()
+            default:
+                break
+            }
+        }
+
+        /// How near the window's right side the pointer has to be for the two-finger swipe.
+        private static func trackpadEdgeWidth(of window: UIView) -> CGFloat {
+            max(120, window.bounds.width * 0.25)
         }
 
         @objc private func openPan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
@@ -306,6 +336,14 @@ private struct ScreenEdgePan: UIViewRepresentable {
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard let state else { return false }
+            if gestureRecognizer === trackpadOpenRecognizer {
+                guard state.isEdgeSwipeEnabled, !state.isOpen, let window = trackpadOpenRecognizer.view
+                else { return false }
+                let velocity = trackpadOpenRecognizer.velocity(in: window)
+                let location = trackpadOpenRecognizer.location(in: window)
+                return location.x > window.bounds.width - Self.trackpadEdgeWidth(of: window)
+                    && velocity.x < 0 && -velocity.x > abs(velocity.y)  // mostly leftward
+            }
             guard gestureRecognizer === closeRecognizer else {
                 return state.isEdgeSwipeEnabled && !state.isOpen
             }
@@ -331,8 +369,10 @@ private struct ScreenEdgePan: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
             // Not the bottom bar's swipes: they start away from the edge, and waiting held them up.
-            other is UIPanGestureRecognizer && !(other is BarPanRecognizer)
-                && other !== openRecognizer && other !== closeRecognizer
+            // Nothing waits for the two-finger swipe: it only starts near the right side, leftwards.
+            gestureRecognizer !== trackpadOpenRecognizer
+                && other is UIPanGestureRecognizer && !(other is BarPanRecognizer)
+                && other !== openRecognizer && other !== closeRecognizer && other !== trackpadOpenRecognizer
         }
     }
 }
