@@ -322,6 +322,6 @@ private struct StartScreen: View {
 
     /// The project's address on github.com, or nothing (Files).
     private var projectAddress: String {
-        project?.link.webURL?.absoluteString ?? ""
+        project?.webURL?.absoluteString ?? ""
     }
 }

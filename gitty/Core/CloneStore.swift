@@ -27,6 +27,14 @@ nonisolated struct CloneRecord: Codable, Equatable, Sendable {
     /// Fetched (pull down in the project), not checked out yet: how many commits newer than
     /// `commit` the branch is. Pull checks them out.
     var newCommits: Int? = nil
+    /// A folder on this device (`ProjectSource.local`): not a clone of gitty's, but read the
+    /// same way, from where it is. gitty never deletes it, and never fetches into it.
+    var localFolder: LocalFolder? = nil
+    /// A local folder's files when it was last read (`LocalFiles.signature`): a refresh that
+    /// finds the same changes nothing.
+    var localSignature: String? = nil
+
+    var isLocal: Bool { localFolder != nil }
 }
 
 /// What a filtered clone (an option since removed) recorded: only that it was one.
@@ -79,9 +87,20 @@ nonisolated final class CloneIndex: @unchecked Sendable {
         }
     }
 
-    /// The clone's folder: its working tree, with `.git` inside.
+    /// The clone's folder: its working tree, with `.git` inside. A local folder's is where it
+    /// is on this device.
     func folder(of record: CloneRecord) -> URL {
-        directory.appending(path: record.folderName, directoryHint: .isDirectory)
+        if let local = record.localFolder {
+            return LocalFolderAccess.shared.url(of: local)
+                ?? directory.appending(path: "unreachable-\(local.id.uuidString)", directoryHint: .isDirectory)
+        }
+        return directory.appending(path: record.folderName, directoryHint: .isDirectory)
+    }
+
+    /// Whether the project has Git's history (a local folder may be a plain folder).
+    func isRepository(_ record: CloneRecord) -> Bool {
+        guard record.isLocal else { return true }
+        return FileManager.default.fileExists(atPath: folder(of: record).appending(path: ".git").path)
     }
 
     static func folderName(for projectID: String) -> String {
@@ -113,14 +132,16 @@ nonisolated final class CloneIndex: @unchecked Sendable {
     }
 
     /// How many projects are cloned and the space their clones take (files and Git's data), for
-    /// Settings. Goes through every file: call it off the main thread.
+    /// Settings. Goes through every file: call it off the main thread. (Local folders aren't
+    /// gitty's to count.)
     func storageUsage() -> (count: Int, bytes: Int64) {
-        let records = allRecords()
+        let records = allRecords().filter { !$0.isLocal }
         return (records.count, records.reduce(0) { $0 + bytes(of: $1) })
     }
 
     /// The space one clone takes: its files and Git's data. Off the main thread.
     func bytes(of record: CloneRecord) -> Int64 {
+        guard !record.isLocal else { return 0 }
         var bytes: Int64 = 0
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .totalFileAllocatedSizeKey]
         let enumerator = FileManager.default.enumerator(at: folder(of: record), includingPropertiesForKeys: Array(keys))
@@ -142,7 +163,10 @@ nonisolated final class CloneIndex: @unchecked Sendable {
     func files(of record: CloneRecord) -> [DocumentMetadata] {
         if let list = lock.withLock({ fileLists[record.projectID] }) { return list }
         let root = folder(of: record)
-        let paths = (try? GitRepository(at: root).checkedOutFilePaths()) ?? walk(root)
+        // A local folder: what's there now (not just what's committed), less what Git ignores.
+        let paths = record.isLocal
+            ? LocalFiles.list(at: root, repository: try? GitRepository(at: root)).map(\.path)
+            : (try? GitRepository(at: root).checkedOutFilePaths()) ?? walk(root)
         var list: [DocumentMetadata] = []
         list.reserveCapacity(paths.count)
         for path in paths {
@@ -259,8 +283,8 @@ actor CloneStore {
     /// from the clone: the files downloaded one by one are deleted.
     /// - Parameter progress: how far the download has got.
     func clone(_ project: ProjectInfo, progress: @escaping @Sendable (FetchProgress) -> Void) async throws {
-        guard let refName = project.ref else { throw CloneError.notABranchOrTag("") }
-        guard let remote = URL(string: "https://github.com/\(project.link.owner)/\(project.link.repo).git"),
+        guard let refName = project.ref, let link = project.link else { throw CloneError.notABranchOrTag("") }
+        guard let remote = URL(string: "https://github.com/\(link.owner)/\(link.repo).git"),
               let rawPrefix = project.rawURL(for: "")?.absoluteString
         else { throw CloneError.notABranchOrTag(refName) }
         let token = await GitHubAuth.shared.token()
@@ -298,13 +322,80 @@ actor CloneStore {
         await documents.clonesChanged()
     }
 
-    /// Deletes the clone. The project's files download one by one again when opened.
+    /// Deletes the clone. The project's files download one by one again when opened. A local
+    /// folder is only forgotten: it's yours, and stays where it is.
     func delete(projectID: String) async {
         guard let record = index.record(forProject: projectID) else { return }
-        let folder = index.folder(of: record)
-        try? await serially(projectID) { try? FileManager.default.removeItem(at: folder) }
+        if !record.isLocal {
+            let folder = index.folder(of: record)
+            try? await serially(projectID) { try? FileManager.default.removeItem(at: folder) }
+        }
         index.remove(projectID: projectID)
         await documents.clonesChanged()
+    }
+
+    // MARK: Local folders
+
+    /// A local folder just added as a project: read from where it is, from now on.
+    func addLocal(_ project: ProjectInfo) async throws {
+        guard let local = project.localFolder, let rawPrefix = project.rawURL(for: "")?.absoluteString else { return }
+        guard let root = LocalFolderAccess.shared.url(of: local) else { throw LocalFolderError.unreachable(local.name) }
+        let (branch, commit, refs, signature) = try await serially(project.id) { () -> (String?, String?, ProjectRefs?, String) in
+            let repository = try? GitRepository(at: root)
+            let head = repository?.head()
+            let items = LocalFiles.list(at: root, repository: repository)
+            return (head?.branch, head?.commit, repository?.allRefs(), LocalFiles.signature(of: items))
+        }
+        index.save(CloneRecord(projectID: project.id, ref: .branch(branch ?? ""), commit: commit ?? "", depth: nil,
+                               rawPrefix: rawPrefix, checkedOutAt: .now, folderName: "", remoteRefs: refs,
+                               localFolder: local, localSignature: signature))
+        await documents.clonesChanged()
+    }
+
+    /// Reads a local folder again (pull down, Refresh, or coming back to the app): its files, its
+    /// branch and its branches. Returns whether anything changed.
+    @discardableResult
+    func refreshLocal(projectID: String) async throws -> Bool {
+        guard var record = index.record(forProject: projectID), let local = record.localFolder else { return false }
+        guard let root = LocalFolderAccess.shared.url(of: local) else { throw LocalFolderError.unreachable(local.name) }
+        let (branch, commit, refs, signature) = try await serially(projectID) { () -> (String?, String?, ProjectRefs?, String) in
+            let repository = try? GitRepository(at: root)
+            let head = repository?.head()
+            let items = LocalFiles.list(at: root, repository: repository)
+            return (head?.branch, head?.commit, repository?.allRefs(), LocalFiles.signature(of: items))
+        }
+        let ref = GitRef.branch(branch ?? "")
+        guard signature != record.localSignature || ref != record.ref || (commit ?? "") != record.commit
+                || refs != record.remoteRefs
+        else { return false }
+        record.ref = ref
+        record.commit = commit ?? ""
+        record.remoteRefs = refs
+        record.localSignature = signature
+        record.checkedOutAt = .now
+        index.save(record)  // its file list is read again
+        await documents.clonesChanged()
+        return true
+    }
+
+    /// Every local folder read again (coming back to the app): the ones that changed.
+    func refreshLocalFolders() async -> [String] {
+        var changed: [String] = []
+        for record in index.allRecords() where record.isLocal {
+            if (try? await refreshLocal(projectID: record.projectID)) == true { changed.append(record.projectID) }
+        }
+        return changed
+    }
+
+    /// A local folder's file list as it is now.
+    private func localTree(_ record: CloneRecord) async throws -> ProjectTree {
+        let root = index.folder(of: record)
+        guard FileManager.default.fileExists(atPath: root.path) else {
+            throw LocalFolderError.unreachable(record.localFolder?.name ?? "")
+        }
+        return try await serially(record.projectID) {
+            LocalFiles.tree(of: LocalFiles.list(at: root, repository: try? GitRepository(at: root)))
+        }
     }
 
     /// Switches the clone to another branch or tag, and returns its file list (from the clone).
@@ -317,6 +408,17 @@ actor CloneStore {
                   progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws -> ProjectTree {
         guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
         let folder = index.folder(of: record)
+        // A local folder: checked out in it, like `git checkout` (refused over uncommitted changes).
+        if record.isLocal {
+            let (branch, commit) = try await serially(projectID) { try GitRepository(at: folder).switchWorkingTree(to: ref) }
+            record.ref = .branch(branch ?? ref.name)
+            record.commit = commit
+            record.localSignature = nil
+            record.checkedOutAt = .now
+            index.save(record)
+            await documents.clonesChanged()
+            return try await localTree(record)
+        }
         let token = pulling ? await GitHubAuth.shared.token() : nil
         let depth = Self.initialDepth
         let (commit, tree, fetched) = try await serially(projectID) { () throws -> (String, ProjectTree, Bool) in
@@ -344,6 +446,7 @@ actor CloneStore {
     /// The file list at the clone's branch or tag, from the clone.
     func tree(projectID: String) async throws -> ProjectTree {
         guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        if record.isLocal { return try await localTree(record) }
         let folder = index.folder(of: record)
         let ref = record.ref
         return try await serially(projectID) { try GitRepository(at: folder).tree(of: ref) }
@@ -354,6 +457,8 @@ actor CloneStore {
     /// branch asked to be pulled again, even one pulled a minute before.)
     func fetchedRefs(projectID: String) async -> Set<String> {
         guard let record = index.record(forProject: projectID) else { return [] }
+        // A local folder has every branch it lists: none to pull.
+        if record.isLocal, let refs = record.remoteRefs { return Set(refs.branches + refs.tags) }
         let folder = index.folder(of: record)
         return (try? await serially(projectID) { () throws -> Set<String> in
             try GitRepository(at: folder).fetchedRefNames()
@@ -366,6 +471,11 @@ actor CloneStore {
     @discardableResult
     func refreshRefs(projectID: String) async throws -> ProjectRefs {
         guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        // A local folder: its own branches, from its `.git` (nothing from the network).
+        if record.isLocal {
+            try await refreshLocal(projectID: projectID)
+            return index.record(forProject: projectID)?.remoteRefs ?? ProjectRefs(branches: [], tags: [])
+        }
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
         let ref = record.ref
@@ -391,6 +501,10 @@ actor CloneStore {
     @discardableResult
     func fetch(projectID: String, progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws -> Int {
         guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        if record.isLocal {  // read again, from the folder
+            try await refreshLocal(projectID: projectID)
+            return 0
+        }
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
         let ref = record.ref
@@ -425,6 +539,8 @@ actor CloneStore {
     @discardableResult
     func pull(projectID: String, progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws -> Bool {
         guard var record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        // A local folder: read again from the folder, its edits too.
+        if record.isLocal { return try await refreshLocal(projectID: projectID) }
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
         let ref = record.ref
@@ -455,7 +571,7 @@ actor CloneStore {
     /// doesn't have yet, before Git compresses them. From GitHub's file list for the commit (one
     /// request); `nil` when that fails or is cut short (a very large repository).
     func downloadEstimate(of ref: GitRef, projectID: String) async -> Int64? {
-        guard let record = index.record(forProject: projectID),
+        guard let record = index.record(forProject: projectID), !record.isLocal,
               let tree = try? await ProjectStore.shared.remoteTree(for: projectID, ref: ref.name),
               !tree.truncated
         else { return nil }
@@ -503,7 +619,7 @@ actor CloneStore {
     /// the history shows what's in the clone, offline). Cancelled with its task.
     func loadMoreHistory(projectID: String,
                          progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws {
-        guard var record = index.record(forProject: projectID), let depth = record.depth else { return }
+        guard var record = index.record(forProject: projectID), !record.isLocal, let depth = record.depth else { return }
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
         let deeper = depth + Self.historyStep
@@ -569,6 +685,7 @@ actor CloneStore {
     /// a comparison's side that wasn't there.
     func fetchRef(_ ref: GitRef, projectID: String) async throws {
         guard let record = index.record(forProject: projectID) else { throw CloneError.notCloned }
+        if record.isLocal { throw CloneError.notFetched(ref.name) }  // a local folder has what it has
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
         let depth = Self.initialDepth
@@ -580,7 +697,7 @@ actor CloneStore {
     /// More history for a comparison's branches and tags (and the checked-out one), so where
     /// they split can be found.
     func loadMoreHistory(for refs: [GitRef], projectID: String) async throws {
-        guard var record = index.record(forProject: projectID) else { return }
+        guard var record = index.record(forProject: projectID), !record.isLocal else { return }
         let folder = index.folder(of: record)
         let token = await GitHubAuth.shared.token()
         // A clone with all its history (no depth) gets all of theirs too.

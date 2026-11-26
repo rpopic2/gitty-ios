@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// The right sidebar's state: how far it's pulled out. Shared through the environment so a
 /// screen can turn the edge swipe off (a symbol's page uses that swipe to page).
@@ -391,6 +392,9 @@ struct SideBarView: View {
     /// Add Project's alert, and what's typed in it.
     @State private var isAddingProject = false
     @State private var newProjectAddress = ""
+    /// Add Local Folder's picker, and why a folder couldn't be added.
+    @State private var isPickingFolder = false
+    @State private var folderError: String?
     /// The code font and its size, for pages and the symbol levels.
     @AppStorage(CodeTextStyle.fontKey) private var codeFont: CodeFont = .courier
     @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
@@ -456,11 +460,15 @@ struct SideBarView: View {
                         Image(systemName: "plus")
                     }
                 }
+                // A folder on this device (in Files, or in Finder on a Mac): read where it is.
+                Button { isPickingFolder = true } label: {
+                    Label("Add Local Folder", systemImage: "folder.badge.plus")
+                }
             } header: {
                 Text("Projects")
             } footer: {
                 if projects.isEmpty {
-                    Text("A project is a GitHub repository, or a folder of one.")
+                    Text("A project is a GitHub repository, a folder of one, or a folder on this device.")
                 }
             }
             // Options: denser rows than the lists above.
@@ -509,6 +517,18 @@ struct SideBarView: View {
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
         .environment(\.defaultMinListRowHeight, 34)  // lets the option rows be shorter
+        .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
+            switch result {
+            case .success(let url): addLocalFolder(url)
+            case .failure(let error): folderError = error.localizedDescription
+            }
+        }
+        .alert("Couldn’t Add Folder", isPresented: Binding(get: { folderError != nil },
+                                                           set: { if !$0 { folderError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(folderError ?? "")
+        }
         .alert("Add Project", isPresented: $isAddingProject) {
             TextField("owner/repository", text: $newProjectAddress)
                 .textInputAutocapitalization(.never)
@@ -551,6 +571,26 @@ struct SideBarView: View {
             let project = await ProjectStore.shared.add(link)
             projects = await ProjectStore.shared.projects()
             onSelect(project.id)
+        }
+    }
+
+    /// Adds the folder picked as a project (read where it is, edits included), and opens it.
+    private func addLocalFolder(_ url: URL) {
+        Task {
+            do {
+                let folder = try LocalFolderAccess.folder(picked: url)
+                let project = await ProjectStore.shared.add(local: folder)
+                do {
+                    try await CloneStore.shared.addLocal(project)
+                } catch {
+                    await ProjectStore.shared.remove(id: project.id)
+                    throw error
+                }
+                projects = await ProjectStore.shared.projects()
+                onSelect(project.id)
+            } catch {
+                folderError = error.localizedDescription
+            }
         }
     }
 
@@ -627,7 +667,7 @@ private struct SideBarProjectRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(project.title)
                         .lineLimit(1)
-                    Text([project.link.owner, project.ref].compactMap { $0 }.joined(separator: " · "))
+                    Text([project.subtitle, project.ref].compactMap { $0 }.joined(separator: " · "))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

@@ -1373,7 +1373,7 @@ struct CodeScreen: View {
     }
 
     private var barAddress: String {
-        guard mode == .project, let address = project?.link.webURL?.absoluteString else {
+        guard mode == .project, let address = project?.webURL?.absoluteString else {
             return model.url.absoluteString
         }
         return address
@@ -1420,7 +1420,7 @@ struct CodeScreen: View {
         let review = review
         Task {
             let repository = await ProjectStore.shared.project(id: projectID).map { project in
-                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref,
+                ReviewRepository(name: project.repositoryName, ref: project.ref,
                                  commit: CloneIndex.shared.record(forProject: projectID)?.commit)
             }
             review.add(selection, format: format, repository: repository, projectID: projectID, overSheet: false)
@@ -1446,7 +1446,7 @@ struct CodeScreen: View {
             let project = ProjectSymbolIndex.project(containing: url, in: projects)
             let commit = project.flatMap { CloneIndex.shared.record(forProject: $0.id)?.commit }
             let repository = project.map { project in
-                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref, commit: commit)
+                ReviewRepository(name: project.repositoryName, ref: project.ref, commit: commit)
             }
             review.add(path: path, format: format, repository: repository, projectID: project?.id ?? "")
         }
@@ -1479,7 +1479,7 @@ struct CodeScreen: View {
             )
             let project = ProjectSymbolIndex.project(containing: url, in: projects)
             let repository = project.map { project in
-                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref, commit: commit)
+                ReviewRepository(name: project.repositoryName, ref: project.ref, commit: commit)
             }
             // Each project has its review ("" for files outside projects).
             review.add(selection, format: format, repository: repository, projectID: project?.id ?? "")

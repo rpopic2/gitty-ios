@@ -64,31 +64,129 @@ nonisolated struct RepoLink: Hashable, Codable, Sendable {
     }
 }
 
-/// A project: a repository (or a folder of one) at a ref, as shown in the Project view.
+/// Where a project's files come from: a GitHub repository (or a folder of one), or a folder on
+/// this device.
+nonisolated enum ProjectSource: Hashable, Sendable {
+    case github(RepoLink)
+    case local(LocalFolder)
+}
+
+/// A project: a repository (or a folder of one) at a ref, or a folder on this device, as shown
+/// in the Project view.
 nonisolated struct ProjectInfo: Hashable, Codable, Sendable, Identifiable {
-    let link: RepoLink
-    /// Known once the tree has been fetched: the branch, tag or commit…
+    let source: ProjectSource
+    /// Known once the tree has been fetched: the branch, tag or commit (a local folder's: the
+    /// branch checked out, if it's a repository)…
     var ref: String?
     /// …and the folder the project starts at ("" for the whole repository).
     var folder: String?
     let addedAt: Date
 
-    var id: String { link.id }
-
-    /// `allang`, or `allang/alc` for a folder.
-    var title: String {
-        guard let folder, !folder.isEmpty else { return link.repo }
-        return link.repo + "/" + folder
+    init(link: RepoLink, ref: String?, folder: String?, addedAt: Date) {
+        self.init(source: .github(link), ref: ref, folder: folder, addedAt: addedAt)
     }
 
-    /// The raw file URL for a path in the repository (needs `ref`).
+    init(source: ProjectSource, ref: String?, folder: String?, addedAt: Date) {
+        self.source = source
+        self.ref = ref
+        self.folder = folder
+        self.addedAt = addedAt
+    }
+
+    /// A GitHub project's repository (`nil` for a local folder).
+    var link: RepoLink? {
+        if case .github(let link) = source { link } else { nil }
+    }
+
+    /// A local folder's (`nil` for a GitHub project).
+    var localFolder: LocalFolder? {
+        if case .local(let folder) = source { folder } else { nil }
+    }
+
+    var id: String {
+        switch source {
+        case .github(let link): link.id
+        case .local(let folder): "local/" + folder.id.uuidString.lowercased()
+        }
+    }
+
+    /// `allang`, or `allang/alc` for a folder; a local folder's name.
+    var title: String {
+        switch source {
+        case .local(let local):
+            return local.name
+        case .github(let link):
+            guard let folder, !folder.isEmpty else { return link.repo }
+            return link.repo + "/" + folder
+        }
+    }
+
+    /// Under the title: the repository's owner, or that it's on this device.
+    var subtitle: String {
+        switch source {
+        case .github(let link): link.owner
+        case .local: String(localized: "On This Device")
+        }
+    }
+
+    /// How a review names the repository: `owner/repo`, or a local folder's name.
+    var repositoryName: String {
+        switch source {
+        case .github(let link): link.owner + "/" + link.repo
+        case .local(let folder): folder.name
+        }
+    }
+
+    /// The project on github.com (`nil` for a local folder).
+    var webURL: URL? { link?.webURL }
+
+    /// The address of a file, by its path in the repository: a GitHub project's raw file URL at
+    /// its ref (needs `ref`); a local folder's `gitty-local://` one, whatever is checked out.
     func rawURL(for path: String) -> URL? {
-        guard let ref else { return nil }
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = "raw.githubusercontent.com"
-        components.path = "/" + [link.owner, link.repo, ref, path].joined(separator: "/")
-        return components.url
+        switch source {
+        case .local(let local):
+            var components = URLComponents()
+            components.scheme = LocalFolderAccess.scheme
+            components.host = local.id.uuidString.lowercased()
+            components.path = "/" + path
+            return components.url
+        case .github(let link):
+            guard let ref else { return nil }
+            var components = URLComponents()
+            components.scheme = "https"
+            components.host = "raw.githubusercontent.com"
+            components.path = "/" + [link.owner, link.repo, ref, path].joined(separator: "/")
+            return components.url
+        }
+    }
+
+    // Saved as before for GitHub projects (`link`), so the projects saved by earlier versions
+    // still read.
+    private enum CodingKeys: String, CodingKey {
+        case link, local, ref, folder, addedAt
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let local = try container.decodeIfPresent(LocalFolder.self, forKey: .local) {
+            source = .local(local)
+        } else {
+            source = .github(try container.decode(RepoLink.self, forKey: .link))
+        }
+        ref = try container.decodeIfPresent(String.self, forKey: .ref)
+        folder = try container.decodeIfPresent(String.self, forKey: .folder)
+        addedAt = try container.decode(Date.self, forKey: .addedAt)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch source {
+        case .github(let link): try container.encode(link, forKey: .link)
+        case .local(let local): try container.encode(local, forKey: .local)
+        }
+        try container.encodeIfPresent(ref, forKey: .ref)
+        try container.encodeIfPresent(folder, forKey: .folder)
+        try container.encode(addedAt, forKey: .addedAt)
     }
 }
 
@@ -249,6 +347,15 @@ actor ProjectStore {
         return project
     }
 
+    /// Adds a folder on this device (just picked) as a project, first in the list.
+    func add(local folder: LocalFolder) -> ProjectInfo {
+        var index = loadIndex()
+        let project = ProjectInfo(source: .local(folder), ref: nil, folder: "", addedAt: .now)
+        index.insert(project, at: 0)
+        saveIndex(index)
+        return project
+    }
+
     func remove(id: String) {
         trees[id] = nil
         refsCache[id] = nil
@@ -261,12 +368,26 @@ actor ProjectStore {
     /// The project's saved file list, fetching it only if there's none yet (or `refresh`).
     func tree(for id: String, refresh: Bool = false) async throws -> (ProjectInfo, ProjectTree) {
         guard var project = project(id: id) else { throw ProjectError.unknownProject }
+        // A folder on this device: listed from the folder as it is now (not saved: it's there).
+        guard let link = project.link else {
+            if !refresh, let tree = trees[id] { return (project, tree) }
+            let tree = try await CloneStore.shared.tree(projectID: id)
+            // The branch checked out now (none for a plain folder, or HEAD detached).
+            let branch = await CloneStore.shared.record(forProject: id)?.ref.name
+            let shown = branch?.isEmpty == false ? branch : nil
+            if project.ref != shown {
+                project.ref = shown
+                update(project)
+            }
+            trees[id] = tree
+            return (project, tree)
+        }
         let saved = savedTree(for: id)
         if let saved, !refresh, project.ref != nil { return (project, saved) }
 
         if let ref = project.ref {
             // `nil` means unchanged (304), which only happens when there's a saved tree.
-            guard let tree = try await fetchTree(project.link, ref: ref, etag: saved?.etag) ?? saved else {
+            guard let tree = try await fetchTree(link, ref: ref, etag: saved?.etag) ?? saved else {
                 throw ProjectError.notFound
             }
             saveTree(tree, for: id)
@@ -275,10 +396,10 @@ actor ProjectStore {
 
         // First fetch: work out the ref (the default branch, or which part of `/tree/…` is the
         // ref, since refs can contain slashes) and the folder.
-        let candidates = try await refCandidates(for: project.link)
+        let candidates = try await refCandidates(for: link)
         for (ref, folder) in candidates {
             do {
-                guard let tree = try await fetchTree(project.link, ref: ref, etag: nil) else { continue }
+                guard let tree = try await fetchTree(link, ref: ref, etag: nil) else { continue }
                 if !folder.isEmpty, !tree.entries.contains(where: { $0.path == folder && $0.kind == .folder }) {
                     continue  // that split didn't name a real folder
                 }
@@ -301,7 +422,8 @@ actor ProjectStore {
     func refs(for id: String, refresh: Bool = false) async throws -> ProjectRefs {
         guard let project = project(id: id) else { throw ProjectError.unknownProject }
         if !refresh, let known = refsCache[id] { return known }
-        let link = project.link
+        // A folder on this device: its repository's own (`git branch -a`).
+        guard let link = project.link else { return try await CloneStore.shared.refreshRefs(projectID: id) }
         let branches = try await names(at: "/repos/\(link.owner)/\(link.repo)/branches")
         let tags = try await names(at: "/repos/\(link.owner)/\(link.repo)/tags")
         let refs = ProjectRefs(branches: branches, tags: tags)
@@ -329,7 +451,8 @@ actor ProjectStore {
     /// it, and its files' addresses change with it.
     func setRef(_ ref: String, for id: String) async throws -> (ProjectInfo, ProjectTree) {
         guard var project = project(id: id) else { throw ProjectError.unknownProject }
-        guard let tree = try await fetchTree(project.link, ref: ref, etag: nil) else { throw ProjectError.notFound }
+        guard let link = project.link else { throw ProjectError.notFound }  // a local folder checks out instead
+        guard let tree = try await fetchTree(link, ref: ref, etag: nil) else { throw ProjectError.notFound }
         project.ref = ref
         update(project)
         saveTree(tree, for: id)
@@ -342,7 +465,7 @@ actor ProjectStore {
         guard var project = project(id: id) else { throw ProjectError.unknownProject }
         project.ref = ref
         update(project)
-        saveTree(tree, for: id)
+        if project.link == nil { trees[id] = tree } else { saveTree(tree, for: id) }
         return (project, tree)
     }
 
@@ -367,8 +490,8 @@ actor ProjectStore {
     /// The repository's file list at a branch or tag's latest commit, from GitHub, not saved:
     /// for telling what a Git fetch would download.
     func remoteTree(for id: String, ref: String) async throws -> ProjectTree {
-        guard let project = project(id: id) else { throw ProjectError.unknownProject }
-        guard let tree = try await fetchTree(project.link, ref: ref, etag: nil) else { throw ProjectError.notFound }
+        guard let link = project(id: id)?.link else { throw ProjectError.unknownProject }
+        guard let tree = try await fetchTree(link, ref: ref, etag: nil) else { throw ProjectError.notFound }
         return tree
     }
 

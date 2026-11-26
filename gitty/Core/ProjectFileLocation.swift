@@ -9,11 +9,11 @@ nonisolated struct ProjectFileLocation: Equatable, Sendable {
 
     /// The file on github.com, at the project's branch or tag.
     var webURL: URL? {
-        guard let ref = project.ref else { return nil }
+        guard let ref = project.ref, let link = project.link else { return nil }
         var components = URLComponents()
         components.scheme = "https"
         components.host = "github.com"
-        components.path = "/" + [project.link.owner, project.link.repo, "blob", ref, path].joined(separator: "/")
+        components.path = "/" + [link.owner, link.repo, "blob", ref, path].joined(separator: "/")
         return components.url
     }
 

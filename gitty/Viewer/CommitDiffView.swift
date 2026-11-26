@@ -355,7 +355,7 @@ extension DiffPage {
         let projectID = projectID
         Task {
             let repository = await ProjectStore.shared.project(id: projectID).map { project in
-                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref,
+                ReviewRepository(name: project.repositoryName, ref: project.ref,
                                  commit: CloneIndex.shared.record(forProject: projectID)?.commit)
             }
             review.add(selection, format: format, repository: repository, projectID: projectID)
