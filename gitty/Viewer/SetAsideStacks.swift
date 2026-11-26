@@ -87,23 +87,29 @@ final class SetAsideStore {
 /// The stacks set aside in the album shown, in a chip over the bar: the latest's top page and
 /// how many cards it has (or how many stacks). Tap it to open the stack, or with several, to
 /// fan them out upwards, one chip each, the latest nearest; tap one to open it, or the chip
-/// under them to fold them again. Swipe up on them to fan them out too, and down to fold them.
+/// under them to fold them again. Drag up on them to fan them out, following the finger, and
+/// down to fold them.
 /// Swipe a chip sideways to throw that stack away.
 struct SetAsideChips: View {
     let stacks: [SetAsideStack]
     let onOpen: @MainActor (SetAsideStack) -> Void
     let onDrop: @MainActor (SetAsideStack) -> Void
 
-    @State private var isFannedOut = false
+    /// How far fanned out: 0 folded, 1 all out. Follows the finger while dragged up or down.
+    @State private var fan: CGFloat = 0
+    /// `fan` when the drag began.
+    @State private var fanAtDragStart: CGFloat?
     /// A chip's height.
     static let chipHeight: CGFloat = 36
+    /// From one chip to the next, fanned out.
+    private static let step: CGFloat = chipHeight + 8
 
     // In parts: as one expression, it was too much for the type checker.
     var body: some View {
         let stackCount: Int = stacks.count
         let ids: [UUID] = stacks.map(\.id)
-        return VStack(spacing: 8) {
-            if isFannedOut, stackCount > 1 {
+        return ZStack(alignment: .bottom) {
+            if fan > 0, stackCount > 1 {
                 fannedOut
             }
             if let latest = stacks.last {
@@ -113,26 +119,31 @@ struct SetAsideChips: View {
         .animation(.smooth(duration: 0.25), value: ids)
         // Down to one (or none): nothing to fan out.
         .onChange(of: stackCount) { _, new in
-            if new < 2 { isFannedOut = false }
+            if new < 2 { fan = 0 }
         }
     }
 
-    /// The stacks, one chip each: the oldest at the top, the latest just over the main chip.
+    /// The stacks, one chip each, coming out from behind the main chip as it fans out: the
+    /// latest just over it, the oldest at the top.
     private var fannedOut: some View {
-        ForEach(stacks) { stack in
+        let latestFirst: [SetAsideStack] = stacks.reversed()
+        return ForEach(Array(latestFirst.enumerated()), id: \.element.id) { place, stack in
             chip(for: stack)
                 .frame(maxWidth: 260)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .offset(y: -CGFloat(place + 1) * Self.step * fan)
+                .opacity(Double(min(1, fan * 1.5)))
+                .allowsHitTesting(fan > 0.9)
         }
     }
 
     private func chip(for stack: SetAsideStack) -> SetAsideChip {
         SetAsideChip(title: stack.title, symbolImage: stack.symbolImage, count: stack.cardCount,
-                     onTap: { open(stack) }, onDrop: { onDrop(stack) }, onSwipe: { up in fan(up) })
+                     onTap: { open(stack) }, onDrop: { onDrop(stack) },
+                     onVerticalDrag: { dy in dragged(dy) }, onVerticalEnd: { dy, flung in released(dy, flung) })
     }
 
-    /// The latest stack's chip, or, with several, how many there are (tap or swipe up to fan them
-    /// out).
+    /// The latest stack's chip, or, with several, how many there are (tap, or drag it up, to fan
+    /// them out).
     private func mainChip(_ latest: SetAsideStack) -> some View {
         let several: Bool = stacks.count > 1
         var chip = SetAsideChip(title: latest.title, symbolImage: latest.symbolImage, count: latest.cardCount,
@@ -140,31 +151,47 @@ struct SetAsideChips: View {
         if several {
             let all = stacks
             let title = String(localized: "\(all.count) Stacks")
-            chip = SetAsideChip(title: title, symbolImage: isFannedOut ? "chevron.down" : "square.stack.3d.up",
+            chip = SetAsideChip(title: title, symbolImage: fan > 0.5 ? "chevron.down" : "square.stack.3d.up",
                                 count: nil,
-                                onTap: { toggleFan() },
+                                onTap: { settle(fan > 0.5 ? 0 : 1) },
                                 // Swiping the folded chip away throws them all away.
                                 onDrop: { for stack in all { onDrop(stack) } },
-                                onSwipe: { up in fan(up) })
+                                onVerticalDrag: { dy in dragged(dy) },
+                                onVerticalEnd: { dy, flung in released(dy, flung) })
         }
         return chip
             .frame(maxWidth: 220)
             .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
-    private func toggleFan() {
-        withAnimation(.smooth(duration: 0.25)) { isFannedOut.toggle() }
+    /// The whole way up, fanned out.
+    private var span: CGFloat {
+        max(Self.step, CGFloat(stacks.count) * Self.step)
+    }
+
+    /// Dragged up (`dy` < 0) or down: as far out as the finger.
+    private func dragged(_ dy: CGFloat) {
+        guard stacks.count > 1 else { return }
+        let start = fanAtDragStart ?? fan
+        fanAtDragStart = start
+        fan = min(1, max(0, start - dy / span))
+    }
+
+    /// Let go: all the way out or back in, whichever it was nearer (or flung toward).
+    private func released(_ dy: CGFloat, _ flung: CGFloat) {
+        guard stacks.count > 1 else { return }
+        let start = fanAtDragStart ?? fan
+        fanAtDragStart = nil
+        settle(start - flung / span > 0.5 ? 1 : 0)
+    }
+
+    private func settle(_ target: CGFloat) {
+        withAnimation(.smooth(duration: 0.25)) { fan = target }
     }
 
     private func open(_ stack: SetAsideStack) {
-        isFannedOut = false
+        fan = 0
         onOpen(stack)
-    }
-
-    /// Swiped up: fanned out; down: folded.
-    private func fan(_ up: Bool) {
-        guard stacks.count > 1, up != isFannedOut else { return }
-        withAnimation(.smooth(duration: 0.25)) { isFannedOut = up }
     }
 }
 
@@ -177,10 +204,14 @@ private struct SetAsideChip: View {
     let count: Int?
     let onTap: @MainActor () -> Void
     let onDrop: @MainActor () -> Void
-    /// Swiped up (`true`) or down, for the chips to fan out or fold (`nil`: nothing to do).
-    var onSwipe: (@MainActor (_ up: Bool) -> Void)? = nil
+    /// Dragged up or down (how far), for the chips to fan out or fold as the finger goes…
+    var onVerticalDrag: (@MainActor (CGFloat) -> Void)? = nil
+    /// …and let go (how far, and how far a fling would have gone).
+    var onVerticalEnd: (@MainActor (_ translation: CGFloat, _ predicted: CGFloat) -> Void)? = nil
 
     @State private var dragX: CGFloat = 0
+    /// The way this drag went first: sideways (throwing it away) or up and down (fanning).
+    @State private var isVertical: Bool?
     /// Far enough to throw away, with a tap of haptics as it gets there.
     private static let dropDistance: CGFloat = 90
 
@@ -219,16 +250,22 @@ private struct SetAsideChip: View {
         .gesture(
             DragGesture(minimumDistance: 10)
                 .onChanged { value in
-                    // Sideways follows the finger (to throw it away); up and down don't move it.
+                    // Sideways follows the finger (to throw it away); up and down fan the chips.
                     let t = value.translation
-                    dragX = abs(t.width) > abs(t.height) ? t.width : 0
+                    let vertical = isVertical ?? (abs(t.height) > abs(t.width))
+                    isVertical = vertical
+                    if vertical {
+                        onVerticalDrag?(t.height)
+                    } else {
+                        dragX = t.width
+                    }
                 }
                 .onEnded { value in
                     let t = value.translation
-                    if abs(t.height) > abs(t.width) {
-                        withAnimation(.spring(duration: 0.3)) { dragX = 0 }
-                        let flung = value.predictedEndTranslation.height
-                        if abs(t.height) > 20 || abs(flung) > 60 { onSwipe?(t.height < 0) }
+                    let vertical = isVertical ?? (abs(t.height) > abs(t.width))
+                    isVertical = nil
+                    if vertical {
+                        onVerticalEnd?(t.height, value.predictedEndTranslation.height)
                         return
                     }
                     let dx = t.width, flung = value.predictedEndTranslation.width
