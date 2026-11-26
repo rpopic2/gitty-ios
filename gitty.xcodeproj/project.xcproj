@@ -274,6 +274,7 @@
     "ONLY_ACTIVE_ARCH[config=Debug]": "YES",
     "PROJECT_UNIQUE_VALUE": "S80QK09A",
     "STRING_CATALOG_GENERATE_SYMBOLS": "YES",
+    "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
     "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": "DEBUG $(inherited)",
     "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
     "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
