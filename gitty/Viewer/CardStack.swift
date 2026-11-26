@@ -318,7 +318,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     label.background(.bar, in: Capsule())
                 }
             }
-            // Up: the stack set aside; sideways: on to the album beside.
+            // Up or down: the stack set aside; sideways: on to the album beside.
             .stackCaptionSwipes(stackActions)
             .padding(.horizontal, 24)
         }

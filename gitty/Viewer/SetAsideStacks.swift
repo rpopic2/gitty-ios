@@ -208,20 +208,21 @@ private struct SetAsideChip: View {
 
 // MARK: - A caption's swipes
 
-/// A page's caption (a card's, or a results page's capsule): swipe it up to set the stack
+/// A page's caption (a card's, or a results page's capsule): swipe it up or down to set the stack
 /// aside, or sideways to set it aside and go to the album beside, as the bar's swipe does. It
 /// follows the finger a little, with a tap of haptics once far enough.
 struct StackCaptionSwipes: ViewModifier {
     let actions: StackActions?
 
     @State private var drag: CGSize = .zero
+    /// Up or down (down is where the stack goes, into the chip over the bar).
     private static let upDistance: CGFloat = 50
     private static let sideDistance: CGFloat = 80
 
     func body(content: Content) -> some View {
         if let actions, actions.setAside != nil || actions.switchAlbum != nil {
             content
-                .offset(x: drag.width, y: min(0, drag.height))
+                .offset(x: drag.width, y: drag.height)
                 .sensoryFeedback(.impact(weight: .light), trigger: isPastThreshold) { old, new in new && !old }
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 12)
@@ -231,7 +232,7 @@ struct StackCaptionSwipes: ViewModifier {
                             if abs(t.width) > abs(t.height) {
                                 drag = CGSize(width: t.width / (1 + abs(t.width) / 160), height: 0)
                             } else {
-                                drag = CGSize(width: 0, height: t.height < 0 ? t.height / (1 + abs(t.height) / 120) : 0)
+                                drag = CGSize(width: 0, height: t.height / (1 + abs(t.height) / 120))
                             }
                         }
                         .onEnded { value in
@@ -241,7 +242,7 @@ struct StackCaptionSwipes: ViewModifier {
                                 let goes = abs(t.width) > Self.sideDistance || abs(flung.width) > Self.sideDistance * 2.5
                                 // Finger to the left: the album after (as the bar's swipe).
                                 if goes { _ = actions.switchAlbum?(t.width < 0) }
-                            } else if t.height < -Self.upDistance || flung.height < -Self.upDistance * 3 {
+                            } else if abs(t.height) > Self.upDistance || abs(flung.height) > Self.upDistance * 3 {
                                 actions.setAside?()
                             }
                         }
@@ -253,7 +254,7 @@ struct StackCaptionSwipes: ViewModifier {
 
     private var isPastThreshold: Bool {
         // In the dampened offset, about where the finger's thresholds are.
-        drag.height < -Self.upDistance * 0.7 || abs(drag.width) > Self.sideDistance * 0.65
+        abs(drag.height) > Self.upDistance * 0.7 || abs(drag.width) > Self.sideDistance * 0.65
     }
 }
 

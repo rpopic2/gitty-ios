@@ -378,7 +378,7 @@ private struct SymbolCaption: View {
                     Button("Close Stack", systemImage: "xmark", action: close)
                 }
             }
-            // Up: the stack set aside; sideways: on to the album beside.
+            // Up or down: the stack set aside; sideways: on to the album beside.
             .stackCaptionSwipes(stackActions)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
