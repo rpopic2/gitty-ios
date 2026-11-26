@@ -583,6 +583,8 @@ struct BottomBarStack: View {
     @State private var makesNew = false
     /// Let go, and still moving back into place or on to the neighbour.
     @State private var isSettling = false
+    /// The slide on to a neighbour is still going.
+    @State private var isSliding = false
     /// 1 at rest. Just after a switch, 0: the neighbour on the far side, new on screen, comes in
     /// from just off it.
     @State private var arrival: CGFloat = 1
@@ -675,8 +677,11 @@ struct BottomBarStack: View {
             let inset = isActive ? edgeInset(swipe) : 0
             let spacing = neighbourSpacing(swipe)
             // The new album showing already (the slide over): from here, at rest.
+            // The new album showing already, perhaps mid-slide: the strip carries on from where it
+            // is, the bar now the one that was sliding in (the slide's remaining way still to go).
             let switched = switchingFrom != nil && swipe.currentID != switchingFrom
-            let x = switched ? 0 : dragX
+            let shift = arrivedForward ? neighbourSpacing(swipe) : -neighbourSpacing(swipe)
+            let x = switched ? dragX + shift : dragX
             let arrived = switched ? 0 : arrival
             // Pulled up, the edges leave to the sides, gone by a few dozen points; just after a
             // switch, the far one comes in from there.
@@ -706,15 +711,18 @@ struct BottomBarStack: View {
                 // The new album shows: the strip is at rest around it now.
                 .onChange(of: swipe.currentID) {
                     guard switchingFrom != nil else { return }
+                    // Where the strip is, in the new album's terms (not moved: the slide, if it's
+                    // still going, goes on to its end, which is the new rest).
+                    let shift = arrivedForward ? neighbourSpacing(swipe) : -neighbourSpacing(swipe)
                     var instant = Transaction()
                     instant.disablesAnimations = true
                     withTransaction(instant) {
-                        dragX = 0
+                        dragX += shift
                         arrival = 0
                         switchingFrom = nil
                     }
                     withAnimation(.smooth(duration: 0.25)) { arrival = 1 }
-                    isSettling = false
+                    if !isSliding { isSettling = false }
                 }
                 // The handle stays in the middle as the bars slide under it (after the offset: not
                 // moved by it).
@@ -915,24 +923,30 @@ struct BottomBarStack: View {
             return
         }
         swipe.onRelease?(forward)
-        // The neighbour slides into the bar's place (the bar into a neighbour's), then
-        // becomes the bar once the album shows (see `onChange(of: currentID)`).
+        // The neighbour slides into the bar's place (the bar into a neighbour's), and the album
+        // switches as the finger lets go, not once the slide is over: the new album's code is
+        // made meanwhile, and the bar becomes the new album's wherever the slide is by then
+        // (see `onChange(of: currentID)`).
         isSettling = true
+        isSliding = true
         arrivedForward = forward
+        switchingFrom = swipe.currentID
         // Once it's really there: "logically" complete, a spring still had a few points to go,
         // and the new album's bar jumped them as it took over.
         withAnimation(.smooth(duration: 0.22), completionCriteria: .removed) {
             dragX = forward ? -neighbourSpacing(swipe) : neighbourSpacing(swipe)
         } completion: {
-            switchingFrom = swipe.currentID
-            swipe.onSwitch(forward)
-            // Should the album not change after all: back to rest.
-            Task {
-                try? await Task.sleep(for: .seconds(1))
-                guard switchingFrom != nil else { return }
-                switchingFrom = nil
-                springBack()
-            }
+            isSliding = false
+            if switchingFrom == nil { isSettling = false }  // the album has changed: done
+        }
+        swipe.onSwitch(forward)
+        // Should the album not change after all: back to rest.
+        Task {
+            try? await Task.sleep(for: .seconds(1.2))
+            guard switchingFrom != nil else { return }
+            switchingFrom = nil
+            isSliding = false
+            springBack()
         }
     }
 }
@@ -1014,7 +1028,17 @@ final class AlbumSlideState {
             return
         }
         comesFromRight = forward
-        withAnimation(.smooth(duration: 0.22)) { offset = forward ? -width : width }
+        isSlidingOut = true
+        withAnimation(.smooth(duration: 0.22)) {
+            offset = forward ? -width : width
+        } completion: {
+            self.isSlidingOut = false
+            // The new album came while this one went: in it comes now.
+            if let pending = self.pendingIn {
+                self.pendingIn = nil
+                self.slideIn(from: pending)
+            }
+        }
         // Should the album not change after all: back.
         Task {
             try? await Task.sleep(for: .seconds(1.2))
@@ -1024,21 +1048,33 @@ final class AlbumSlideState {
         }
     }
 
-    /// The new album shows: its code slides in.
+    /// Going off to the side (the old album's code).
+    @ObservationIgnored private var isSlidingOut = false
+    /// The new album, shown while the old one was still going: from which side it comes in.
+    @ObservationIgnored private var pendingIn: Bool?
+
+    /// The new album shows (now as the finger lets go, usually while the old one is still on
+    /// its way out): its code slides in once the old has gone.
     func albumChanged() {
         guard let fromRight = comesFromRight else { return }
         comesFromRight = nil
-        // Not here, in the change of album itself: moving the code in the same update made
-        // SwiftUI lay the new album's list out there and then, and again in the next update
-        // (half a second, a hang). A moment later, the list is laid out once, still off to the
-        // side, and only moves in.
-        Task { @MainActor in
-            await Task.yield()
-            var instant = Transaction()
-            instant.disablesAnimations = true
-            withTransaction(instant) { offset = fromRight ? width : -width }
-            withAnimation(.smooth(duration: 0.28)) { offset = 0 }
+        if isSlidingOut {
+            pendingIn = fromRight
+        } else {
+            // A moment later, not in the change of album itself: moving the code in the same
+            // update made SwiftUI lay the new list out there and then, and again after.
+            Task { @MainActor in
+                await Task.yield()
+                self.slideIn(from: fromRight)
+            }
         }
+    }
+
+    private func slideIn(from right: Bool) {
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { offset = right ? width : -width }
+        withAnimation(.smooth(duration: 0.28)) { offset = 0 }
     }
 }
 

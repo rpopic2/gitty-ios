@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// The right sidebar's state: how far it's pulled out. Shared through the environment so a
 /// screen can turn the edge swipe off (a symbol's page uses that swipe to page).
@@ -229,7 +230,8 @@ private struct SideBarDim: View {
 }
 
 /// The sidebar's swipes, on the whole window: UIKit's screen-edge swipe from the right edge opens
-/// it, and a swipe to the right anywhere closes it while it's open. They're attached to the
+/// it (on a Mac, a two-finger swipe to the left near the window's right side), and a swipe to
+/// the right anywhere closes it while it's open. They're attached to the
 /// window (not to a view in front of the content), so they don't take touches from anything,
 /// and scroll views wait for them to fail before they start scrolling. Neither starts for a
 /// vertical swipe, so the sidebar's list scrolls as usual.
@@ -241,7 +243,8 @@ private struct ScreenEdgePan: UIViewRepresentable {
     func makeUIView(context: Context) -> InstallerView {
         let view = InstallerView()
         view.isUserInteractionEnabled = false
-        view.recognizers = [context.coordinator.openRecognizer, context.coordinator.closeRecognizer]
+        view.recognizers = [context.coordinator.openRecognizer, context.coordinator.closeRecognizer,
+                            context.coordinator.trackpadOpenRecognizer]
         return view
     }
 
@@ -266,6 +269,9 @@ private struct ScreenEdgePan: UIViewRepresentable {
         var state: SideBarState?
         let openRecognizer = UIScreenEdgePanGestureRecognizer()
         let closeRecognizer = UIPanGestureRecognizer()
+        /// On a Mac (or an iPad with a trackpad), where there's no screen edge to swipe from:
+        /// a two-finger swipe to the left, with the pointer near the window's right side.
+        let trackpadOpenRecognizer = UIPanGestureRecognizer()
 
         override init() {
             super.init()
@@ -274,6 +280,31 @@ private struct ScreenEdgePan: UIViewRepresentable {
             openRecognizer.delegate = self
             closeRecognizer.addTarget(self, action: #selector(closePan(_:)))
             closeRecognizer.delegate = self
+            // A two-finger swipe to the right closes it too.
+            closeRecognizer.allowedScrollTypesMask = .continuous
+            trackpadOpenRecognizer.allowedScrollTypesMask = .continuous
+            trackpadOpenRecognizer.allowedTouchTypes = []  // a trackpad's swipes only, never a touch
+            trackpadOpenRecognizer.addTarget(self, action: #selector(trackpadOpenPan(_:)))
+            trackpadOpenRecognizer.delegate = self
+        }
+
+        @objc private func trackpadOpenPan(_ recognizer: UIPanGestureRecognizer) {
+            guard let state, let view = recognizer.view else { return }
+            switch recognizer.state {
+            case .changed:
+                state.track(-recognizer.translation(in: view).x)
+            case .ended:
+                state.settle(velocity: -recognizer.velocity(in: view).x)
+            case .cancelled, .failed:
+                state.close()
+            default:
+                break
+            }
+        }
+
+        /// How near the window's right side the pointer has to be for the two-finger swipe.
+        private static func trackpadEdgeWidth(of window: UIView) -> CGFloat {
+            max(120, window.bounds.width * 0.25)
         }
 
         @objc private func openPan(_ recognizer: UIScreenEdgePanGestureRecognizer) {
@@ -306,6 +337,14 @@ private struct ScreenEdgePan: UIViewRepresentable {
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard let state else { return false }
+            if gestureRecognizer === trackpadOpenRecognizer {
+                guard state.isEdgeSwipeEnabled, !state.isOpen, let window = trackpadOpenRecognizer.view
+                else { return false }
+                let velocity = trackpadOpenRecognizer.velocity(in: window)
+                let location = trackpadOpenRecognizer.location(in: window)
+                return location.x > window.bounds.width - Self.trackpadEdgeWidth(of: window)
+                    && velocity.x < 0 && -velocity.x > abs(velocity.y)  // mostly leftward
+            }
             guard gestureRecognizer === closeRecognizer else {
                 return state.isEdgeSwipeEnabled && !state.isOpen
             }
@@ -331,8 +370,10 @@ private struct ScreenEdgePan: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
             // Not the bottom bar's swipes: they start away from the edge, and waiting held them up.
-            other is UIPanGestureRecognizer && !(other is BarPanRecognizer)
-                && other !== openRecognizer && other !== closeRecognizer
+            // Nothing waits for the two-finger swipe: it only starts near the right side, leftwards.
+            gestureRecognizer !== trackpadOpenRecognizer
+                && other is UIPanGestureRecognizer && !(other is BarPanRecognizer)
+                && other !== openRecognizer && other !== closeRecognizer && other !== trackpadOpenRecognizer
         }
     }
 }
@@ -351,6 +392,9 @@ struct SideBarView: View {
     /// Add Project's alert, and what's typed in it.
     @State private var isAddingProject = false
     @State private var newProjectAddress = ""
+    /// Add Local Folder's picker, and why a folder couldn't be added.
+    @State private var isPickingFolder = false
+    @State private var folderError: String?
     /// The code font and its size, for pages and the symbol levels.
     @AppStorage(CodeTextStyle.fontKey) private var codeFont: CodeFont = .courier
     @AppStorage(CodeTextStyle.sizeKey) private var codeFontSize = Double(CodeTextStyle.defaultSize)
@@ -416,11 +460,15 @@ struct SideBarView: View {
                         Image(systemName: "plus")
                     }
                 }
+                // A folder on this device (in Files, or in Finder on a Mac): read where it is.
+                Button { isPickingFolder = true } label: {
+                    Label("Add Local Folder", systemImage: "folder.badge.plus")
+                }
             } header: {
                 Text("Projects")
             } footer: {
                 if projects.isEmpty {
-                    Text("A project is a GitHub repository, or a folder of one.")
+                    Text("A project is a GitHub repository, a folder of one, or a folder on this device.")
                 }
             }
             // Options: denser rows than the lists above.
@@ -469,6 +517,18 @@ struct SideBarView: View {
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
         .environment(\.defaultMinListRowHeight, 34)  // lets the option rows be shorter
+        .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
+            switch result {
+            case .success(let url): addLocalFolder(url)
+            case .failure(let error): folderError = error.localizedDescription
+            }
+        }
+        .alert("Couldn’t Add Folder", isPresented: Binding(get: { folderError != nil },
+                                                           set: { if !$0 { folderError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(folderError ?? "")
+        }
         .alert("Add Project", isPresented: $isAddingProject) {
             TextField("owner/repository", text: $newProjectAddress)
                 .textInputAutocapitalization(.never)
@@ -511,6 +571,26 @@ struct SideBarView: View {
             let project = await ProjectStore.shared.add(link)
             projects = await ProjectStore.shared.projects()
             onSelect(project.id)
+        }
+    }
+
+    /// Adds the folder picked as a project (read where it is, edits included), and opens it.
+    private func addLocalFolder(_ url: URL) {
+        Task {
+            do {
+                let folder = try LocalFolderAccess.folder(picked: url)
+                let project = await ProjectStore.shared.add(local: folder)
+                do {
+                    try await CloneStore.shared.addLocal(project)
+                } catch {
+                    await ProjectStore.shared.remove(id: project.id)
+                    throw error
+                }
+                projects = await ProjectStore.shared.projects()
+                onSelect(project.id)
+            } catch {
+                folderError = error.localizedDescription
+            }
         }
     }
 
@@ -587,7 +667,7 @@ private struct SideBarProjectRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(project.title)
                         .lineLimit(1)
-                    Text([project.link.owner, project.ref].compactMap { $0 }.joined(separator: " · "))
+                    Text([project.subtitle, project.ref].compactMap { $0 }.joined(separator: " · "))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

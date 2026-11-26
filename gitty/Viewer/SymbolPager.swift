@@ -143,6 +143,7 @@ struct SymbolPager: View {
                                     onComment: pageComment,
                                     albumMenu: pageAlbumMenu(for: symbol),
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension,
+                                    growsSelectionBySyntax: !isDiffPage,
                                     highlight: highlights?.current,
                                     onHighlight: { highlights?.current = $0 },
                                     positionURL: isFilePage && !isDiffPage ? symbol.fileURL ?? openFile : nil,
@@ -368,9 +369,21 @@ private struct SymbolCaption: View {
     var body: some View {
         capsule
             .onTapGesture { onInfo() }
+            // Touch and hold: Set Aside (as swiping it up does) or Close Stack.
+            .contextMenu {
+                if let setAside = stackActions?.setAside {
+                    Button("Set Aside", systemImage: "square.stack.3d.down.right", action: setAside)
+                }
+                if let close = stackActions?.close {
+                    Button("Close Stack", systemImage: "xmark", action: close)
+                }
+            }
+            // Up: the stack set aside; sideways: on to the album beside.
+            .stackCaptionSwipes(stackActions)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityHint(Text("Shows the file’s info and history"))
+            .accessibilityAction(named: Text("Set Aside")) { stackActions?.setAside?() }
     }
 
     @ViewBuilder
@@ -430,6 +443,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
     var albumMenu: (@MainActor (NSRange) -> UIMenu?)? = nil
     /// Highlight in the text menu: the file's extension, for its tree-sitter grammar…
     var fileExtension = ""
+    /// Double tapping a selection grows it by the code's syntax (not a diff's page: its text
+    /// is the diff).
+    var growsSelectionBySyntax = true
     /// …the identifier highlighted on every page…
     var highlight: IdentifierHighlight? = nil
     /// …and choosing it (`nil`: Remove Highlight). `nil` hides the item.
@@ -512,6 +528,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         coordinator.onComment = onComment
         coordinator.albumMenu = albumMenu
         coordinator.fileExtension = fileExtension
+        coordinator.growsSelectionBySyntax = growsSelectionBySyntax
         coordinator.highlight = highlight
         coordinator.onHighlight = onHighlight
         coordinator.onRefresh = onRefresh
@@ -578,6 +595,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
         var onComment: (@MainActor (NSRange) -> Void)?
         var albumMenu: (@MainActor (NSRange) -> UIMenu?)?
         var fileExtension = ""
+        var growsSelectionBySyntax = true
         /// The highlight wanted on this page.
         var highlight: IdentifierHighlight?
         var onHighlight: (@MainActor (IdentifierHighlight?) -> Void)?
@@ -884,19 +902,35 @@ struct ReadOnlyTextView: UIViewRepresentable {
         /// The character double-tapped, kept a moment (the text view's own double tap may select
         /// the word just before or just after this one sees the taps).
         private var pressIndex: Int?
+        /// What the double tap selects: the token there, or, on a selection, what it grows to.
+        private var pressTarget: NSRange?
         private var pressCount = 0
         private var isSnapping = false
+        /// The selection as the taps began (the first tap clears it, the second selects a word),
+        /// and when the last tap's touch came.
+        private var selectionAtTouch: NSRange?
+        private var lastTokenTouch: TimeInterval = 0
 
         @objc func handleTokenTap(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended, let textView = gesture.view as? UITextView else { return }
             pressCount += 1
-            pressIndex = characterIndex(at: gesture.location(in: textView), in: textView)
+            let index = characterIndex(at: gesture.location(in: textView), in: textView)
+            pressIndex = index
+            // On a selection: the smallest piece of syntax around it, bigger than it (each double
+            // tap a step out). Elsewhere: the token there.
+            pressTarget = nil
+            if let base = selectionAtTouch, let index, NSLocationInRange(index, base), growsSelectionBySyntax {
+                pressTarget = SyntaxSelection.range(enclosing: base, in: textView.textStorage.string,
+                                                    fileExtension: fileExtension)
+            }
+            selectionAtTouch = nil
             snapSelection(in: textView)  // in case the word was selected first
             let count = pressCount
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(400))
                 guard let self, self.pressCount == count else { return }
                 self.pressIndex = nil
+                self.pressTarget = nil
             }
         }
 
@@ -920,7 +954,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
             guard !isSnapping, let index = pressIndex else { return }
             let selected = textView.selectedRange
             guard selected.length > 0, NSLocationInRange(index, selected),
-                  let token = CodeToken.range(at: index, in: textView.textStorage.mutableString)
+                  let token = pressTarget ?? CodeToken.range(at: index, in: textView.textStorage.mutableString)
             else { return }
             if token != selected {
                 isSnapping = true
@@ -998,6 +1032,16 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
         /// The peek only takes touches that start at the screen's left edge.
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            if gestureRecognizer === tokenTap, let textView = gestureRecognizer.view as? UITextView {
+                // The first tap's touch (not the second's, after the first cleared it): the
+                // selection a double tap grows.
+                if touch.timestamp - lastTokenTouch > 0.5 {
+                    let selected = textView.selectedRange
+                    selectionAtTouch = selected.length > 0 ? selected : nil
+                }
+                lastTokenTouch = touch.timestamp
+                return true
+            }
             guard gestureRecognizer === peek else { return true }
             guard lineNumbering != nil, touch.location(in: nil).x <= Self.peekEdgeWidth else { return false }
             // If going back wins the drag before the peek starts, the numbers still come out.

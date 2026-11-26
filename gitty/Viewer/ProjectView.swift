@@ -64,6 +64,8 @@ private struct LooseFilesView: View {
     let onOpen: @MainActor (URL) -> Void
 
     @State private var projectPrefixes: [String] = []
+    /// The projects have been read (until then, it isn't known whether there are any).
+    @State private var hasReadProjects = false
     @State private var recents: [URL] = []
     @State private var saved: [URL] = []
 
@@ -112,12 +114,21 @@ private struct LooseFilesView: View {
         .scrollDismissesKeyboard(.immediately)  // any swipe hides the keyboard
         .scrollDisabled(!isActive)  // hidden: leaves status-bar taps to the mode on screen
         .overlay {
-            if files.isEmpty {
-                ContentUnavailableView(
-                    "No Files",
-                    systemImage: "doc.on.doc",
-                    description: Text("Files you open by URL appear here. Projects are in the sidebar: swipe left from the right edge.")
-                )
+            if files.isEmpty, hasReadProjects {
+                if projectPrefixes.isEmpty {
+                    // A fresh start: how to get a project at all.
+                    ContentUnavailableView(
+                        "Start with a Repository",
+                        systemImage: "folder.badge.plus",
+                        description: Text("Paste a link to a GitHub repository into the bar below to open it as a project, like https://github.com/apple/swift.")
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "No Files",
+                        systemImage: "doc.on.doc",
+                        description: Text("Files you open by link show here. To open another project, paste its GitHub link into the bar below.")
+                    )
+                }
             }
         }
         .task(id: isActive) {  // each time it shows
@@ -128,6 +139,7 @@ private struct LooseFilesView: View {
     private func reload() async {
         recents = RecentFilesStore.standard.urls()
         projectPrefixes = await ProjectStore.shared.projects().compactMap { $0.rawURL(for: "")?.absoluteString }
+        hasReadProjects = true
         saved = await DocumentStore.shared.savedDocuments().map(\.url)
     }
 

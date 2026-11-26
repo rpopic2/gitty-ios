@@ -80,6 +80,21 @@ struct CodeScreen: View {
     @State private var albumsPageState = AlbumsPageState()
     /// The code following the bar swiped sideways (read only by its offset).
     @State private var albumSlide = AlbumSlideState()
+    /// The stacks set aside while the app runs, as they were (`SetAsideStore` keeps what makes
+    /// them again, for after a relaunch).
+    @State private var liveStacks: [UUID: LiveStack] = [:]
+    /// The top page sliding away sideways: its stack set aside for the album beside.
+    @State private var stackSlide: CGFloat = 0
+    /// A stack to open again once the symbols are ready (its album came back before they were).
+    @State private var pendingReopen: SetAsideStack?
+
+    /// A stack set aside: its pages and what they show, as they were.
+    private struct LiveStack {
+        var path: [CardRoute] = []
+        var cards: [UUID: StackedCard] = [:]
+        var searches: [UUID: StackSearch] = [:]
+        var occurrences: [UUID: OccurrenceSearch] = [:]
+    }
 
     private struct HistoryFile: Identifiable {
         let url: URL
@@ -169,8 +184,12 @@ struct CodeScreen: View {
         .onChange(of: AlbumStore.shared.album(id: albumID), initial: true) { _, album in
             model.show(album: album)
         }
-        // Swiped to another album: its code slides in.
-        .onChange(of: model.activeAlbum?.id) { albumSlide.albumChanged() }
+        // Swiped to another album: its code slides in, and the stack it was left from opens again.
+        .onChange(of: model.activeAlbum?.id) {
+            albumSlide.albumChanged()
+            reopenLeftStack()
+        }
+
         .modifier(FollowsCloneChanges(model: model))
         .onChange(of: AlbumStore.shared.downloadCount) { model.refreshAlbumFiles() }
         .onChange(of: mode, initial: true) {
@@ -178,7 +197,13 @@ struct CodeScreen: View {
         }
         // The levels list the whole project, so its files are indexed right away.
         .onChange(of: model.symbolIndex.isReady, initial: true) {
-            if model.symbolIndex.isReady { model.loadProjectSymbols() }
+            guard model.symbolIndex.isReady else { return }
+            model.loadProjectSymbols()
+            // A stack whose album came back before its symbols were read.
+            if let stack = pendingReopen {
+                pendingReopen = nil
+                reopen(stack)
+            }
         }
         .onChange(of: codeTextStyle) { Task { await model.restyle() } }
         .onChange(of: browseQuery) { _, query in
@@ -529,6 +554,7 @@ struct CodeScreen: View {
             stackDepth: stackNumber(of: route),
             stackActions: stackActions
         )
+        .offset(x: route == cardPath.last ? stackSlide : 0)
         // A results page stacked on it zooms out of it.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
         .navigationTransition(.zoom(sourceID: card.zoomSource, in: pagerNamespace))
@@ -548,6 +574,7 @@ struct CodeScreen: View {
                                 }) { symbols, query, bar in
             resultsList(search, symbols: symbols, query: query, bar: bar)
         }
+        .offset(x: route == cardPath.last ? stackSlide : 0)
         // Its cards zoom out of it; it zooms out of (and back into) its card.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
         .navigationTransition(.zoom(sourceID: search.source, in: pagerNamespace))
@@ -555,8 +582,13 @@ struct CodeScreen: View {
 
     /// Every search page is gone (a new stack starts).
     private func closeSearches() {
-        for search in stackedSearches.values { search.cancel() }
+        for search in stackedSearches.values where !isSetAside(.results(search.id)) { search.cancel() }
         stackedSearches = [:]
+    }
+
+    /// A page of a stack set aside: it goes on looking (its stack keeps it).
+    private func isSetAside(_ route: CardRoute) -> Bool {
+        liveStacks.values.contains { $0.path.contains(route) }
     }
 
     /// A search's results as code blocks, like the Code level's: tap one for its card.
@@ -654,7 +686,11 @@ struct CodeScreen: View {
                 isShowingStack = false
                 cardPath = []
                 onOpenAlbum(id)
-            }
+            },
+            setAside: { setAsideStack() },
+            switchAlbum: { setAsideStack(goingTo: $0) },
+            // Every page closes, back to the Code level (nothing kept).
+            close: { cardPath = [] }
         )
     }
 
@@ -774,13 +810,185 @@ struct CodeScreen: View {
     private func pruneStack() {
         stackedCards = stackedCards.filter { cardPath.contains(.card($0.key)) }
         for (id, search) in stackedSearches where !cardPath.contains(.results(id)) {
-            search.cancel()
+            if !isSetAside(.results(id)) { search.cancel() }
             stackedSearches[id] = nil
         }
         for (id, search) in stackedOccurrences where !cardPath.contains(.occurrences(id)) {
-            search.cancel()
+            if !isSetAside(.occurrences(id)) { search.cancel() }
             stackedOccurrences[id] = nil
         }
+    }
+
+    // MARK: Stacks set aside
+
+    /// Where the stacks set aside belong: the album shown, or the project as a whole (outside
+    /// projects, the open file).
+    private var setAsidePlace: String {
+        if let album = model.activeAlbum { return "album:" + album.id.uuidString }
+        return "project:" + (model.symbolsProjectID ?? model.url.absoluteString)
+    }
+
+    /// Sets the open stack aside: it closes (back to the Code level), and the chip over the bar
+    /// brings it back, each card on the symbol it was on.
+    private func setAsideStack() {
+        guard keepStack(isLeftOpen: false) != nil else { return }
+        cardPath = []
+    }
+
+    /// The caption swiped sideways: the top page slides away, the stack is set aside (to open
+    /// again on coming back), and the album beside shows. Not past the first or last album.
+    private func setAsideStack(goingTo forward: Bool) -> Bool {
+        guard let go = neighbourAlbum(forward: forward) else { return false }
+        let width = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 600
+        withAnimation(.smooth(duration: 0.22)) {
+            stackSlide = forward ? -width : width
+        } completion: {
+            guard keepStack(isLeftOpen: true) != nil else {
+                withAnimation(.smooth(duration: 0.22)) { stackSlide = 0 }
+                return
+            }
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) {
+                cardPath = []
+                stackSlide = 0
+            }
+            go()
+        }
+        return true
+    }
+
+    /// The album after (or before) the one shown, as the bar's swipe goes, the whole project
+    /// first: what shows it. `nil` past either end (no new album from here).
+    private func neighbourAlbum(forward: Bool) -> (@MainActor () -> Void)? {
+        guard let projectID = model.symbolsProjectID else { return nil }
+        let albums = AlbumStore.shared.albums(inProject: projectID)
+        let index = model.activeAlbum.flatMap { album in albums.firstIndex { $0.id == album.id } }.map { $0 + 1 } ?? 0
+        let place = forward ? index + 1 : index - 1
+        guard place >= 0, place <= albums.count else { return nil }
+        if place == 0 { return onShowProject }
+        let id = albums[place - 1].id, open = onOpenAlbum
+        return { open(id) }
+    }
+
+    /// Keeps the open stack, as it is and as what makes it again, with this place's stacks.
+    private func keepStack(isLeftOpen: Bool) -> SetAsideStack? {
+        guard !cardPath.isEmpty else { return nil }
+        var live = LiveStack(path: cardPath)
+        var pages: [SetAsidePage] = []
+        var top: (title: String, image: String)?
+        for route in cardPath {
+            switch route {
+            case .card(let id):
+                guard let card = stackedCards[id] else { continue }
+                let current = cardPlaces.current[id] ?? card.initialID
+                // Back on the symbol it was on (where it was tapped, if it's still that one).
+                live.cards[id] = StackedCard(symbols: card.symbols, initialID: current,
+                                             anchor: current == card.initialID ? card.anchor : nil,
+                                             zoomSource: card.zoomSource, depth: card.depth,
+                                             pageAnchors: card.pageAnchors)
+                let symbol = card.symbols.first { $0.id == current }
+                pages.append(SetAsidePage(kind: .card, item: symbol.map { AlbumItem($0, openFile: model.url) }))
+                if let symbol { top = (symbol.name, symbol.kind.systemImage) }
+            case .results(let id):
+                guard let search = stackedSearches[id] else { continue }
+                live.searches[id] = search
+                pages.append(SetAsidePage(kind: .search, query: search.query))
+                top = (search.query, search.symbolName)
+            case .occurrences(let id):
+                guard let search = stackedOccurrences[id] else { continue }
+                live.occurrences[id] = search
+                pages.append(SetAsidePage(kind: .occurrences, query: search.query))
+                top = (search.query, search.symbolName)
+            }
+        }
+        guard let top else { return nil }
+        let stack = SetAsideStack(id: UUID(), pages: pages, title: top.title, symbolImage: top.image,
+                                  cardCount: cardPath.filter { if case .card = $0 { true } else { false } }.count)
+        liveStacks[stack.id] = live
+        SetAsideStore.shared.add(stack, at: setAsidePlace, isLeftOpen: isLeftOpen)
+        return stack
+    }
+
+    /// A stack set aside opens again, as it was (after a relaunch, made again from what was
+    /// kept: each card on its symbol, the searches searching again).
+    private func reopen(_ stack: SetAsideStack) {
+        guard let live = liveStacks[stack.id] ?? remade(stack) else {
+            // Its symbols aren't read yet: once they are. (Nothing left of it: gone.)
+            if !model.symbolIndex.isReady { pendingReopen = stack } else { drop(stack) }
+            return
+        }
+        // The pages of the stack open before (if any) are gone; this one's stay (still kept).
+        pruneStack()
+        liveStacks[stack.id] = nil
+        SetAsideStore.shared.remove(stack.id, at: setAsidePlace)
+        stackedCards.merge(live.cards) { $1 }
+        stackedSearches.merge(live.searches) { $1 }
+        stackedOccurrences.merge(live.occurrences) { $1 }
+        cardPlaces.current = [:]
+        cardPath = live.path
+    }
+
+    /// Coming back to a place: the stack it was left from opens again.
+    private func reopenLeftStack() {
+        guard cardPath.isEmpty, let stack = SetAsideStore.shared.takeLeftOpen(at: setAsidePlace) else { return }
+        reopen(stack)
+    }
+
+    /// A stack set aside, thrown away (swiped off its chip).
+    private func drop(_ stack: SetAsideStack) {
+        if let live = liveStacks.removeValue(forKey: stack.id) {
+            for search in live.searches.values where !cardPath.contains(.results(search.id)) { search.cancel() }
+            for search in live.occurrences.values where !cardPath.contains(.occurrences(search.id)) { search.cancel() }
+        }
+        SetAsideStore.shared.remove(stack.id, at: setAsidePlace)
+    }
+
+    /// A stack kept from before a relaunch, made again: a card for each symbol still there (it
+    /// pages through the list, if the symbol's in it), each search and Occurrences searching
+    /// again. `nil` until the symbols are read, or when none of it is left.
+    private func remade(_ stack: SetAsideStack) -> LiveStack? {
+        let all = indexedSymbols
+        guard !all.isEmpty else { return nil }
+        let list = model.listSymbols
+        var live = LiveStack()
+        var source: AnyHashable = Self.screenSourceID
+        for page in stack.pages {
+            let route: CardRoute
+            switch page.kind {
+            case .card:
+                guard let item = page.item, let symbol = symbol(for: item, in: all) else { continue }
+                let id = UUID()
+                let symbols = list.contains { $0.id == symbol.id } ? list : [symbol]
+                live.cards[id] = StackedCard(symbols: symbols, initialID: symbol.id, anchor: nil,
+                                             zoomSource: source, depth: live.path.count + 1)
+                route = .card(id)
+            case .search:
+                guard let query = page.query else { continue }
+                let search = StackSearch(query: query, source: source, model: model)
+                live.searches[search.id] = search
+                route = .results(search.id)
+            case .occurrences:
+                guard let query = page.query else { continue }
+                let search = occurrenceSearch(for: OccurrenceTerm(text: query, identifier: nil), source: source)
+                live.occurrences[search.id] = search
+                route = .occurrences(search.id)
+            }
+            live.path.append(route)
+            source = AnyHashable(route)
+        }
+        return live.path.isEmpty ? nil : live
+    }
+
+    /// The symbol an album item is now (as an album finds it).
+    private func symbol(for item: AlbumItem, in all: [CodeSymbol]) -> CodeSymbol? {
+        var texts: [URL: NSString] = [:]
+        if case .lines(let lines) = item,
+           let text = model.fullText(of: lines.file == model.url ? nil : lines.file) {
+            texts[lines.file] = text.string as NSString
+        }
+        let album = Album(name: "", projectID: "", items: [item])
+        return AlbumContents.symbols(of: album, in: all, openFile: model.url, texts: texts).first
     }
 
     // MARK: Occurrences
@@ -790,6 +998,20 @@ struct CodeScreen: View {
     /// - Parameter card: `nil`: from the Code level (a symbol's hold menu), the first page.
     private func findOccurrences(of query: OccurrenceTerm, from card: CardRoute?) {
         pruneStack()
+        let search = occurrenceSearch(for: query, source: card.map { AnyHashable($0) } ?? Self.screenSourceID)
+        stackedOccurrences[search.id] = search
+        // The pages highlight it: of its kind, with Same Kind; any identifier of the name otherwise.
+        let term = query.text
+        if let identifier = query.identifier {
+            highlights?.current = identifier
+        } else if term.unicodeScalars.allSatisfy({ $0.value > 127 || Occurrences.isWordCharacter(unichar($0.value)) }) {
+            highlights?.current = IdentifierHighlight(name: term, kind: nil, language: nil)
+        }
+        cardPath.append(.occurrences(search.id))
+    }
+
+    /// Occurrences of `query` in the project's downloaded files (see `findOccurrences`).
+    private func occurrenceSearch(for query: OccurrenceTerm, source: AnyHashable) -> OccurrenceSearch {
         var files: [OccurrenceFile] = []
         var skipped = 0
         let symbols = indexedSymbols
@@ -808,17 +1030,7 @@ struct CodeScreen: View {
             }
             start = end
         }
-        let search = OccurrenceSearch(query: query, source: card.map { AnyHashable($0) } ?? Self.screenSourceID,
-                                      files: files, skippedFiles: skipped)
-        stackedOccurrences[search.id] = search
-        // The pages highlight it: of its kind, with Same Kind; any identifier of the name otherwise.
-        let term = query.text
-        if let identifier = query.identifier {
-            highlights?.current = identifier
-        } else if term.unicodeScalars.allSatisfy({ $0.value > 127 || Occurrences.isWordCharacter(unichar($0.value)) }) {
-            highlights?.current = IdentifierHighlight(name: term, kind: nil, language: nil)
-        }
-        cardPath.append(.occurrences(search.id))
+        return OccurrenceSearch(query: query, source: source, files: files, skippedFiles: skipped)
     }
 
     private func occurrencesView(_ search: OccurrenceSearch, route: CardRoute) -> some View {
@@ -855,6 +1067,7 @@ struct CodeScreen: View {
             .equatable()
             .environment(\.codeMark, query)  // what it found, marked
         }
+        .offset(x: route == cardPath.last ? stackSlide : 0)
         // Its cards zoom out of it; it zooms out of (and back into) its card.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
         .navigationTransition(.zoom(sourceID: search.source, in: pagerNamespace))
@@ -1013,6 +1226,23 @@ struct CodeScreen: View {
                 titleIcon: model.activeAlbum != nil ? "rectangle.stack" : nil,
                 swipe: albumSwipe
             )
+            // The stacks set aside in this album, over the bar (in the middle; the review's
+            // capsule floats at an end).
+            .overlay(alignment: .top) {
+                if !model.isBarCollapsed, mode.showsSymbols {
+                    // Hung from its bottom, level with the review's capsule (middle to middle):
+                    // fanned out, the others go up and the chip stays where it is.
+                    Color.clear
+                        .frame(height: 0)
+                        .overlay(alignment: .bottom) {
+                            SetAsideChips(stacks: SetAsideStore.shared.stacks(at: setAsidePlace),
+                                          onOpen: { reopen($0) },
+                                          onDrop: { drop($0) })
+                        }
+                        .offset(y: -(ReviewDock.floatingRise - ReviewDock.height / 2 - SetAsideChips.chipHeight / 2))
+                        .transition(.opacity)
+                }
+            }
         }
     }
 
@@ -1143,7 +1373,7 @@ struct CodeScreen: View {
     }
 
     private var barAddress: String {
-        guard mode == .project, let address = project?.link.webURL?.absoluteString else {
+        guard mode == .project, let address = project?.webURL?.absoluteString else {
             return model.url.absoluteString
         }
         return address
@@ -1190,7 +1420,7 @@ struct CodeScreen: View {
         let review = review
         Task {
             let repository = await ProjectStore.shared.project(id: projectID).map { project in
-                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref,
+                ReviewRepository(name: project.repositoryName, ref: project.ref,
                                  commit: CloneIndex.shared.record(forProject: projectID)?.commit)
             }
             review.add(selection, format: format, repository: repository, projectID: projectID, overSheet: false)
@@ -1216,7 +1446,7 @@ struct CodeScreen: View {
             let project = ProjectSymbolIndex.project(containing: url, in: projects)
             let commit = project.flatMap { CloneIndex.shared.record(forProject: $0.id)?.commit }
             let repository = project.map { project in
-                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref, commit: commit)
+                ReviewRepository(name: project.repositoryName, ref: project.ref, commit: commit)
             }
             review.add(path: path, format: format, repository: repository, projectID: project?.id ?? "")
         }
@@ -1249,7 +1479,7 @@ struct CodeScreen: View {
             )
             let project = ProjectSymbolIndex.project(containing: url, in: projects)
             let repository = project.map { project in
-                ReviewRepository(name: project.link.owner + "/" + project.link.repo, ref: project.ref, commit: commit)
+                ReviewRepository(name: project.repositoryName, ref: project.ref, commit: commit)
             }
             // Each project has its review ("" for files outside projects).
             review.add(selection, format: format, repository: repository, projectID: project?.id ?? "")

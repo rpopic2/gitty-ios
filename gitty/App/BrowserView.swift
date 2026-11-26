@@ -294,7 +294,9 @@ private struct StartScreen: View {
         ZStack(alignment: .bottom) {
             ProjectView(projectID: projectID, onOpenAlbum: onOpenAlbum, onShowProject: onShowProject, onOpen: onOpen)
             if isEditingAddress {
-                AddressEditor(initialText: rejectedAddress ?? projectAddress,
+                // Empty ("Enter URL"), not the project's own link: there's nothing to change in
+                // it, only another to open (Copy in the bar's menu still has it).
+                AddressEditor(initialText: rejectedAddress ?? "",
                               showsInitialError: rejectedAddress != nil,
                               onOpen: onOpen, onCancel: { isEditingAddress = false })
                     .id(rejectedAddress)  // a new rejected share restarts the editor with it
@@ -320,6 +322,6 @@ private struct StartScreen: View {
 
     /// The project's address on github.com, or nothing (Files).
     private var projectAddress: String {
-        project?.link.webURL?.absoluteString ?? ""
+        project?.webURL?.absoluteString ?? ""
     }
 }

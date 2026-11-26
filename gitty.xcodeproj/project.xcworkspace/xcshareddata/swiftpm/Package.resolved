@@ -1,5 +1,5 @@
 {
-  "originHash" : "2b5aa88141b4cff890c1b537f026dfbfed7fcbfaa7d2b5a78f495be217ec24b7",
+  "originHash" : "f43618f3c65b515ea49f823bbe7c179fdca9540f46d0aa278f018fded2ed1494",
   "pins" : [
     {
       "identity" : "libgit2",
@@ -44,6 +44,15 @@
       "state" : {
         "revision" : "cac6d5fb595f5811a076336682d5d595ac1c9e85",
         "version" : "0.23.5"
+      }
+    },
+    {
+      "identity" : "tree-sitter-proto",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/coder3101/tree-sitter-proto",
+      "state" : {
+        "revision" : "68a898a1715f1b0fce0d21ae6d1f4e24c60fcb2c",
+        "version" : "0.6.1"
       }
     },
     {

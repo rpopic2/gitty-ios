@@ -300,6 +300,12 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
             .contentShape(Capsule())
             .onTapGesture { isEditing = true }
             .contextMenu {
+                if let setAside = stackActions?.setAside {
+                    Button("Set Aside", systemImage: "square.stack.3d.down.right", action: setAside)
+                }
+                if let close = stackActions?.close {
+                    Button("Close Stack", systemImage: "xmark", action: close)
+                }
                 if let barMenu { pageMenu(barMenu) }
             }
             .accessibilityElement(children: .combine)
@@ -312,6 +318,8 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     label.background(.bar, in: Capsule())
                 }
             }
+            // Up: the stack set aside; sideways: on to the album beside.
+            .stackCaptionSwipes(stackActions)
             .padding(.horizontal, 24)
         }
     }
@@ -436,6 +444,14 @@ struct StackActions {
     let albumContext: AlbumMenuContext?
     /// The stack went into an album (added, or a new one): it becomes that album.
     var onAddedToAlbum: (@MainActor (UUID) -> Void)? = nil
+    /// Sets the stack aside (the chip over the bar brings it back): the caption swiped up, or
+    /// Set Aside in its menu.
+    var setAside: (@MainActor () -> Void)? = nil
+    /// The caption swiped sideways: the stack is set aside, and the album after (`true`) or
+    /// before shows. `false`: there's none that way.
+    var switchAlbum: (@MainActor (_ forward: Bool) -> Bool)? = nil
+    /// Close Stack in the caption's menu: every page closes at once.
+    var close: (@MainActor () -> Void)? = nil
 }
 
 /// A page's place in the stack, before what its caption names: "▣ 3 |". Tap it for the

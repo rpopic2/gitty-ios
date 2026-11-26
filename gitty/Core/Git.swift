@@ -243,7 +243,7 @@ nonisolated final class GitRepository {
     /// file's size.
     func tree(of ref: GitRef) throws -> ProjectTree {
         var commit: OpaquePointer?
-        try Git.check(git_revparse_single(&commit, pointer, ref.localReference + "^{commit}"))
+        try Git.check(git_revparse_single(&commit, pointer, referenceName(of: ref) + "^{commit}"))
         defer { git_object_free(commit) }
         var tree: OpaquePointer?
         try Git.check(git_object_peel(&tree, commit, GIT_OBJECT_TREE))
@@ -284,9 +284,133 @@ nonisolated final class GitRepository {
     /// The commit `ref` is at in the clone, if it was ever fetched.
     func fetchedCommit(of ref: GitRef) -> String? {
         var object: OpaquePointer?
-        guard git_revparse_single(&object, pointer, ref.localReference + "^{commit}") == 0 else { return nil }
+        guard git_revparse_single(&object, pointer, referenceName(of: ref) + "^{commit}") == 0 else { return nil }
         defer { git_object_free(object) }
         return Git.string(git_object_id(object))
+    }
+
+    /// The reference `ref` names here: a branch of your own first (a repository on this device),
+    /// then the one fetched from `origin` (a clone), then any remote's (`upstream/main`).
+    private func referenceName(of ref: GitRef) -> String {
+        guard case .branch(let name) = ref else { return ref.localReference }
+        for candidate in ["refs/heads/\(name)", "refs/remotes/origin/\(name)", "refs/remotes/\(name)"]
+        where hasReference(candidate) {
+            return candidate
+        }
+        return ref.localReference
+    }
+
+    private func hasReference(_ name: String) -> Bool {
+        var reference: OpaquePointer?
+        guard git_reference_lookup(&reference, pointer, name) == 0 else { return false }
+        git_reference_free(reference)
+        return true
+    }
+
+    // MARK: A repository on this device
+
+    /// Every branch, like `git branch -a`: your own, then each remote's (`origin/main`), and the
+    /// tags. Nothing from the network.
+    func allRefs() -> ProjectRefs {
+        func names(_ glob: String, _ prefix: String) -> [String] {
+            var names: [String] = []
+            var iterator: UnsafeMutablePointer<git_reference_iterator>?
+            guard git_reference_iterator_glob_new(&iterator, pointer, glob) == 0 else { return [] }
+            defer { git_reference_iterator_free(iterator) }
+            var name: UnsafePointer<CChar>?
+            while git_reference_next_name(&name, iterator) == 0, let name {
+                let full = String(cString: name)
+                guard full.hasPrefix(prefix), !full.hasSuffix("/HEAD") else { continue }
+                names.append(String(full.dropFirst(prefix.count)))
+            }
+            return names.sorted()
+        }
+        return ProjectRefs(branches: names("refs/heads/*", "refs/heads/") + names("refs/remotes/*", "refs/remotes/"),
+                           tags: names("refs/tags/*", "refs/tags/"))
+    }
+
+    /// The branch checked out (`nil` with HEAD detached, or before the first commit), and the
+    /// commit HEAD is at.
+    func head() -> (branch: String?, commit: String?) {
+        var reference: OpaquePointer?
+        guard git_repository_head(&reference, pointer) == 0 else { return (nil, nil) }
+        defer { git_reference_free(reference) }
+        let commit = git_reference_target(reference).map { Git.string($0) }
+        guard git_repository_head_detached(pointer) != 1, let short = git_reference_shorthand(reference) else {
+            return (nil, commit)
+        }
+        return (String(cString: short), commit)
+    }
+
+    /// Tracked files changed and not committed, staged or not: what a checkout could overwrite.
+    /// Files Git doesn't track don't count. Only reads (the index isn't written).
+    func hasUncommittedChanges() throws -> Bool {
+        var options = git_status_options()
+        git_status_options_init(&options, UInt32(GIT_STATUS_OPTIONS_VERSION))
+        options.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR
+        options.flags = 0  // no untracked or ignored files
+        var list: OpaquePointer?
+        try Git.check(git_status_list_new(&list, pointer, &options))
+        defer { git_status_list_free(list) }
+        return git_status_list_entrycount(list) > 0
+    }
+
+    /// Whether Git ignores `path` (from the repository's top; a folder's ends with `/`), by
+    /// the `.gitignore` files and the repository's own excludes.
+    func isIgnored(_ path: String) -> Bool {
+        var ignored: Int32 = 0
+        return git_ignore_path_is_ignored(&ignored, pointer, path) == 0 && ignored == 1
+    }
+
+    /// Checks out a branch in the working directory, like `git checkout`: one of yours, or a
+    /// remote's (`origin/feature`: a branch of yours of that name is made to follow it, or the
+    /// one there is checked out); a tag leaves HEAD detached at it. What Git doesn't track stays.
+    /// Refused while tracked files have uncommitted changes. Returns the branch checked out
+    /// (`nil` for a tag) and its commit.
+    func switchWorkingTree(to ref: GitRef) throws -> (branch: String?, commit: String) {
+        if try hasUncommittedChanges() { throw LocalFolderError.uncommittedChanges }
+        let target: String
+        var branch: String?
+        switch ref {
+        case .tag(let name):
+            target = "refs/tags/\(name)"
+        case .branch(let name):
+            if hasReference("refs/heads/\(name)") {
+                target = "refs/heads/\(name)"
+                branch = name
+            } else if hasReference("refs/remotes/\(name)") {
+                // `origin/feature` → `feature`.
+                let short = name.split(separator: "/", maxSplits: 1).dropFirst().first.map(String.init) ?? name
+                if !hasReference("refs/heads/\(short)") {
+                    var commit: OpaquePointer?
+                    try Git.check(git_revparse_single(&commit, pointer, "refs/remotes/\(name)^{commit}"))
+                    defer { git_object_free(commit) }
+                    var created: OpaquePointer?
+                    try Git.check(git_branch_create(&created, pointer, short, commit, 0))
+                    defer { git_reference_free(created) }
+                    _ = git_branch_set_upstream(created, name)
+                }
+                target = "refs/heads/\(short)"
+                branch = short
+            } else {
+                throw LocalFolderError.noSuchBranch(name)
+            }
+        }
+        var object: OpaquePointer?
+        try Git.check(git_revparse_single(&object, pointer, target + "^{commit}"))
+        defer { git_object_free(object) }
+        var options = git_checkout_options()
+        git_checkout_options_init(&options, UInt32(GIT_CHECKOUT_OPTIONS_VERSION))
+        // Never overwrites a change: refuses instead.
+        options.checkout_strategy = UInt32(truncatingIfNeeded: GIT_CHECKOUT_SAFE.rawValue)
+        try Git.check(git_checkout_tree(pointer, object, &options))
+        let id = git_object_id(object)
+        if let branch {
+            try Git.check(git_repository_set_head(pointer, "refs/heads/\(branch)"))
+        } else {
+            try Git.check(git_repository_set_head_detached(pointer, id))
+        }
+        return (branch, Git.string(id))
     }
 
     /// The branches and tags this clone has downloaded, by name: its own refs, so it doesn't
@@ -347,7 +471,7 @@ nonisolated final class GitRepository {
     @discardableResult
     func checkout(_ ref: GitRef, progress: (@Sendable (Double) -> Void)? = nil) throws -> String {
         var object: OpaquePointer?
-        try Git.check(git_revparse_single(&object, pointer, ref.localReference + "^{commit}"))
+        try Git.check(git_revparse_single(&object, pointer, referenceName(of: ref) + "^{commit}"))
         defer { git_object_free(object) }
         var options = git_checkout_options()
         git_checkout_options_init(&options, UInt32(GIT_CHECKOUT_OPTIONS_VERSION))
@@ -582,8 +706,8 @@ nonisolated final class GitRepository {
     func resolve(_ side: GitSide) -> String? {
         let spec: String
         switch side {
-        case .branch(let name): spec = GitRef.branch(name).localReference
-        case .tag(let name): spec = GitRef.tag(name).localReference
+        case .branch(let name): spec = referenceName(of: .branch(name))
+        case .tag(let name): spec = referenceName(of: .tag(name))
         case .commit(let id): spec = id
         case .checkedOut: spec = "HEAD"
         }

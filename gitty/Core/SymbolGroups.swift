@@ -350,8 +350,25 @@ final class CollapsedCodeStore {
     /// - Parameter openFile: the file that symbols without a `fileURL` are in.
     nonisolated static func key(for symbol: CodeSymbol, openFile: URL) -> String {
         let key = (symbol.fileURL ?? openFile).absoluteString + "#" + symbol.kind.rawValue + "#" + symbol.name
-        // A diff's hunks often share their title (the code they're in): their line tells them apart.
-        return symbol.kind == .hunk ? key + "#" + String(symbol.line) : key
+        switch symbol.kind {
+        case .hunk, .lines:
+            // A diff's hunks often share their title (the code they're in), as lines can: their
+            // line tells them apart.
+            return key + "#" + String(symbol.line)
+        default:
+            // Overloads share their name: their declaration (their parameters) tells them apart.
+            // Not their line, so a symbol stays collapsed as code above it changes.
+            return key + "#" + signature(of: symbol)
+        }
+    }
+
+    /// The declaration, up to its body (`{`) or its end (`;`), in its first few lines, its runs
+    /// of spaces made one: `void draw(Point p, int size)`.
+    nonisolated static func signature(of symbol: CodeSymbol) -> String {
+        let head = symbol.preview.split(separator: "\n", omittingEmptySubsequences: false).prefix(4)
+            .joined(separator: " ")
+        let declaration = head.prefix { $0 != "{" && $0 != ";" }
+        return declaration.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     nonisolated static func key(forFile file: URL) -> String {

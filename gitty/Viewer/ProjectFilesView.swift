@@ -32,6 +32,8 @@ struct ProjectFilesView: View {
     /// The space the project takes on this device: its clone, or the files downloaded one by one.
     @State private var storedBytes: Int64?
     @State private var cloneError: (any Error)?
+    /// What the error alert is about (cloning, or a local folder's checkout or refresh).
+    @State private var errorTitle = String(localized: "Couldn’t Clone")
     @State private var isConfirmingDeleteClone = false
     /// The whole repository's files' size, roughly what Clone downloads (compressed, less).
     @State private var repositoryBytes: Int64 = 0
@@ -120,7 +122,7 @@ struct ProjectFilesView: View {
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
-            .alert("Couldn’t Clone", isPresented: cloneErrorIsPresented, presenting: cloneError) { _ in
+            .alert(errorTitle, isPresented: cloneErrorIsPresented, presenting: cloneError) { _ in
                 if cloneNeedsSignIn {
                     Button("Sign In to GitHub") { isSigningIn = true }
                 }
@@ -196,10 +198,21 @@ struct ProjectFilesView: View {
             Section("Filter") {
                 filterRow
             }
-            Section("Git") {
-                branchRow(project: project)
-                pullRow(project: project)
-                historyRow
+            if project.localFolder != nil {
+                // A folder on this device: read where it is (Refresh reads it again); a
+                // repository's branches check out in it.
+                let isRepository = clone.map { CloneIndex.shared.isRepository($0) } ?? false
+                Section(isRepository ? "Git" : "Folder") {
+                    if isRepository { branchRow(project: project) }
+                    refreshRow
+                    if isRepository { historyRow }
+                }
+            } else {
+                Section("Git") {
+                    branchRow(project: project)
+                    pullRow(project: project)
+                    historyRow
+                }
             }
             // The files are at the Code level (by folder, every file folded); here, the albums.
             reviewSection(project: project)
@@ -211,7 +224,13 @@ struct ProjectFilesView: View {
         // Pull down: a cloned project fetches with Git (Pull then checks the new commits out);
         // otherwise GitHub's file list is fetched again.
         .refreshable {
-            if clone != nil { await fetchClone() } else { await load(refresh: true) }
+            if clone?.isLocal == true {
+                await refreshLocalFolder()
+            } else if clone != nil {
+                await fetchClone()
+            } else {
+                await load(refresh: true)
+            }
         }
         .scrollDisabled(!isActive)  // hidden: leaves status-bar taps to the mode on screen
     }
@@ -219,7 +238,7 @@ struct ProjectFilesView: View {
     /// The project's name, its owner, and the space it takes on this device.
     private func header(project: ProjectInfo, tree: ProjectTree) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "shippingbox")
+            Image(systemName: project.localFolder != nil ? "folder" : "shippingbox")
                 .font(.title2)
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
@@ -227,7 +246,7 @@ struct ProjectFilesView: View {
                 Text(project.title)
                     .font(.headline)
                     .lineLimit(1)
-                Text(project.link.owner)
+                Text(project.subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -439,6 +458,29 @@ struct ProjectFilesView: View {
         }
     }
 
+    /// A local folder's Refresh: read again, the edits made to it since too.
+    private var refreshRow: some View {
+        Button { Task { await refreshLocalFolder() } } label: {
+            gitLabel("Refresh", systemImage: "arrow.clockwise", detail: nil)
+        }
+        .accessibilityHint("Reads the folder again, with the changes made to it")
+    }
+
+    /// Reads a local folder again: the Code level shows its files as they are now.
+    private func refreshLocalFolder() async {
+        do {
+            if try await CloneStore.shared.refreshLocal(projectID: projectID) {
+                CloneChanges.shared.didPull(projectID)
+            }
+            clone = await CloneStore.shared.record(forProject: projectID)
+            await load(refresh: true)
+            await loadRefs()
+        } catch {
+            errorTitle = String(localized: "Couldn’t Read the Folder")
+            cloneError = error
+        }
+    }
+
     /// The branch's commits (cloning, if it isn't).
     private var historyRow: some View {
         Button { isShowingHistory = true } label: {
@@ -478,6 +520,7 @@ struct ProjectFilesView: View {
                                _ work: @escaping @MainActor (_ progress: @escaping @Sendable (FetchProgress) -> Void) async throws -> Void) {
         GitDownloads.shared.start(projectID: projectID, title: title, estimate: estimate, work: work) { error in
             isSignedIn = await GitHubAuth.shared.isSignedIn
+            errorTitle = String(localized: "Couldn’t Clone")
             cloneError = error
         }
     }
@@ -746,6 +789,8 @@ struct ProjectFilesView: View {
                     show(moved, tree)
                 }
             } catch {
+                errorTitle = clone?.isLocal == true ? String(localized: "Couldn’t Switch Branch")
+                    : String(localized: "Couldn’t Clone")
                 cloneError = error
             }
         }
@@ -774,7 +819,11 @@ struct ProjectFilesView: View {
         let tree = try await CloneStore.shared.switchTo(isTag ? .tag(name) : .branch(name), projectID: projectID,
                                                         rawPrefix: prefix, pulling: pulling, progress: progress)
         clone = await CloneStore.shared.record(forProject: projectID)
-        let (shown, shownTree) = try await ProjectStore.shared.setRef(name, for: projectID, tree: tree)
+        // A local folder's checkout: the branch it's on now (`origin/x` checks out as `x`), and
+        // the same addresses with new files, for the Code level.
+        let shownName = clone?.isLocal == true ? (clone?.ref.name).flatMap { $0.isEmpty ? nil : $0 } ?? name : name
+        if clone?.isLocal == true { CloneChanges.shared.didPull(projectID) }
+        let (shown, shownTree) = try await ProjectStore.shared.setRef(shownName, for: projectID, tree: tree)
         show(shown, shownTree)
     }
 

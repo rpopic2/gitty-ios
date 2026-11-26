@@ -210,6 +210,9 @@ struct BranchPicker: View {
             .contentShape(Rectangle())
         }
         .contextMenu {
+            Button(isTag ? "Copy Tag Name" : "Copy Branch Name", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = name
+            }
             if let onCompare, name != current {
                 Button("Compare with Checked Out", systemImage: "arrow.left.arrow.right") {
                     dismiss()
