@@ -1230,12 +1230,16 @@ struct CodeScreen: View {
             // capsule floats at an end).
             .overlay(alignment: .top) {
                 if !model.isBarCollapsed, mode.showsSymbols {
-                    SetAsideChips(stacks: SetAsideStore.shared.stacks(at: setAsidePlace),
-                                  onOpen: { reopen($0) },
-                                  onDrop: { drop($0) })
-                        // Its bottom where the review's capsule's is: fanned out, it grows upwards.
-                        .alignmentGuide(.top) { $0[.bottom] }
-                        .offset(y: -(ReviewDock.floatingRise - SetAsideChips.chipHeight))
+                    // Hung from its bottom, level with the review's capsule (middle to middle):
+                    // fanned out, the others go up and the chip stays where it is.
+                    Color.clear
+                        .frame(height: 0)
+                        .overlay(alignment: .bottom) {
+                            SetAsideChips(stacks: SetAsideStore.shared.stacks(at: setAsidePlace),
+                                          onOpen: { reopen($0) },
+                                          onDrop: { drop($0) })
+                        }
+                        .offset(y: -(ReviewDock.floatingRise - ReviewDock.height / 2 - SetAsideChips.chipHeight / 2))
                         .transition(.opacity)
                 }
             }
