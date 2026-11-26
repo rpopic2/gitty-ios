@@ -87,7 +87,8 @@ final class SetAsideStore {
 /// The stacks set aside in the album shown, in a chip over the bar: the latest's top page and
 /// how many cards it has (or how many stacks). Tap it to open the stack, or with several, to
 /// fan them out upwards, one chip each, the latest nearest; tap one to open it, or the chip
-/// under them to fold them again. Swipe a chip sideways to throw that stack away.
+/// under them to fold them again. Swipe up on them to fan them out too, and down to fold them.
+/// Swipe a chip sideways to throw that stack away.
 struct SetAsideChips: View {
     let stacks: [SetAsideStack]
     let onOpen: @MainActor (SetAsideStack) -> Void
@@ -103,7 +104,7 @@ struct SetAsideChips: View {
                 // The oldest at the top, the latest just over the chip.
                 ForEach(stacks) { stack in
                     SetAsideChip(title: stack.title, symbolImage: stack.symbolImage, count: stack.cardCount,
-                                 onTap: { open(stack) }, onDrop: { onDrop(stack) })
+                                 onTap: { open(stack) }, onDrop: { onDrop(stack) }, onSwipe: fan)
                         .frame(maxWidth: 260)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -122,7 +123,8 @@ struct SetAsideChips: View {
                                  }
                              },
                              // Several: swiping the folded chip away throws them all away.
-                             onDrop: { for stack in stacks { onDrop(stack) } })
+                             onDrop: { for stack in stacks { onDrop(stack) } },
+                             onSwipe: several ? fan : nil)
                     .frame(maxWidth: 220)
                     .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
@@ -136,6 +138,12 @@ struct SetAsideChips: View {
         isFannedOut = false
         onOpen(stack)
     }
+
+    /// Swiped up: fanned out; down: folded.
+    private func fan(_ up: Bool) {
+        guard stacks.count > 1, up != isFannedOut else { return }
+        withAnimation(.smooth(duration: 0.25)) { isFannedOut = up }
+    }
 }
 
 /// One chip: a stack's icon, its top page's name and its cards. Tap it; swipe it sideways to
@@ -147,6 +155,8 @@ private struct SetAsideChip: View {
     let count: Int?
     let onTap: @MainActor () -> Void
     let onDrop: @MainActor () -> Void
+    /// Swiped up (`true`) or down, for the chips to fan out or fold (`nil`: nothing to do).
+    var onSwipe: (@MainActor (_ up: Bool) -> Void)? = nil
 
     @State private var dragX: CGFloat = 0
     /// Far enough to throw away, with a tap of haptics as it gets there.
@@ -186,9 +196,20 @@ private struct SetAsideChip: View {
         .sensoryFeedback(.impact(weight: .light), trigger: abs(dragX) > Self.dropDistance) { old, new in new && !old }
         .gesture(
             DragGesture(minimumDistance: 10)
-                .onChanged { value in dragX = value.translation.width }
+                .onChanged { value in
+                    // Sideways follows the finger (to throw it away); up and down don't move it.
+                    let t = value.translation
+                    dragX = abs(t.width) > abs(t.height) ? t.width : 0
+                }
                 .onEnded { value in
-                    let dx = value.translation.width, flung = value.predictedEndTranslation.width
+                    let t = value.translation
+                    if abs(t.height) > abs(t.width) {
+                        withAnimation(.spring(duration: 0.3)) { dragX = 0 }
+                        let flung = value.predictedEndTranslation.height
+                        if abs(t.height) > 20 || abs(flung) > 60 { onSwipe?(t.height < 0) }
+                        return
+                    }
+                    let dx = t.width, flung = value.predictedEndTranslation.width
                     if abs(dx) > Self.dropDistance || abs(flung) > Self.dropDistance * 2.5 {
                         withAnimation(.smooth(duration: 0.2)) { dragX = dx < 0 ? -500 : 500 } completion: {
                             onDrop()
