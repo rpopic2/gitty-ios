@@ -287,6 +287,7 @@ private struct DiffPage: View {
                     isCurrent: isCurrent,
                     onComment: commentAction,
                     fileExtension: (change.path as NSString).pathExtension,
+                    growsSelectionBySyntax: false,  // its text is the diff
                     highlight: highlights?.current,
                     onHighlight: { highlights?.current = $0 },
                     lineNumbering: .marked,
