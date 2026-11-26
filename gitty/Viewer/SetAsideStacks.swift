@@ -86,40 +86,37 @@ final class SetAsideStore {
 
 /// The stacks set aside in the album shown, in a chip over the bar: the latest's top page and
 /// how many cards it has (or how many stacks). Tap it to open the stack, or with several, to
-/// fan them out into a row, one chip each; tap one to open it. Swipe a chip up to throw that
-/// stack away.
+/// fan them out upwards, one chip each, the latest nearest; tap one to open it, or the chip
+/// under them to fold them again. Swipe a chip sideways to throw that stack away.
 struct SetAsideChips: View {
     let stacks: [SetAsideStack]
     let onOpen: @MainActor (SetAsideStack) -> Void
     let onDrop: @MainActor (SetAsideStack) -> Void
 
     @State private var isFannedOut = false
+    /// A chip's height.
+    static let chipHeight: CGFloat = 36
 
     var body: some View {
-        Group {
+        VStack(spacing: 8) {
             if isFannedOut, stacks.count > 1 {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        // The latest first, nearest where the chip was.
-                        ForEach(Array(stacks.reversed())) { stack in
-                            SetAsideChip(title: stack.title, symbolImage: stack.symbolImage,
-                                         count: stack.cardCount,
-                                         onTap: { open(stack) }, onDrop: { onDrop(stack) })
-                                .transition(.scale(scale: 0.6).combined(with: .opacity))
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)  // room to swipe one up
+                // The oldest at the top, the latest just over the chip.
+                ForEach(stacks) { stack in
+                    SetAsideChip(title: stack.title, symbolImage: stack.symbolImage, count: stack.cardCount,
+                                 onTap: { open(stack) }, onDrop: { onDrop(stack) })
+                        .frame(maxWidth: 260)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                .scrollClipDisabled()
-                .transition(.opacity)
-            } else if let latest = stacks.last {
-                SetAsideChip(title: stacks.count > 1 ? String(localized: "\(stacks.count) Stacks") : latest.title,
-                             symbolImage: stacks.count > 1 ? "square.stack.3d.up" : latest.symbolImage,
-                             count: stacks.count > 1 ? nil : latest.cardCount,
+            }
+            if let latest = stacks.last {
+                let several = stacks.count > 1
+                SetAsideChip(title: several ? String(localized: "\(stacks.count) Stacks") : latest.title,
+                             symbolImage: several ? (isFannedOut ? "chevron.down" : "square.stack.3d.up")
+                                                  : latest.symbolImage,
+                             count: several ? nil : latest.cardCount,
                              onTap: {
-                                 if stacks.count > 1 {
-                                     withAnimation(.smooth(duration: 0.25)) { isFannedOut = true }
+                                 if several {
+                                     withAnimation(.smooth(duration: 0.25)) { isFannedOut.toggle() }
                                  } else {
                                      open(latest)
                                  }
@@ -141,8 +138,8 @@ struct SetAsideChips: View {
     }
 }
 
-/// One chip: a stack's icon, its top page's name and its cards. Tap it; swipe it up to throw it
-/// away (it follows the finger, and goes once far enough).
+/// One chip: a stack's icon, its top page's name and its cards. Tap it; swipe it sideways to
+/// throw it away (it follows the finger, and goes once far enough).
 private struct SetAsideChip: View {
     let title: String
     let symbolImage: String
@@ -151,9 +148,9 @@ private struct SetAsideChip: View {
     let onTap: @MainActor () -> Void
     let onDrop: @MainActor () -> Void
 
-    @State private var dragY: CGFloat = 0
-    /// Far enough up to throw away, with a tap of haptics as it gets there.
-    private static let dropDistance: CGFloat = 50
+    @State private var dragX: CGFloat = 0
+    /// Far enough to throw away, with a tap of haptics as it gets there.
+    private static let dropDistance: CGFloat = 90
 
     var body: some View {
         let label = HStack(spacing: 6) {
@@ -173,7 +170,7 @@ private struct SetAsideChip: View {
         }
         .font(.subheadline)
         .padding(.horizontal, 14)
-        .frame(height: 36)
+        .frame(height: SetAsideChips.chipHeight)
         .contentShape(Capsule())
 
         Group {
@@ -184,26 +181,21 @@ private struct SetAsideChip: View {
             }
         }
         .onTapGesture { onTap() }
-        .offset(y: dragY)
-        .opacity(1 - min(1, max(0, -dragY) / (Self.dropDistance * 2)))
-        .sensoryFeedback(.impact(weight: .light), trigger: dragY < -Self.dropDistance) { old, new in new && !old }
+        .offset(x: dragX)
+        .opacity(1 - min(1, abs(dragX) / (Self.dropDistance * 2)))
+        .sensoryFeedback(.impact(weight: .light), trigger: abs(dragX) > Self.dropDistance) { old, new in new && !old }
         .gesture(
             DragGesture(minimumDistance: 10)
-                .onChanged { value in
-                    let dy = value.translation.height
-                    // Up freely; down only a little.
-                    dragY = dy < 0 ? dy : dy / (1 + dy / 20)
-                }
+                .onChanged { value in dragX = value.translation.width }
                 .onEnded { value in
-                    let drops = value.translation.height < -Self.dropDistance
-                        || value.predictedEndTranslation.height < -Self.dropDistance * 3
-                    if drops {
-                        withAnimation(.smooth(duration: 0.2)) { dragY = -120 } completion: {
+                    let dx = value.translation.width, flung = value.predictedEndTranslation.width
+                    if abs(dx) > Self.dropDistance || abs(flung) > Self.dropDistance * 2.5 {
+                        withAnimation(.smooth(duration: 0.2)) { dragX = dx < 0 ? -500 : 500 } completion: {
                             onDrop()
-                            dragY = 0
+                            dragX = 0
                         }
                     } else {
-                        withAnimation(.spring(duration: 0.3)) { dragY = 0 }
+                        withAnimation(.spring(duration: 0.3)) { dragX = 0 }
                     }
                 }
         )

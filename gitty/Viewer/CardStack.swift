@@ -303,6 +303,9 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                 if let setAside = stackActions?.setAside {
                     Button("Set Aside", systemImage: "square.stack.3d.down.right", action: setAside)
                 }
+                if let close = stackActions?.close {
+                    Button("Close Stack", systemImage: "xmark", action: close)
+                }
                 if let barMenu { pageMenu(barMenu) }
             }
             .accessibilityElement(children: .combine)
@@ -447,6 +450,8 @@ struct StackActions {
     /// The caption swiped sideways: the stack is set aside, and the album after (`true`) or
     /// before shows. `false`: there's none that way.
     var switchAlbum: (@MainActor (_ forward: Bool) -> Bool)? = nil
+    /// Close Stack in the caption's menu: every page closes at once.
+    var close: (@MainActor () -> Void)? = nil
 }
 
 /// A page's place in the stack, before what its caption names: "▣ 3 |". Tap it for the

@@ -688,7 +688,9 @@ struct CodeScreen: View {
                 onOpenAlbum(id)
             },
             setAside: { setAsideStack() },
-            switchAlbum: { setAsideStack(goingTo: $0) }
+            switchAlbum: { setAsideStack(goingTo: $0) },
+            // Every page closes, back to the Code level (nothing kept).
+            close: { cardPath = [] }
         )
     }
 
@@ -1231,7 +1233,9 @@ struct CodeScreen: View {
                     SetAsideChips(stacks: SetAsideStore.shared.stacks(at: setAsidePlace),
                                   onOpen: { reopen($0) },
                                   onDrop: { drop($0) })
-                        .offset(y: -ReviewDock.floatingRise)
+                        // Its bottom where the review's capsule's is: fanned out, it grows upwards.
+                        .alignmentGuide(.top) { $0[.bottom] }
+                        .offset(y: -(ReviewDock.floatingRise - SetAsideChips.chipHeight))
                         .transition(.opacity)
                 }
             }
