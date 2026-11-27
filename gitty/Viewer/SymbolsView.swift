@@ -369,8 +369,7 @@ struct SymbolsView: View, Equatable {
             view.tableMenu(byID[id], part: part)
         }
         // The peek, while the list shows (a hidden one leaves the edge alone).
-        let livePeek = self.peek
-        let peekFollows: (@MainActor (CGSize) -> Void)? = isActive ? { translation in livePeek.follow(translation) } : nil
+        let livePeek: CodePeek = self.peek
         return CodeTable(
             sections: sections, header: header, row: row, isRowEmpty: isRowEmpty, menu: menu,
             estimatedRowHeight: estimatedRow, estimatedHeaderHeight: estimatedHeader,
@@ -395,7 +394,8 @@ struct SymbolsView: View, Equatable {
                 _ = collapsed.collapsedScopes
                 _ = collapsed.files
             },
-            onPeek: peekFollows,
+            isPeekEnabled: isActive,
+            onPeek: { (translation: CGSize) in livePeek.follow(translation) },
             onPeekEnd: { livePeek.end() },
             isPeekHeld: { livePeek.isLocked }
         )
