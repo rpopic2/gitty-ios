@@ -368,6 +368,9 @@ struct SymbolsView: View, Equatable {
         let menu: @MainActor (Int, CodeTableMenuPart) -> CodeTableMenu? = { id, part in
             view.tableMenu(byID[id], part: part)
         }
+        // The peek, while the list shows (a hidden one leaves the edge alone).
+        let livePeek = self.peek
+        let peekFollows: (@MainActor (CGSize) -> Void)? = isActive ? { translation in livePeek.follow(translation) } : nil
         return CodeTable(
             sections: sections, header: header, row: row, isRowEmpty: isRowEmpty, menu: menu,
             estimatedRowHeight: estimatedRow, estimatedHeaderHeight: estimatedHeader,
@@ -391,7 +394,10 @@ struct SymbolsView: View, Equatable {
                 _ = collapsed.flipped
                 _ = collapsed.collapsedScopes
                 _ = collapsed.files
-            }
+            },
+            onPeek: peekFollows,
+            onPeekEnd: { livePeek.end() },
+            isPeekHeld: { livePeek.isLocked }
         )
     }
 
@@ -604,19 +610,6 @@ struct SymbolsView: View, Equatable {
 
     // MARK: Gestures
 
-    /// A drag from the left edge peeks at the line numbers.
-    private var peekGesture: some Gesture {
-        DragGesture(minimumDistance: 6, coordinateSpace: .global)
-            .onChanged { value in
-                // From the left edge; or anywhere while the blame stays open (a swipe left closes it).
-                guard peek.isLocked || value.startLocation.x <= CodePeek.edgeWidth else { return }
-                peek.follow(value.translation)
-            }
-            .onEnded { value in
-                if peek.isLocked || value.startLocation.x <= CodePeek.edgeWidth { peek.end() }
-            }
-    }
-
     /// Clone for Blame: the open file's info, where Clone is.
     private var cloneForBlame: (@MainActor () -> Void)? {
         guard let onShowHistory else { return nil }
@@ -693,7 +686,6 @@ struct SymbolsView: View, Equatable {
                 },
                 including: closesSearchOnSwipe ? .all : .subviews
             )
-            .simultaneousGesture(peekGesture, including: isActive ? .all : .subviews)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
                 if width != codeWidth { codeWidth = width }
             }

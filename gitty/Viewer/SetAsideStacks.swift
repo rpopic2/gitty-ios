@@ -432,6 +432,8 @@ private struct CaptionPan: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
             guard other !== pan else { return false }
+            // Never a page's line-number peek: it only starts at the screen's edge.
+            if let view = other.view, String(describing: type(of: view)).contains("PageTextView") { return false }
             if other is UIPanGestureRecognizer { return true }
             let name = String(describing: type(of: other))
             return ["Zoom", "Transition", "Dismiss"].contains { name.contains($0) }
