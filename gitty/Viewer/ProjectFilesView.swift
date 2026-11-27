@@ -59,6 +59,19 @@ struct ProjectFilesView: View {
     }
     /// A branch or tag chosen that the clone hasn't downloaded: asks to pull it.
     @State private var refToPull: RefToPull?
+    /// Just switched: diff albums comparing with the checkout whose split isn't downloaded. Asks
+    /// to load the history back to it.
+    @State private var historyNeeded: HistoryNeeded?
+
+    private struct HistoryNeeded: Identifiable {
+        /// What they compare the checkout with ("main"), for the question.
+        let others: [String]
+        /// Their branches and tags, deepened together.
+        let refs: [GitRef]
+        /// The comparisons, to tell when the split is in.
+        let comparisons: [GitComparison]
+        var id: String { others.joined(separator: ",") }
+    }
 
     private struct RefToPull: Identifiable {
         let name: String
@@ -138,6 +151,17 @@ struct ProjectFilesView: View {
                 Button("Pull \(ref.name)") { pullRef(ref) }
             } message: { ref in
                 Text("Pull downloads its latest commit into the clone and shows its files. Until then the project stays on \(clone?.ref.name ?? "its branch").")
+            }
+            // Just switched: an album comparing with the checkout needs older history.
+            .confirmationDialog(
+                historyNeeded.map { String(localized: "Comparing with \($0.others.joined(separator: ", ")) needs older history") } ?? "",
+                isPresented: Binding(get: { historyNeeded != nil }, set: { if !$0 { historyNeeded = nil } }),
+                titleVisibility: .visible, presenting: historyNeeded
+            ) { needed in
+                Button("Load History") { loadHistory(to: needed) }
+                Button("Not Now", role: .cancel) {}
+            } message: { _ in
+                Text("Where they split isn’t downloaded yet, so its album can’t show the changes. Loading fetches older commits until it’s found.")
             }
             .confirmationDialog("Delete the clone?", isPresented: $isConfirmingDeleteClone, titleVisibility: .visible) {
                 Button("Delete Clone", role: .destructive) { deleteClone() }
@@ -825,6 +849,61 @@ struct ProjectFilesView: View {
         let (shown, shownTree) = try await ProjectStore.shared.setRef(shownName, for: projectID, tree: tree)
         show(shown, shownTree)
         announceSwitch(from: project, to: shown)
+        if clone?.isLocal != true { Task { await checkComparisons() } }
+    }
+
+    /// The diff albums that compare with the checkout (since they split): those whose split
+    /// isn't in the clone now ask to load it.
+    private func checkComparisons() async {
+        var others: [String] = [], refs: [GitRef] = [], comparisons: [GitComparison] = []
+        for album in AlbumStore.shared.albums(inProject: projectID) {
+            guard case .comparison(let base, let head, let mode) = album.diff?.source, mode == .sinceSplit,
+                  base == .checkedOut || head == .checkedOut
+            else { continue }
+            let comparison = GitComparison(base: base, head: head, mode: mode)
+            do {
+                _ = try await CloneStore.shared.compare(comparison, projectID: projectID)
+            } catch CloneError.historyTooShort {
+                for side in [base, head] {
+                    switch side {
+                    case .branch(let name): refs.append(.branch(name))
+                    case .tag(let name): refs.append(.tag(name))
+                    default: break
+                    }
+                    if side != .checkedOut, !others.contains(side.label) { others.append(side.label) }
+                }
+                comparisons.append(comparison)
+            } catch {
+                continue  // a side not downloaded: its album offers to pull it
+            }
+        }
+        guard !comparisons.isEmpty else { return }
+        historyNeeded = HistoryNeeded(others: others, refs: Array(Set(refs)), comparisons: comparisons)
+    }
+
+    /// Fetches older commits, a step at a time, until every comparison's split is in (or the
+    /// whole history is: a step that changes nothing). Shown in the Pull row, with Cancel.
+    private func loadHistory(to needed: HistoryNeeded) {
+        startDownload(String(localized: "Loading history…")) { progress in
+            var previousDepth = await CloneStore.shared.record(forProject: projectID)?.depth
+            while true {
+                try await CloneStore.shared.loadMoreHistory(for: needed.refs, projectID: projectID)
+                var allFound = true
+                for comparison in needed.comparisons {
+                    do {
+                        _ = try await CloneStore.shared.compare(comparison, projectID: projectID)
+                    } catch CloneError.historyTooShort {
+                        allFound = false
+                    }
+                }
+                let depth = await CloneStore.shared.record(forProject: projectID)?.depth
+                // Found, or nothing more to fetch (the whole history: no depth, or no deeper).
+                if allFound || depth == nil || depth == previousDepth { break }
+                previousDepth = depth
+                try Task.checkCancellation()
+            }
+            CloneChanges.shared.didFetch(projectID)  // the albums show their changes
+        }
     }
 
     /// The open file follows the project to its new branch or tag (`BrowserView`).
