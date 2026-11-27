@@ -90,6 +90,10 @@ struct CodeTable: UIViewRepresentable {
     func makeUIView(context: Context) -> UITableView {
         let table = UITableView(frame: .zero, style: .plain)
         table.backgroundColor = .clear
+        // The line-number peek draws the numbers (and the blame) left of the code, in the strip
+        // that uncovers as the list slides right: outside the table, which as a scroll view clipped
+        // them away (the strip stayed blank).
+        table.clipsToBounds = false
         table.separatorStyle = .none
         table.allowsSelection = false
         table.sectionHeaderTopPadding = 0
