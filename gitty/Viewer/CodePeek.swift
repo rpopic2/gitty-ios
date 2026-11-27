@@ -16,6 +16,9 @@ final class CodePeek {
     private(set) var isBlameShown = false
     /// Let go with the blame showing: it stays until a tap on the code, or a swipe left.
     private(set) var isLocked = false
+    /// Whether there's a blame to pull out to (`BlameStore.isAvailable`). Without one, the peek
+    /// stops at the line numbers.
+    var isBlameAvailable = true
     /// Room for the numbers.
     static let width: CGFloat = 56
     /// Between a number and its line.
@@ -38,8 +41,9 @@ final class CodePeek {
         guard isSliding == true else { return }
         isActive = true
         let start = isLocked ? Self.fullWidth : 0
-        offset = min(max(start + translation.width, 0), Self.fullWidth)
-        let shows = offset >= Self.blameThreshold
+        // No blame: no further than the numbers.
+        offset = min(max(start + translation.width, 0), isBlameAvailable ? Self.fullWidth : Self.width)
+        let shows = isBlameAvailable && offset >= Self.blameThreshold
         guard shows != isBlameShown else { return }
         isBlameShown = shows
         if shows { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
@@ -96,6 +100,18 @@ final class BlameStore {
 
     func blame(for file: URL) -> FileBlame? {
         if case .loaded(let blame) = states[file] { blame } else { nil }
+    }
+
+    /// Whether a file's blame can show: it's in a GitHub project (cloned, or Clone for Blame
+    /// clones it) or in a local folder that's a Git repository. Not for a file outside projects,
+    /// or a plain folder.
+    static func isAvailable(for file: URL) async -> Bool {
+        let projects = await ProjectStore.shared.projects()
+        guard let location = ProjectFileLocation.locate(file, in: projects) else { return false }
+        if let record = await CloneStore.shared.record(forProject: location.project.id) {
+            return CloneIndex.shared.isRepository(record)
+        }
+        return location.project.link != nil
     }
 
     func load(_ file: URL) async {

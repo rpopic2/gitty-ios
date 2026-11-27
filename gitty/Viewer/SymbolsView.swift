@@ -197,6 +197,11 @@ struct SymbolsView: View, Equatable {
                 guard let request else { return }
                 setAllCollapsed(request.collapses)
             }
+            // No blame for this list's files (outside projects, a plain folder): the peek stops
+            // at the line numbers.
+            .task(id: openFile) {
+                peek.isBlameAvailable = await BlameStore.isAvailable(for: openFile)
+            }
     }
 
     /// Where the table starts: the first time, the saved place (search results start at the
