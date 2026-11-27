@@ -87,9 +87,8 @@ struct CodeTable: UIViewRepresentable {
     /// The line-number peek: a drag from the left edge (anywhere while it's held open, see
     /// `isPeekHeld`), as the finger goes and as it's let go. UIKit's, on the table, so its
     /// scrolling waits for it (as a SwiftUI gesture around it, the table took the drag).
-    var isPeekEnabled = false
-    var onPeek: @MainActor (CGSize) -> Void = { _ in }
-    var onPeekEnd: @MainActor () -> Void = {}
+    var onPeek: (@MainActor (CGSize) -> Void)? = nil
+    var onPeekEnd: (@MainActor () -> Void)? = nil
     var isPeekHeld: @MainActor () -> Bool = { false }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -474,9 +473,9 @@ struct CodeTable: UIViewRepresentable {
             let point = recognizer.translation(in: recognizer.view?.window)
             switch recognizer.state {
             case .began, .changed:
-                parent.onPeek(CGSize(width: point.x, height: point.y))
+                parent.onPeek?(CGSize(width: point.x, height: point.y))
             case .ended, .cancelled, .failed:
-                parent.onPeekEnd()
+                parent.onPeekEnd?()
             default:
                 break
             }
@@ -484,8 +483,7 @@ struct CodeTable: UIViewRepresentable {
 
         /// From the left edge; anywhere while the peek is held open (a swipe left closes it).
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard gestureRecognizer === peek else { return true }
-            guard parent.isPeekEnabled else { return false }  // hidden: the edge is left alone
+            guard gestureRecognizer === peek, parent.onPeek != nil else { return true }
             return parent.isPeekHeld() || touch.location(in: nil).x <= Self.peekEdgeWidth
         }
 
