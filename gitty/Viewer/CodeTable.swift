@@ -84,12 +84,6 @@ struct CodeTable: UIViewRepresentable {
     /// screen take their new heights, animated (a collapsed row has none, so it isn't drawn to
     /// tell the table itself).
     let observeHeights: @MainActor () -> Void
-    /// The line-number peek: a drag from the left edge (anywhere while it's held open, see
-    /// `isPeekHeld`), as the finger goes and as it's let go. UIKit's, on the table, so its
-    /// scrolling waits for it (as a SwiftUI gesture around it, the table took the drag).
-    var onPeek: (@MainActor (CGSize) -> Void)? = nil
-    var onPeekEnd: (@MainActor () -> Void)? = nil
-    var isPeekHeld: @MainActor () -> Bool = { false }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -111,12 +105,6 @@ struct CodeTable: UIViewRepresentable {
         table.delegate = context.coordinator
         context.coordinator.table = table
         context.coordinator.trackHeights()
-        let peek = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.peeked(_:)))
-        peek.delegate = context.coordinator
-        peek.cancelsTouchesInView = false
-        table.addGestureRecognizer(peek)
-        table.panGestureRecognizer.require(toFail: peek)  // only for drags the peek takes (from the edge)
-        context.coordinator.peek = peek
         return table
     }
 
@@ -138,8 +126,7 @@ struct CodeTable: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate, UIContextMenuInteractionDelegate,
-                             UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate, UIContextMenuInteractionDelegate {
         static let cellID = "row"
         static let headerID = "title"
 
@@ -461,44 +448,6 @@ struct CodeTable: UIViewRepresentable {
         }
 
         // MARK: Scrolling
-
-        // MARK: Peek
-
-        weak var peek: UIPanGestureRecognizer?
-        /// Touches starting this close to the screen's left edge peek (`CodePeek.edgeWidth`).
-        static let peekEdgeWidth: CGFloat = 28
-
-        @objc func peeked(_ recognizer: UIPanGestureRecognizer) {
-            // In the window's terms: the table itself slides with the peek.
-            let point = recognizer.translation(in: recognizer.view?.window)
-            switch recognizer.state {
-            case .began, .changed:
-                parent.onPeek?(CGSize(width: point.x, height: point.y))
-            case .ended, .cancelled, .failed:
-                parent.onPeekEnd?()
-            default:
-                break
-            }
-        }
-
-        /// From the left edge; anywhere while the peek is held open (a swipe left closes it).
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard gestureRecognizer === peek, parent.onPeek != nil else { return true }
-            return parent.isPeekHeld() || touch.location(in: nil).x <= Self.peekEdgeWidth
-        }
-
-        /// Sideways only: a drag up or down from the edge scrolls.
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard gestureRecognizer === peek, let pan = peek else { return true }
-            let velocity = pan.velocity(in: pan.view)
-            return abs(velocity.x) > abs(velocity.y)
-        }
-
-        /// Alongside the screen's other drags (the sidebar's), not the table's own scrolling.
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-            gestureRecognizer === peek && other !== table?.panGestureRecognizer
-        }
 
         /// In `updateUIView`: SwiftUI is updating the view.
         var isInSwiftUIUpdate = false
