@@ -770,6 +770,20 @@ final class CloneChanges {
 
     private(set) var pulls: [String: Int] = [:]
     private(set) var fetches: [String: Int] = [:]
+    /// The last branch or tag switch, per project: its files' addresses before and after (a
+    /// GitHub project's have the branch in them; a local folder's stay the same).
+    private(set) var switches: [String: RefSwitch] = [:]
+
+    struct RefSwitch: Equatable {
+        let count: Int
+        let oldPrefix: String
+        let newPrefix: String
+    }
+
+    func didSwitch(_ projectID: String, from oldPrefix: String, to newPrefix: String) {
+        let count = (switches[projectID]?.count ?? 0) + 1
+        switches[projectID] = RefSwitch(count: count, oldPrefix: oldPrefix, newPrefix: newPrefix)
+    }
 
     func didPull(_ projectID: String) {
         pulls[projectID, default: 0] += 1

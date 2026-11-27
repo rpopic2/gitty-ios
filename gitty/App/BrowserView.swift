@@ -119,6 +119,22 @@ struct BrowserView: View {
             }
             // The open album was deleted (from the Project tab, or with its project).
             .onChange(of: AlbumStore.shared.albums) { closeOpenAlbumIfGone() }
+            // The open project moved to another branch or tag: the open file too, at its address
+            // there (a GitHub project's has the branch in it; a local folder's doesn't change, and
+            // its Code level reads the new files itself).
+            .onChange(of: CloneChanges.shared.switches[openProjectID]) { _, change in
+                followSwitch(change)
+            }
+    }
+
+    private func followSwitch(_ change: CloneChanges.RefSwitch?) {
+        guard let change, change.oldPrefix != change.newPrefix,
+              currentURLString.hasPrefix(change.oldPrefix),
+              URL(string: change.newPrefix + currentURLString.dropFirst(change.oldPrefix.count)) != nil
+        else { return }
+        let moved = change.newPrefix + currentURLString.dropFirst(change.oldPrefix.count)
+        if openedURL?.absoluteString == currentURLString { openedURL = URL(string: moved) }
+        currentURLString = moved  // a fresh screen, at the new branch
     }
 
     /// A new album: empty, Project, to add to it from (one with something in it shows its code).

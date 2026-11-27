@@ -787,6 +787,7 @@ struct ProjectFilesView: View {
                 } else {
                     let (moved, tree) = try await ProjectStore.shared.setRef(name, for: projectID)
                     show(moved, tree)
+                    announceSwitch(from: project, to: moved)
                 }
             } catch {
                 errorTitle = clone?.isLocal == true ? String(localized: "Couldn’t Switch Branch")
@@ -819,12 +820,18 @@ struct ProjectFilesView: View {
         let tree = try await CloneStore.shared.switchTo(isTag ? .tag(name) : .branch(name), projectID: projectID,
                                                         rawPrefix: prefix, pulling: pulling, progress: progress)
         clone = await CloneStore.shared.record(forProject: projectID)
-        // A local folder's checkout: the branch it's on now (`origin/x` checks out as `x`), and
-        // the same addresses with new files, for the Code level.
+        // A local folder's checkout: the branch it's on now (`origin/x` checks out as `x`).
         let shownName = clone?.isLocal == true ? (clone?.ref.name).flatMap { $0.isEmpty ? nil : $0 } ?? name : name
-        if clone?.isLocal == true { CloneChanges.shared.didPull(projectID) }
         let (shown, shownTree) = try await ProjectStore.shared.setRef(shownName, for: projectID, tree: tree)
         show(shown, shownTree)
+        announceSwitch(from: project, to: shown)
+    }
+
+    /// The open file follows the project to its new branch or tag (`BrowserView`).
+    private func announceSwitch(from old: ProjectInfo, to new: ProjectInfo) {
+        guard let oldPrefix = old.rawURL(for: "")?.absoluteString, let newPrefix = new.rawURL(for: "")?.absoluteString
+        else { return }
+        CloneChanges.shared.didSwitch(projectID, from: oldPrefix, to: newPrefix)
     }
 
     nonisolated private static func bytes(of tree: ProjectTree) -> Int64 {

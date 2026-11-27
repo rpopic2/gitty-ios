@@ -283,6 +283,11 @@ struct CodeScreen: View {
             content
                 .onChange(of: CloneChanges.shared.pulls[projectID]) { Task { await model.clonePulled() } }
                 .onChange(of: CloneChanges.shared.fetches[projectID]) { model.cloneFetched() }
+                // Another branch checked out in a local folder: the same addresses, new files.
+                // (A GitHub project's open file moves to the new branch's address instead.)
+                .onChange(of: CloneChanges.shared.switches[projectID]) { _, change in
+                    if let change, change.oldPrefix == change.newPrefix { Task { await model.clonePulled() } }
+                }
         }
     }
 
