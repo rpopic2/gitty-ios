@@ -345,8 +345,6 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     label.background(.bar, in: Capsule())
                 }
             }
-            // Up or down: the stack set aside.
-            .stackCaptionSwipes(stackActions)
             .padding(.horizontal, 24)
         }
     }
@@ -516,8 +514,8 @@ struct StackActions {
     let albumContext: AlbumMenuContext?
     /// The stack went into an album (added, or a new one): it becomes that album.
     var onAddedToAlbum: (@MainActor (UUID) -> Void)? = nil
-    /// Sets the stack aside (the chip over the bar brings it back): the caption swiped up, or
-    /// Set Aside in its menu.
+    /// Sets the stack aside (the chip over the bar brings it back): Set Aside in the caption's
+    /// menu.
     var setAside: (@MainActor () -> Void)? = nil
     /// Close Stack in the caption's menu: every page closes at once.
     var close: (@MainActor () -> Void)? = nil

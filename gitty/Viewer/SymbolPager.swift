@@ -55,6 +55,8 @@ struct SymbolPager: View {
     @State private var infoFile: InfoFile?
     /// Scrolling down a page hides the caption; scrolling up shows it.
     @State private var isCaptionHidden = false
+    /// The caption's actions are fanned out over it (the page blurs behind them).
+    @State private var isCaptionMenuOpen = false
     /// Paged away from the tapped symbol at least once.
     @State private var hasPaged = false
     /// The identifier highlighted on every page (Highlight in the text menu).
@@ -188,11 +190,21 @@ struct SymbolPager: View {
                     }
                 }
 
+                // The caption's actions fanned out: the page blurs, as under a menu. A tap folds them.
+                if isCaptionMenuOpen {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .ignoresSafeArea()
+                        .onTapGesture { isCaptionMenuOpen = false }
+                        .transition(.opacity)
+                }
+
                 // The caption, then a set-aside review under it: both hide while you scroll down.
                 VStack(spacing: 0) {
                     if let current {
                         SymbolCaption(symbol: current, fileName: (current.fileURL ?? openFile).displayFileName,
                                       stackDepth: stackDepth, stackActions: stackActions,
+                                      isMenuOpen: $isCaptionMenuOpen,
                                       onInfo: infoAction(for: current))
                             .padding(.bottom, 8)
                     }
@@ -214,6 +226,7 @@ struct SymbolPager: View {
                 .animation(.smooth(duration: 0.25), value: isCaptionHidden)
                 .animation(.smooth(duration: 0.25), value: review?.isDocked)
             }
+            .animation(.smooth(duration: 0.25), value: isCaptionMenuOpen)
         }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(item: $infoFile) { file in
@@ -358,7 +371,8 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
 }
 
 /// "name · file" in a small capsule at the bottom, in place of the bar and selector. Tap it
-/// for the file's info.
+/// for the file's info; hold it for its actions, fanned out as the set-aside stacks' chip does
+/// (`HoldFan`): Show in Code Level, Set Aside, Close Stack.
 private struct SymbolCaption: View {
     let symbol: CodeSymbol
     /// The symbol's file's name, after its name.
@@ -366,6 +380,7 @@ private struct SymbolCaption: View {
     /// The card's place in the stack (`StackDepthLabel`): shown before the symbol from 2 up.
     let stackDepth: Int
     let stackActions: StackActions?
+    @Binding var isMenuOpen: Bool
     let onInfo: @MainActor () -> Void
 
     static let height: CGFloat = 36
@@ -373,35 +388,47 @@ private struct SymbolCaption: View {
     static let reservedHeight: CGFloat = height + 16
 
     init(symbol: CodeSymbol, fileName: String, stackDepth: Int, stackActions: StackActions?,
-         onInfo: @escaping @MainActor () -> Void) {
+         isMenuOpen: Binding<Bool>, onInfo: @escaping @MainActor () -> Void) {
         self.symbol = symbol
         self.fileName = fileName
         self.stackDepth = stackDepth
         self.stackActions = stackActions
+        _isMenuOpen = isMenuOpen
         self.onInfo = onInfo
     }
 
+    /// The actions, nearest the caption first.
+    private var actions: [FanItem] {
+        var items: [FanItem] = []
+        if stackActions?.showInCodeLevel != nil {
+            items.append(FanItem(id: "show", title: String(localized: "Show in Code Level"), symbolImage: "list.bullet.indent"))
+        }
+        if stackActions?.setAside != nil {
+            items.append(FanItem(id: "aside", title: String(localized: "Set Aside"), symbolImage: "square.stack.3d.down.right"))
+        }
+        if stackActions?.close != nil {
+            items.append(FanItem(id: "close", title: String(localized: "Close Stack"), symbolImage: "xmark",
+                                 isDestructive: true))
+        }
+        return items
+    }
+
     var body: some View {
-        capsule
-            .onTapGesture { onInfo() }
-            // Touch and hold: Show in Code Level, Set Aside (as swiping it up does) or Close Stack.
-            .contextMenu {
-                if let show = stackActions?.showInCodeLevel {
-                    Button("Show in Code Level", systemImage: "list.bullet.indent") { show(symbol) }
-                }
-                if let setAside = stackActions?.setAside {
-                    Button("Set Aside", systemImage: "square.stack.3d.down.right", action: setAside)
-                }
-                if let close = stackActions?.close {
-                    Button("Close Stack", systemImage: "xmark", action: close)
-                }
+        let symbol = symbol
+        let actions = stackActions
+        HoldFan(items: self.actions, isOpen: $isMenuOpen, onTap: onInfo, onChoose: { item in
+            switch item.id {
+            case "show": actions?.showInCodeLevel?(symbol)
+            case "aside": actions?.setAside?()
+            default: actions?.close?()
             }
-            // Up or down: the stack set aside.
-            .stackCaptionSwipes(stackActions)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityHint(Text("Shows the file’s info and history"))
-            .accessibilityAction(named: Text("Set Aside")) { stackActions?.setAside?() }
+        }) {
+            capsule
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint(Text("Shows the file’s info and history"))
+                .accessibilityAction { onInfo() }
+        }
     }
 
     @ViewBuilder
