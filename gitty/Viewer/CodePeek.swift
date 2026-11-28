@@ -100,6 +100,11 @@ final class BlameStore {
     /// Some file on screen is in a project that isn't cloned: the blame offers Clone.
     private(set) var needsClone = false
 
+    /// Some file's blame is being worked out (a big file's takes a moment): the strip says so.
+    var isLoading: Bool {
+        states.values.contains(.loading)
+    }
+
     func blame(for file: URL) -> FileBlame? {
         if case .loaded(let blame) = states[file] { blame } else { nil }
     }

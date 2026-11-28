@@ -1989,8 +1989,19 @@ private struct BlameStrip: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                } else if blames.isLoading {
+                    // Until the blame comes, the strip isn't just empty.
+                    VStack(spacing: 6) {
+                        ProgressView()
+                        Text("Loading Blame…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
                 }
             }
+            .animation(.smooth(duration: 0.2), value: blames.isLoading)
             .frame(width: CodePeek.blameWidth)
             .frame(maxHeight: .infinity)
             .transition(.opacity)
