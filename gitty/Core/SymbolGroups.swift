@@ -188,8 +188,9 @@ nonisolated struct FolderTree: Sendable {
 /// - symbols, whose code is hidden under their titles (tap a title);
 /// - files, whose symbols are all hidden under the file's title (tap a file's title).
 ///
-/// Collapse All makes a list's symbols collapsed by default, and pinching in once more folds
-/// its files by default too. Each list has a scope (where its files are: a project's raw
+/// A list's symbols can be collapsed by default (Collapse All, as the stack's sheet starts),
+/// and a project's files and folders folded by default (as a new project starts, `startFolded`).
+/// Each list has a scope (where its files are: a project's raw
 /// address prefix, or the open file's address outside projects) and its defaults, so a symbol
 /// or a file is kept only while it differs from its scope's default: by file, kind and name
 /// for a symbol (so it stays as it is when its file changes). Loaded once; each title and
@@ -227,13 +228,13 @@ final class CollapsedCodeStore {
     private(set) var files: Set<String>
     /// Scopes whose symbols are collapsed by default (Collapse All).
     private(set) var collapsedScopes: Set<String>
-    /// Scopes whose files are folded by default (pinching in on all titles).
+    /// Scopes whose files are folded by default (a new project's).
     private(set) var foldedScopes: Set<String>
     /// Folders that differ from their scope's default (folded under their header, unless the
     /// scope's are): `folder#` + scope + the folder's path. While every file is folded, the
     /// files are grouped by folder.
     private(set) var folders: Set<String>
-    /// Scopes whose folders are folded by default (pinching in once more on the folders).
+    /// Scopes whose folders are folded by default (a new project's).
     private(set) var foldedFolderScopes: Set<String>
     /// Projects' scopes the Code level has shown (see `startFolded`).
     @ObservationIgnored private var seenScopes: Set<String>
@@ -329,18 +330,6 @@ final class CollapsedCodeStore {
         foldedFolderScopes.contains(scope) != folders.contains("folder#" + scope + path)
     }
 
-    /// Every folder is folded in the scope (unless tapped open since).
-    func areAllFoldersFolded(scope: String) -> Bool {
-        foldedFolderScopes.contains(scope)
-    }
-
-    /// Folds (or unfolds) every folder in a scope, down to the folders' headers.
-    func setAllFoldersFolded(_ isFolded: Bool, scope: String) {
-        if isFolded { foldedFolderScopes.insert(scope) } else { foldedFolderScopes.remove(scope) }
-        folders = folders.filter { !$0.hasPrefix("folder#" + scope) }
-        save()
-    }
-
     func toggleFolder(_ path: String, scope: String) {
         let key = "folder#" + scope + path
         if folders.contains(key) { folders.remove(key) } else { folders.insert(key) }
@@ -386,16 +375,6 @@ final class CollapsedCodeStore {
     /// Not shown at all: in a folded file (a file's own title always shows).
     func isHidden(_ symbol: CodeSymbol, openFile: URL, scope: String) -> Bool {
         symbol.kind != .file && isFileCollapsed(symbol.fileURL ?? openFile, scope: scope)
-    }
-
-    /// Collapse All is on in the scope (every symbol collapsed, unless tapped open since).
-    func areAllCollapsed(scope: String) -> Bool {
-        collapsedScopes.contains(scope)
-    }
-
-    /// Every file is folded in the scope (unless tapped open since).
-    func areAllFilesFolded(scope: String) -> Bool {
-        foldedScopes.contains(scope)
     }
 
     /// A file's title folds the file; a symbol's, its code.
@@ -468,14 +447,6 @@ final class CollapsedCodeStore {
         foldedFolderScopes.remove(scope)
         folders = folders.filter { !$0.hasPrefix("folder#" + scope) }
         flipped = flipped.filter { !$0.hasPrefix(scope) }
-        files = files.filter { !$0.hasPrefix("file#" + scope) }
-        save()
-    }
-
-    /// Folds (or unfolds) every file in a scope, down to the files' titles; symbols stay as
-    /// they are under them.
-    func setAllFilesFolded(_ isFolded: Bool, scope: String) {
-        if isFolded { foldedScopes.insert(scope) } else { foldedScopes.remove(scope) }
         files = files.filter { !$0.hasPrefix("file#" + scope) }
         save()
     }

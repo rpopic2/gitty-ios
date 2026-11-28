@@ -5,7 +5,7 @@ Read and review code on iPhone and iPad: Safari's raw-text look, Photos-style br
 ## Features
 
 - **Projects** from a GitHub link, or a **local folder** (Files, or Finder on a Mac), read where it is, uncommitted edits included.
-- **Code level:** every symbol of the project as a collapsible outline with its code. Pinch for the outline and folders, tap a symbol for its full-screen card.
+- **Code level:** every symbol of the project under its folders and files, with its code. Tap a title to fold it (hold it for Collapse All or Expand All), tap the code for its full-screen card.
 - **Cards:** swipe between symbols, search, find occurrences, and double tap a selection to grow it by syntax. Set a stack of cards aside and come back to it from the chip over the bar.
 - **Albums:** the symbols, files and lines you want together. Swipe the bar to switch between them, or swipe it up for all of them.
 - **Git** (libgit2): clone, branches, history, blame, and diffs between branches as albums.
@@ -18,7 +18,6 @@ Read and review code on iPhone and iPad: Safari's raw-text look, Photos-style br
 - Open `gitty.xcodeproj`. The Swift packages (tree-sitter grammars, libgit2) resolve by themselves.
 - `gitty/` is a synchronized folder: new files join the target automatically. The default actor isolation is `MainActor`; code that runs off the main thread is `nonisolated`.
 - **Private repositories** use gitty's GitHub App, signed in with the device flow. Its client ID and name are in `GitHubAppConfig` (`gitty/Core/GitHubAuth.swift`). For your own app, create a GitHub App with Device Flow on and read-only Contents, and put its values there.
-- **Tests** are in `gittyTests/` (Swift Testing) and need a test target: File ▸ New ▸ Target ▸ Unit Testing Bundle named `gittyTests`, using that folder.
 
 ## Adding a language
 
@@ -35,4 +34,3 @@ Read and review code on iPhone and iPad: Safari's raw-text look, Photos-style br
 | `gitty/Viewer` | The screens: Code level (`SymbolsView`, `CodeTable`), cards (`SymbolPager`), bar, sidebar, albums |
 | `gitty/Languages` | Tree-sitter queries for symbols and highlighting |
 | `gittyShare` | Share extension: opens a link shared from Safari in gitty |
-| `gittyTests` | Tests |

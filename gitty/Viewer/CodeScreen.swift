@@ -453,7 +453,7 @@ struct CodeScreen: View {
                 },
                 onDownloadFile: { model.download(file: $0) },
                 downloadingFiles: model.downloadingFiles,
-                // The whole list's folders, built with it (an album's are grouped by the list).
+                // The whole project's list shows its folders; an album's is as you made it.
                 folders: model.activeAlbum == nil ? model.folderGroups : nil,
                 onNeedsSymbols: { model.needsSymbols(of: $0) },
                 onOpenURL: { onOpen($0) },

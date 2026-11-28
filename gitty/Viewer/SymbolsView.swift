@@ -1,13 +1,12 @@
 import SwiftUI
 import UIKit
 
-/// The Code level: every top-level definition of the open file and its project, as an outline.
-/// Each file has a title line, and each symbol a title with its declaration, which sticks to the
-/// top while you read its code, edge to edge in the raw-text style under it. Tap a title to
-/// collapse or expand it (a file's folds all its symbols); Collapse All (the bar's menu, or
-/// pinching in) leaves just the titles, like a C header, and Expand All
-/// brings the code back, keeping your place. Tap the code to open its page,
-/// full screen (see `SymbolPager`).
+/// The Code level: every top-level definition of the open file and its project, under its
+/// folders' headers (the whole project's list) and its files' title lines. Each symbol has a
+/// title with its declaration, which sticks to the top while you read its code, edge to edge in
+/// the raw-text style under it. Tap a title or header to fold or unfold it; hold it for Collapse
+/// All or Expand All (it and one level under it). Tap the code to open its page, full screen
+/// (see `SymbolPager`).
 ///
 /// Equatable, so the bar collapsing or expanding (which redraws the screen around it, several
 /// times in a fling) doesn't redraw this list and its every symbol: use `.equatable()`.
@@ -56,7 +55,8 @@ struct SymbolsView: View, Equatable {
     let onDownloadFile: (@MainActor (URL) -> Void)?
     /// Files downloading now (their titles show it).
     let downloadingFiles: Set<URL>
-    /// `symbols`' folders, built with them away from the main thread (`nil`: grouped here).
+    /// `symbols`' folders, built with them away from the main thread: the whole project's list,
+    /// shown under its folders' headers (`nil`: any other list, as it comes).
     let folders: [FolderGroup]?
     /// A file's title came on screen before its symbols were known: read them now.
     let onNeedsSymbols: (@MainActor (URL) -> Void)?
@@ -81,8 +81,6 @@ struct SymbolsView: View, Equatable {
     @State private var codeBlocks = CodeBlockStore()
     /// Each file's symbol count, for its title.
     @State private var fileCounts = FileSymbolCounts()
-    /// The files by folder, while every file is folded.
-    @State private var folderGroups = FolderGroupCache()
     /// The folders as a tree, for grouping a project with many.
     @State private var folderTrees = FolderTreeCache()
     /// Not observed: updated every scroll frame without redrawing anything.
@@ -91,8 +89,6 @@ struct SymbolsView: View, Equatable {
     @State private var peek = CodePeek()
     /// Who last changed the lines, for the peek's second stop.
     @State private var blames = BlameStore()
-    /// The list follows the fingers while pinching, like Photos' grid (`PinchScale`).
-    @State private var pinchZoom = PinchZoom()
     /// What's collapsed: the Code level's (shared, saved), or a results page's own.
     let collapsed: CollapsedCodeStore
     /// The list's width, which the code wraps in.
@@ -189,8 +185,6 @@ struct SymbolsView: View, Equatable {
                 BlameStrip(peek: peek, blames: blames, onTap: openBlameCommit(at:),
                            onClone: cloneForBlame)
             }
-            .modifier(PinchScale(zoom: pinchZoom))
-            .simultaneousGesture(pinch, including: isActive ? .all : .subviews)
             .onChange(of: scrollRequest) { _, request in
                 guard let request else { return }
                 tableScroll = CodeTableScrollRequest(request.id)
@@ -202,9 +196,8 @@ struct SymbolsView: View, Equatable {
             }
     }
 
-    /// Where the table starts: the first time, the saved place (search results start at the
-    /// top, with the best match); a fresh table after that (Collapse All, folding every file),
-    /// where the list was.
+    /// Where the table starts: the saved place (search results start at the top, with the best
+    /// match).
     private var start: @MainActor () -> Int? {
         let scroll = scroll
         let query = query
@@ -213,22 +206,6 @@ struct SymbolsView: View, Equatable {
             if scroll.isPositioned { return scroll.centeredID }
             return query.isEmpty ? initialID() ?? scroll.centeredID : nil
         }
-    }
-
-    /// Collapse All or Expand All, keeping the symbol at the top where it is (a fresh table
-    /// starts at it).
-    private func setAllCollapsed(_ isCollapsed: Bool) {
-        collapsed.setAllCollapsed(isCollapsed, scope: collapseScope)
-    }
-
-    /// Folds (or unfolds) every file to its title, keeping the file at the top where it is.
-    private func setAllFilesFolded(_ isFolded: Bool) {
-        // The top symbol's file: its symbols go away, and the fresh table starts at it.
-        if let id = scroll.centeredID, let index = symbols.firstIndex(where: { $0.id == id }),
-           let file = symbols[...index].last(where: { $0.kind == .file }) {
-            scroll.centeredID = file.id
-        }
-        collapsed.setAllFilesFolded(isFolded, scope: collapseScope)
     }
 
     // MARK: Layout
@@ -258,21 +235,14 @@ struct SymbolsView: View, Equatable {
             ? CodeLayoutKey(width: codeWidth - 2 * RawTextStyle.insets.left, style: codeTextStyle,
                             isDark: colorScheme == .dark)
             : nil
-        return Group {
-            if collapsed.areAllFilesFolded(scope: scope) {
-                table(groupedRows)
-            } else {
-                // A fresh table when Collapse All turns on or off: it starts at the symbol that
-                // was at the top (`start`).
-                table(outlineRows)
-                    .id(collapsed.areAllCollapsed(scope: scope))
-            }
-        }
-        .modifier(PeekShift(peek: peek))  // the whole list slides while peeking
+        // The whole project's list (in path order, with its folders) under its folders' headers;
+        // any other list (an album's, results) as it comes.
+        return table(folders.map(groupedRows) ?? plainRows)
+            .modifier(PeekShift(peek: peek))  // the whole list slides while peeking
     }
 
-    /// What a section of the table is: a symbol (its title, then its code), or in the grouped
-    /// view a folder's header.
+    /// What a section of the table is: a symbol (its title, then its code), or in the whole
+    /// project's list a folder's header.
     private enum TableRow {
         case symbol(CodeSymbol, indent: Int)
         case folder(FolderRows.Header)
@@ -280,7 +250,7 @@ struct SymbolsView: View, Equatable {
 
     /// Each symbol under its title, which sticks while you read its code. A folded file's
     /// symbols aren't in the table at all (thousands of empty rows made scrolling lag).
-    private var outlineRows: [(id: Int, row: TableRow)] {
+    private var plainRows: [(id: Int, row: TableRow)] {
         let collapsed = collapsed
         let openFile = openFile
         let scope = collapseScope
@@ -291,14 +261,12 @@ struct SymbolsView: View, Equatable {
         return rows
     }
 
-    /// Every file folded: the files grouped by folder, each folder's header (tap it to fold the
-    /// folder) a row above its files. The titles stick, as in the outline: a file's, and a
-    /// symbol's under a file unfolded here.
-    private var groupedRows: [(id: Int, row: TableRow)] {
+    /// The files grouped by folder, each folder's header (tap it to fold the folder) a row above
+    /// its files. The titles stick: a file's, and a symbol's under it.
+    private func groupedRows(_ groups: [FolderGroup]) -> [(id: Int, row: TableRow)] {
         let collapsed = collapsed
         let scope = collapseScope
         let openFile = openFile
-        let groups = folders ?? folderGroups.groups(of: symbols, openFile: openFile, scope: scope)
         let tree = folderTrees.tree(of: groups)
         let layout = FolderRows(groups: groups, tree: tree,
                                 isGroupOpen: { collapsed.isGroupOpen($0, scope: scope) },
@@ -645,47 +613,6 @@ struct SymbolsView: View, Equatable {
               !found.hunk.commitID.allSatisfy({ $0 == "0" })  // not committed
         else { return }
         onShowCommit(found.projectID, found.hunk.commitID, found.focus)
-    }
-
-    /// Pinching in (fingers together) zooms out a step, one per pinch, when the fingers lift past
-    /// the threshold: from the code, to every symbol collapsed to its title (an outline), every
-    /// file folded to its title (grouped by folder), every folder folded to its header. There's
-    /// no pinching back in: unfolding everything at once hung a project as big as Linux, so
-    /// folders and files unfold from their long-press menus and titles.
-    /// Fingers lifting under this fold a level.
-    private static let pinchThreshold: CGFloat = 0.8
-
-    private var pinch: some Gesture {
-        MagnifyGesture()
-            .onChanged { value in
-                // Spreading doesn't unfold (that could unfold a huge project at once): the list
-                // follows only fingers coming together.
-                pinchZoom.follow(min(value.magnification, 1), anchor: value.startAnchor)
-                // A tap of haptics as it passes the threshold: letting go now folds a level
-                // (when there's one left to fold).
-                let isPast = value.magnification < Self.pinchThreshold
-                if isPast != pinchZoom.isPastThreshold {
-                    pinchZoom.isPastThreshold = isPast
-                    if isPast, !collapsed.areAllFoldersFolded(scope: collapseScope) {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    }
-                }
-            }
-            .onEnded { value in
-                pinchZoom.isPastThreshold = false
-                // One level, when the fingers lift past the threshold.
-                if value.magnification < Self.pinchThreshold {
-                    let scope = collapseScope
-                    if !collapsed.areAllCollapsed(scope: scope) {
-                        setAllCollapsed(true)
-                    } else if !collapsed.areAllFilesFolded(scope: scope) {
-                        setAllFilesFolded(true)
-                    } else if !collapsed.areAllFoldersFolded(scope: scope) {
-                        withAnimation(.smooth(duration: 0.25)) { collapsed.setAllFoldersFolded(true, scope: scope) }
-                    }
-                }
-                pinchZoom.settle()  // back as it was
-            }
     }
 
     // MARK: Scrolling
@@ -1038,22 +965,6 @@ private final class FolderTreeCache {
             tree = FolderTree(groups)
         }
         return tree!
-    }
-}
-
-/// The files by folder, worked out again only when the list changes. Not observed.
-private final class FolderGroupCache {
-    private var key: [String] = []
-    private var groups: [FolderGroup] = []
-
-    func groups(of symbols: [CodeSymbol], openFile: URL, scope: String) -> [FolderGroup] {
-        let key = ["\(symbols.count)", "\(symbols.first?.id ?? -1)", "\(symbols.last?.id ?? -1)", scope,
-                   openFile.absoluteString]
-        if key != self.key {
-            self.key = key
-            groups = FolderGroup.groups(of: symbols, openFile: openFile, scope: scope)
-        }
-        return groups
     }
 }
 
