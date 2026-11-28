@@ -36,7 +36,7 @@ struct HoldFan<Base: View>: View {
     /// preview does.
     @State private var lean: CGSize = .zero
     /// How much of the finger's move they follow.
-    private static let leaning: CGFloat = 0.06
+    private static var leaning: CGFloat { 0.06 }
 
     private struct Touch {
         /// Fanned out when the finger came down.
