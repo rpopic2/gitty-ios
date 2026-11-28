@@ -1331,6 +1331,11 @@ struct CodeScreen: View {
                 titleIcon: model.activeAlbum != nil ? "rectangle.stack" : nil,
                 swipe: albumSwipe
             )
+            // Blurred with the rest while the stacks are fanned out (they hang from the bar, so the
+            // screen's blur, under the bar, can't cover it).
+            .blur(radius: areStacksFanned ? 6 : 0)
+            .opacity(areStacksFanned ? 0.6 : 1)
+            .allowsHitTesting(!areStacksFanned)
             // The stacks set aside in this album, over the bar (in the middle; the review's
             // capsule floats at an end).
             .overlay(alignment: .top) {

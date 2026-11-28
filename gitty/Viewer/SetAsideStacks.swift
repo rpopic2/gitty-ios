@@ -93,7 +93,7 @@ struct SetAsideChips: View {
     /// From one chip to the next, fanned out.
     private static let step: CGFloat = chipHeight + 8
     /// Let go this far to the side of a highlighted chip: it's thrown away.
-    private static let dropDistance: CGFloat = 90
+    private static let dropDistance: CGFloat = 150
 
     private var latestFirst: [SetAsideStack] { stacks.reversed() }
 
@@ -158,8 +158,11 @@ struct SetAsideChips: View {
         let title: String = several ? String(localized: "\(stacks.count) Stacks") : latest.title
         let image: String = isOpen ? "chevron.down" : (several ? "square.stack.3d.up" : latest.symbolImage)
         let cards: Int? = several ? nil : latest.cardCount
+        // Fanned out, it's lifted, as a held item is under a menu.
         return SetAsideChip(title: title, symbolImage: image, cards: cards, isHighlighted: false)
             .frame(maxWidth: 220)
+            .scaleEffect(isOpen ? 1.08 : 1)
+            .shadow(color: .black.opacity(isOpen ? 0.25 : 0), radius: isOpen ? 12 : 0, y: isOpen ? 4 : 0)
             .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
