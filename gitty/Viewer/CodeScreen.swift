@@ -386,7 +386,8 @@ struct CodeScreen: View {
                     description: Text("No definitions were found in this file or the project’s downloaded files.")
                 )
             }
-        case .ready where model.activeAlbum != nil && model.albumSymbols.isEmpty:
+        // Not a diff album: its cards come once it's compared (the list's overlay says so meanwhile).
+        case .ready where model.activeAlbum != nil && model.activeAlbum?.diff == nil && model.albumSymbols.isEmpty:
             placeholder {
                 ContentUnavailableView(
                     model.activeAlbum?.name ?? "",
