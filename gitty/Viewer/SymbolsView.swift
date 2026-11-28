@@ -25,8 +25,6 @@ struct SymbolsView: View, Equatable {
     /// Brings a symbol into view (the pager closing on another one). Each request scrolls once,
     /// even to the same symbol as last time.
     let scrollRequest: SymbolScrollRequest?
-    /// Collapse All or Expand All, from the bar's menu. Each request runs once.
-    let collapseRequest: CollapseRequest?
     /// The saved place in the list, where it starts.
     let initialID: @MainActor () -> Int?
     /// Another symbol reached the top of the screen (to save the place). It's reported without
@@ -114,7 +112,6 @@ struct SymbolsView: View, Equatable {
     init(symbols: [CodeSymbol], query: String, isActive: Bool,
          ownText: NSString?,
          scrollRequest: SymbolScrollRequest?,
-         collapseRequest: CollapseRequest?,
          initialID: @escaping @MainActor () -> Int? = { nil },
          onCenteredSymbolChange: @escaping @MainActor (CodeSymbol) -> Void,
          isBarCollapsed: @escaping @MainActor () -> Bool, barTapCount: Int, openFile: URL,
@@ -148,7 +145,6 @@ struct SymbolsView: View, Equatable {
         self.isActive = isActive
         self.ownText = ownText
         self.scrollRequest = scrollRequest
-        self.collapseRequest = collapseRequest
         self.initialID = initialID
         self.onCenteredSymbolChange = onCenteredSymbolChange
         self.isBarCollapsed = isBarCollapsed
@@ -174,7 +170,7 @@ struct SymbolsView: View, Equatable {
     nonisolated static func == (lhs: SymbolsView, rhs: SymbolsView) -> Bool {
         lhs.symbols == rhs.symbols && lhs.query == rhs.query
             && lhs.isActive == rhs.isActive && lhs.ownText === rhs.ownText
-            && lhs.scrollRequest == rhs.scrollRequest && lhs.collapseRequest == rhs.collapseRequest
+            && lhs.scrollRequest == rhs.scrollRequest
             && lhs.barTapCount == rhs.barTapCount
             && lhs.openFile == rhs.openFile && lhs.collapseScope == rhs.collapseScope
             && lhs.rootFolderName == rhs.rootFolderName
@@ -198,10 +194,6 @@ struct SymbolsView: View, Equatable {
             .onChange(of: scrollRequest) { _, request in
                 guard let request else { return }
                 tableScroll = CodeTableScrollRequest(request.id)
-            }
-            .onChange(of: collapseRequest) { _, request in
-                guard let request else { return }
-                setAllCollapsed(request.collapses)
             }
             // No blame for this list's files (outside projects, a plain folder): the peek stops
             // at the line numbers.
@@ -498,37 +490,24 @@ struct SymbolsView: View, Equatable {
         let path: String, fileCount: Int
         switch header {
         case .group(let node, _, _):
-            // As a folder's: Collapse while open; Expand (its folders) while closed.
-            let isOpen = collapsed.isGroupOpen(node.path, scope: scope)
-            items.append(action(isOpen ? "Collapse" : "Expand", isOpen ? "chevron.right" : "chevron.down",
-                                animated { collapsed.toggleGroup(node.path, scope: scope) }))
+            // One level under it: its folders.
+            let folders = ((node.group.map { [$0] } ?? []) + node.below).map(\.path)
+            items.append(Self.levelAction(isOpen: collapsed.isGroupLevelOpen(node.path, folders: folders, scope: scope)) {
+                collapsed.setGroupLevel(open: $0, node.path, folders: folders, scope: scope)
+            })
             if let comment { items.append(action("Comment", "text.bubble") { comment(node.path) }) }
             path = rootFolderName + "/" + node.path
             fileCount = node.fileCount
         case .folder(let group, _, _):
-            // Open: Collapse it. Folded: Expand All in it (its files, and their symbols' code).
-            if collapsed.isFolderFolded(group.path, scope: scope) {
-                let openFile = openFile
-                items.append(action("Expand All", "chevron.down.2", animated {
-                    collapsed.expandAll(inFolder: group.path, files: group.files, group.symbols,
-                                        openFile: openFile, scope: scope)
-                }))
-            } else {
-                items.append(action("Collapse", "chevron.right",
-                                    animated { collapsed.toggleFolder(group.path, scope: scope) }))
-            }
+            // One level under it: its files.
+            items.append(Self.levelAction(isOpen: collapsed.isFolderLevelOpen(group.path, files: group.files, scope: scope)) {
+                collapsed.setFolderLevel(open: $0, group.path, files: group.files, scope: scope)
+            })
             if let comment { items.append(action("Comment", "text.bubble") { comment(group.path) }) }
             if let albumContext {
                 items += AlbumUIMenu.elements(for: group.files.map { AlbumItem.file($0) }, context: albumContext,
                                               naming: albumNaming)
             }
-            // The one that applies, as everywhere: Fold All Folders, or Unfold All Folders with
-            // every folder folded.
-            let allFolded = collapsed.isEveryFolderFolded(scope: scope)
-            items.append(UIMenu(options: .displayInline, children: [
-                action(allFolded ? "Unfold All Folders" : "Fold All Folders", allFolded ? "chevron.down.2" : "chevron.right.2",
-                       animated { collapsed.setAllFoldersFolded(!allFolded, scope: scope) }),
-            ]))
             path = group.path.isEmpty ? rootFolderName : rootFolderName + "/" + group.path
             fileCount = group.fileCount
         }
@@ -536,6 +515,15 @@ struct SymbolsView: View, Equatable {
             let controller = UIHostingController(rootView: FolderPathPreview(path: path, fileCount: fileCount))
             controller.preferredContentSize = controller.sizeThatFits(in: CGSize(width: 320, height: 600))
             return controller
+        }
+    }
+
+    /// A title's or a header's Collapse All (something one level under it shows) or Expand All
+    /// (nothing does): `set` opens (`true`) or closes what's one level under it.
+    private static func levelAction(isOpen: Bool, _ set: @escaping @MainActor (_ opens: Bool) -> Void) -> UIAction {
+        UIAction(title: isOpen ? String(localized: "Collapse All") : String(localized: "Expand All"),
+                 image: UIImage(systemName: isOpen ? "chevron.right.2" : "chevron.down.2")) { _ in
+            withAnimation(.smooth(duration: 0.25)) { set(!isOpen) }
         }
     }
 
@@ -599,20 +587,17 @@ struct SymbolsView: View, Equatable {
     /// may be hundreds of lines), Open, Show History, the text items (see `CodeMenu`) and Add
     /// to Album.
     private func contextMenu(for symbol: CodeSymbol, part: CodeMenu.Part) -> CodeMenu {
-        let view = self
         let onOpen = onOpen
         let onOpenURL = onOpenURL
         let blocks = codeBlocks
-        // A file's title: Collapse it while it's open, Expand All in it while it's folded.
-        // Typed first: as an untyped closure in a ternary, it was too much for the type checker.
-        var onExpandAll: (@MainActor () -> Void)?
-        var onCollapse: (@MainActor () -> Void)?
-        if symbol.kind == .file {
-            if !collapsed.isFileCollapsed(symbol.fileURL ?? openFile, scope: collapseScope) {
-                let collapsed = collapsed, openFile = openFile, scope = collapseScope
-                onCollapse = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile, scope: scope) } }
-            } else if symbol.isDownloaded {
-                onExpandAll = { view.expandAll(inFile: symbol) }
+        // A file's title: one level under it, its symbols' code.
+        var levelAction: UIAction?
+        if symbol.kind == .file, symbol.isDownloaded {
+            let collapsed = collapsed, openFile = openFile, scope = collapseScope
+            let file = symbol.fileURL ?? openFile
+            let inFile = symbols.filter { $0.kind != .file && ($0.fileURL ?? openFile) == file }
+            levelAction = Self.levelAction(isOpen: collapsed.isFileLevelOpen(file, inFile, openFile: openFile, scope: scope)) {
+                collapsed.setFileLevel(open: $0, file, inFile, openFile: openFile, scope: scope)
             }
         }
         let codeRange: @MainActor () -> NSRange = { blocks.shownRange(of: symbol) }
@@ -627,17 +612,7 @@ struct SymbolsView: View, Equatable {
                         textActions: textActions,
                         ownText: ownText,
                         codeRange: codeRange,
-                        onExpandAll: onExpandAll,
-                        onCollapse: onCollapse)
-    }
-
-    /// A file title's Expand All: the file unfolded, and all its symbols' code showing.
-    private func expandAll(inFile entry: CodeSymbol) {
-        let file = entry.fileURL ?? openFile
-        let inFile = symbols.filter { $0.kind != .file && ($0.fileURL ?? openFile) == file }
-        withAnimation(.smooth(duration: 0.25)) {
-            collapsed.expandAll(in: file, inFile, openFile: openFile, scope: collapseScope)
-        }
+                        levelAction: levelAction)
     }
 
     // MARK: Gestures
@@ -741,17 +716,6 @@ struct SymbolsView: View, Equatable {
             .onChange(of: barTapCount) {
                 scroll.tracker.holdOpen()
             }
-    }
-}
-
-/// Collapse All (`collapses`) or Expand All, from the bar's menu. A new request (a new `token`)
-/// runs again, even the same one.
-nonisolated struct CollapseRequest: Equatable, Sendable {
-    let collapses: Bool
-    let token = UUID()
-
-    init(collapses: Bool) {
-        self.collapses = collapses
     }
 }
 
@@ -1657,9 +1621,8 @@ private struct CodeMenu {
     let ownText: NSString?
     /// The code's range in its file (what its block shows), worked out when an item is chosen.
     let codeRange: @MainActor () -> NSRange
-    /// A file's title: Expand All in it (folded), or Collapse it (open).
-    let onExpandAll: (@MainActor () -> Void)?
-    let onCollapse: (@MainActor () -> Void)?
+    /// A file's title: Collapse All or Expand All in it.
+    let levelAction: UIAction?
 
     func menu(naming: AlbumNaming?) -> UIMenu {
         let file = symbol.fileURL ?? openFile
@@ -1673,11 +1636,8 @@ private struct CodeMenu {
                 onShowHistory(file, symbol.kind == .file ? nil : symbol)
             })
         }
-        if part == .title, let onExpandAll {
-            first.append(action("Expand All", "chevron.down.2", onExpandAll))
-        }
-        if part == .title, let onCollapse {
-            first.append(action("Collapse", "chevron.right", onCollapse))
+        if part == .title, let levelAction {
+            first.append(levelAction)
         }
         var sections: [UIMenuElement] = [
             UIMenu(options: .displayInline, children: first),

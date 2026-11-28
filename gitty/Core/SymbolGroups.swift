@@ -393,19 +393,6 @@ final class CollapsedCodeStore {
         collapsedScopes.contains(scope)
     }
 
-    /// Nothing's code shows in the scope: Collapse All (or every file folded), and nothing
-    /// opened since. Expand All is what's offered then, Collapse All otherwise.
-    func isEverythingCollapsed(scope: String) -> Bool {
-        (collapsedScopes.contains(scope) && !flipped.contains { $0.hasPrefix(scope) })
-            || (foldedScopes.contains(scope) && !files.contains { $0.hasPrefix("file#" + scope) })
-    }
-
-    /// Every folder is folded in the scope, none opened since: Unfold All Folders is what's
-    /// offered then, Fold All Folders otherwise.
-    func isEveryFolderFolded(scope: String) -> Bool {
-        foldedFolderScopes.contains(scope) && !folders.contains { $0.hasPrefix("folder#" + scope) }
-    }
-
     /// Every file is folded in the scope (unless tapped open since).
     func areAllFilesFolded(scope: String) -> Bool {
         foldedScopes.contains(scope)
@@ -435,20 +422,41 @@ final class CollapsedCodeStore {
         save()
     }
 
-    /// Expand All in a file (its title's menu): the file unfolded (a file without symbols shows
-    /// its text), and every one of its symbols showing its code.
-    func expandAll(in file: URL, _ symbols: [CodeSymbol], openFile: URL, scope: String) {
-        setFolded(false, file, scope: scope)
-        setCollapsed(false, symbols, openFile: openFile, scope: scope)  // saves
+    // MARK: One level under a title or a header (its Collapse All and Expand All)
+
+    /// A file's: its symbols' code (a file without symbols: its text, by folding the file).
+    /// Opening unfolds the file too.
+    func setFileLevel(open: Bool, _ file: URL, _ symbols: [CodeSymbol], openFile: URL, scope: String) {
+        setFolded(symbols.isEmpty && !open, file, scope: scope)
+        setCollapsed(!open, symbols, openFile: openFile, scope: scope)
+        save()
     }
 
-    /// Expand All in a folder (its header's menu, while it's folded): the folder unfolded, its
-    /// files unfolded, and every one of their symbols showing its code.
-    func expandAll(inFolder path: String, files: [URL], _ symbols: [CodeSymbol], openFile: URL, scope: String) {
-        let key = "folder#" + scope + path
-        if foldedFolderScopes.contains(scope) { folders.insert(key) } else { folders.remove(key) }
-        for file in files { setFolded(false, file, scope: scope) }
-        setCollapsed(false, symbols, openFile: openFile, scope: scope)  // saves
+    func isFileLevelOpen(_ file: URL, _ symbols: [CodeSymbol], openFile: URL, scope: String) -> Bool {
+        !isFileCollapsed(file, scope: scope)
+            && (symbols.isEmpty || symbols.contains { !isCollapsed($0, openFile: openFile, scope: scope) })
+    }
+
+    /// A folder's: its files, folded to their titles or not. Opening unfolds the folder too.
+    func setFolderLevel(open: Bool, _ path: String, files: [URL], scope: String) {
+        if open { setFolderFolded(false, path, scope: scope) }
+        for file in files { setFolded(!open, file, scope: scope) }
+        save()
+    }
+
+    func isFolderLevelOpen(_ path: String, files: [URL], scope: String) -> Bool {
+        !isFolderFolded(path, scope: scope) && files.contains { !isFileCollapsed($0, scope: scope) }
+    }
+
+    /// A group of folders': its folders, folded or not. Opening opens the group too.
+    func setGroupLevel(open: Bool, _ path: String, folders paths: [String], scope: String) {
+        if open { openGroups.insert("group#" + scope + path) }
+        for folder in paths { setFolderFolded(!open, folder, scope: scope) }
+        save()
+    }
+
+    func isGroupLevelOpen(_ path: String, folders paths: [String], scope: String) -> Bool {
+        isGroupOpen(path, scope: scope) && paths.contains { !isFolderFolded($0, scope: scope) }
     }
 
     /// Collapse All (or Expand All) in a scope: every symbol's code, and no file folded.
@@ -482,14 +490,18 @@ final class CollapsedCodeStore {
             path = path.isEmpty ? String(part) : path + "/" + part
             openGroups.insert("group#" + scope + path)
         }
-        let folderKey = "folder#" + scope + folder
-        if foldedFolderScopes.contains(scope) { folders.insert(folderKey) } else { folders.remove(folderKey) }
+        setFolderFolded(false, folder, scope: scope)
         setFolded(false, file, scope: scope)
         if symbol.kind != .file {
             let key = Self.key(for: symbol, openFile: openFile)
             if collapsedScopes.contains(scope) { flipped.insert(key) } else { flipped.remove(key) }
         }
         save()
+    }
+
+    private func setFolderFolded(_ isFolded: Bool, _ path: String, scope: String) {
+        let key = "folder#" + scope + path
+        if isFolded == foldedFolderScopes.contains(scope) { folders.remove(key) } else { folders.insert(key) }
     }
 
     private func setFolded(_ isFolded: Bool, _ file: URL, scope: String) {

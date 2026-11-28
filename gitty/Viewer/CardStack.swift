@@ -34,8 +34,6 @@ struct StackedCard {
 @MainActor
 protocol ResultsPageSearch: AnyObject, Observable {
     var query: String { get set }
-    /// What's folded on its page (its own).
-    var collapsed: CollapsedCodeStore { get }
     var results: [CodeSymbol] { get }
     /// The text `results` are for.
     var resultsQuery: String { get }
@@ -205,18 +203,14 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     /// That row tapped, or Return on a branch's name: its comparison.
     var onCompareBranch: (@MainActor (String) -> Void)? = nil
 
-    /// Where its results' files are, for what's folded (`CollapsedCodeStore`).
-    let collapseScope: String
     @State private var isEditing: Bool
     /// Scrolling down hides the capsule; scrolling up shows it.
     @State private var isBarHidden = false
-    /// Collapse All or Expand All in the capsule's menu, for the page's list.
-    @State private var collapseRequest: CollapseRequest?
     /// The capsule's actions are fanned out (the page blurs behind them).
     @State private var isMenuOpen = false
     @Environment(\.dismiss) private var dismiss
 
-    init(search: Search, stackDepth: Int, collapseScope: String, stackActions: StackActions?,
+    init(search: Search, stackDepth: Int, stackActions: StackActions?,
          branchNamed: (@MainActor (String) -> String?)? = nil,
          onCompareBranch: (@MainActor (String) -> Void)? = nil,
          shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
@@ -224,7 +218,6 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                                        _ bar: ResultsBar) -> Results) {
         self.search = search
         self.stackDepth = stackDepth
-        self.collapseScope = collapseScope
         self.stackActions = stackActions
         self.branchNamed = branchNamed
         self.onCompareBranch = onCompareBranch
@@ -278,17 +271,10 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
         }
     }
 
-    /// Its capsule's own actions: change the search, and Collapse All (or Expand All, with
-    /// everything collapsed), as the bar's menu has.
+    /// Its capsule's own action: change the search.
     private var ownItems: [FanItem] {
-        let store = search.collapsed, scope = collapseScope
-        let foldAll = FoldAll(isCollapsed: { store.isEverythingCollapsed(scope: scope) },
-                              perform: { collapseRequest = CollapseRequest(collapses: $0) })
-        return [
-            FanItem(id: "edit", title: String(localized: "Edit Search"), symbolImage: search.symbolName,
-                    action: { isEditing = true }),
-            FanItem(id: "fold", title: foldAll.title, symbolImage: foldAll.systemImage, action: foldAll.run),
-        ]
+        [FanItem(id: "edit", title: String(localized: "Edit Search"), symbolImage: search.symbolName,
+                 action: { isEditing = true })]
     }
 
     private var isQueryEmpty: Bool {
@@ -314,8 +300,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                 }
                 // A branch found: no No Results under it.
                 SearchResultsContent(search: search, showsNoResults: branch == nil) { symbols, query in
-                    list(symbols, query, ResultsBar(isHidden: { isBarHidden }, setHidden: { isBarHidden = $0 },
-                                                    collapseRequest: collapseRequest))
+                    list(symbols, query, ResultsBar(isHidden: { isBarHidden }, setHidden: { isBarHidden = $0 }))
                 }
             }
             .background(Color(uiColor: .systemGroupedBackground))
@@ -447,8 +432,6 @@ private struct BranchResultRow: View {
 struct ResultsBar {
     let isHidden: @MainActor () -> Bool
     let setHidden: @MainActor (Bool) -> Void
-    /// Collapse All or Expand All in the capsule's menu.
-    var collapseRequest: CollapseRequest? = nil
 
     /// For results with nothing to hide.
     static let none = ResultsBar(isHidden: { false }, setHidden: { _ in })
