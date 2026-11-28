@@ -85,13 +85,13 @@ struct SetAsideChips: View {
 
     var body: some View {
         let latestFirst: [SetAsideStack] = stacks.reversed()
-        let items: [FanItem] = latestFirst.map {
-            FanItem(id: $0.id.uuidString, title: $0.title, symbolImage: $0.symbolImage, count: $0.cardCount)
+        let open = onOpen
+        let items: [FanItem] = latestFirst.map { stack in
+            FanItem(id: stack.id.uuidString, title: stack.title, symbolImage: stack.symbolImage,
+                    count: stack.cardCount, action: { open(stack) })
         }
         if let latest = stacks.last {
-            HoldFan(items: items, isOpen: $isOpen, onChoose: { item in
-                if let stack = stacks.first(where: { $0.id.uuidString == item.id }) { onOpen(stack) }
-            }) {
+            HoldFan(items: items, isOpen: $isOpen) {
                 mainChip(latest)
             }
             .transition(.scale(scale: 0.8).combined(with: .opacity))

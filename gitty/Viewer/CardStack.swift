@@ -273,6 +273,18 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
         }
     }
 
+    /// Its capsule's own actions: change the search, and fold or unfold its results.
+    private var ownItems: [FanItem] {
+        [
+            FanItem(id: "edit", title: String(localized: "Edit Search"), symbolImage: search.symbolName,
+                    action: { isEditing = true }),
+            FanItem(id: "collapse", title: String(localized: "Collapse All"), symbolImage: "chevron.right.2",
+                    action: { collapseRequest = CollapseRequest(collapses: true) }),
+            FanItem(id: "expand", title: String(localized: "Expand All"), symbolImage: "chevron.down.2",
+                    action: { collapseRequest = CollapseRequest(collapses: false) }),
+        ]
+    }
+
     private var isQueryEmpty: Bool {
         search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -314,14 +326,8 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
             // The stack's place (searches don't count: with no card under it, just the icon).
             StackCaption(depth: stackDepth, showsDepth: true, symbolImage: search.symbolName, title: search.query,
                          actions: stackActions,
-                         ownItems: [
-                            FanItem(id: "collapse", title: String(localized: "Collapse All"), symbolImage: "chevron.right.2"),
-                            FanItem(id: "expand", title: String(localized: "Expand All"), symbolImage: "chevron.down.2"),
-                         ],
-                         onOwnItem: { id in collapseRequest = CollapseRequest(collapses: id == "collapse") },
-                         isMenuOpen: $isMenuOpen,
-                         onTap: { isEditing = true },
-                         hint: Text("Changes the search")) {
+                         ownItems: ownItems,
+                         isMenuOpen: $isMenuOpen) {
                 if search.isPending {
                     ProgressView().controlSize(.small)
                 } else {
@@ -500,9 +506,9 @@ struct StackActions {
 }
 
 /// A stack page's capsule at the bottom, a card's or a results page's: "▣ 3 | icon title detail".
-/// Tap it for `onTap` (a card's file info, a results page's search field); hold it for its
-/// actions, fanned out (`HoldFan`): the page's own first, then Show Stack (the stack's symbols,
-/// where they can go into an album), Set Aside and Close Stack.
+/// Tap or hold it for its actions, fanned out as the set-aside stacks' chip does (`HoldFan`): the
+/// page's own first (a card's Show Info, a results page's Edit Search…), then Show Stack (the
+/// stack's symbols, where they can go into an album), Set Aside and Close Stack.
 struct StackCaption<Detail: View>: View {
     /// The page's place in the stack (0: none, the icon alone).
     let depth: Int
@@ -511,13 +517,10 @@ struct StackCaption<Detail: View>: View {
     let symbolImage: String
     let title: String
     let actions: StackActions?
-    /// The page's own actions, first (a card's Show in Code Level, a results page's folding).
+    /// The page's own actions, first.
     var ownItems: [FanItem] = []
-    var onOwnItem: @MainActor (String) -> Void = { _ in }
     /// Its actions are fanned out (the page blurs behind them).
     @Binding var isMenuOpen: Bool
-    let onTap: @MainActor () -> Void
-    let hint: Text
     /// After the title (a card's file, a results page's count).
     @ViewBuilder let detail: () -> Detail
 
@@ -525,35 +528,27 @@ struct StackCaption<Detail: View>: View {
 
     private var items: [FanItem] {
         var items = ownItems
-        if actions != nil {
-            items.append(FanItem(id: "stack", title: String(localized: "Show Stack"), symbolImage: "square.stack"))
+        if let actions {
+            items.append(FanItem(id: "stack", title: String(localized: "Show Stack"), symbolImage: "square.stack",
+                                 action: actions.show))
         }
-        if actions?.setAside != nil {
-            items.append(FanItem(id: "aside", title: String(localized: "Set Aside"), symbolImage: "square.stack.3d.down.right"))
+        if let setAside = actions?.setAside {
+            items.append(FanItem(id: "aside", title: String(localized: "Set Aside"),
+                                 symbolImage: "square.stack.3d.down.right", action: setAside))
         }
-        if actions?.close != nil {
+        if let close = actions?.close {
             items.append(FanItem(id: "close", title: String(localized: "Close Stack"), symbolImage: "xmark",
-                                 isDestructive: true))
+                                 isDestructive: true, action: close))
         }
         return items
     }
 
     var body: some View {
-        let actions = actions
-        let own = onOwnItem
-        HoldFan(items: items, isOpen: $isMenuOpen, onTap: onTap, onChoose: { item in
-            switch item.id {
-            case "stack": actions?.show()
-            case "aside": actions?.setAside?()
-            case "close": actions?.close?()
-            default: own(item.id)
-            }
-        }) {
+        HoldFan(items: items, isOpen: $isMenuOpen) {
             capsule
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityHint(hint)
-                .accessibilityAction { onTap() }
+                .accessibilityHint(Text("Shows its actions"))
         }
     }
 

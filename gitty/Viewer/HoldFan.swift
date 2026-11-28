@@ -8,21 +8,19 @@ struct FanItem: Identifiable {
     /// Cards, after the title (a stack's).
     var count: Int? = nil
     var isDestructive = false
+    /// Chosen.
+    let action: @MainActor () -> Void
 }
 
 /// A capsule (`base`) whose chips fan out upwards, like a menu in iOS: hold it (or slide up) and
 /// they come out over a blur (`isOpen`, which the screen shows), the nearest first; slide to one
 /// (it's highlighted) and let go to choose it. Let go back on the capsule and they stay out, as a
-/// menu does; anywhere else, they fold, as a tap on the capsule while they're out does. A tap does
-/// `onTap` (`nil`: brings them out). The set-aside stacks' chip and a card's caption both work
-/// this way.
+/// menu does; anywhere else, they fold. A tap brings them out too, or folds them. The set-aside
+/// stacks' chip and every stack page's capsule (`StackCaption`) work this way.
 struct HoldFan<Base: View>: View {
     /// Nearest the capsule first.
     let items: [FanItem]
     @Binding var isOpen: Bool
-    /// A tap while they're folded (`nil`: they fan out).
-    var onTap: (@MainActor () -> Void)? = nil
-    let onChoose: @MainActor (FanItem) -> Void
     @ViewBuilder let base: () -> Base
 
     @State private var highlighted: String?
@@ -99,8 +97,8 @@ struct HoldFan<Base: View>: View {
 
     /// One touch does it all. Held (or slid up): out they come. Moving: the chip under the finger
     /// is highlighted, and they lean a little its way. Let go on one, it's chosen; back on the
-    /// capsule, they stay out; anywhere else, they fold. A tap: `onTap`, or they come out; while
-    /// they're out, they fold.
+    /// capsule, they stay out; anywhere else, they fold. A tap brings them out, or, while they're
+    /// out, folds them.
     private var press: some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { value in
@@ -135,7 +133,7 @@ struct HoldFan<Base: View>: View {
                 } else if ended.wasOpen || !baseFrame.insetBy(dx: -8, dy: -8).contains(value.location) {
                     isOpen = false  // let go off them, or a tap on the capsule while they're out
                 } else if isTap {
-                    if let onTap { onTap() } else { isOpen = true }
+                    isOpen = true
                 }
                 // Otherwise, let go back on the capsule after bringing them out: they stay out.
             }
@@ -153,7 +151,7 @@ struct HoldFan<Base: View>: View {
 
     private func choose(_ item: FanItem) {
         isOpen = false
-        onChoose(item)
+        item.action()
     }
 }
 

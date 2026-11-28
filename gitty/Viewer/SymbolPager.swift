@@ -371,8 +371,8 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
 }
 
 /// "name · file" in a small capsule at the bottom, in place of the bar and selector
-/// (`StackCaption`). Tap it for the file's info; hold it for Show in Code Level and the stack's
-/// actions.
+/// (`StackCaption`): tap or hold it for Show Info (the file's info and history), Show in Code
+/// Level and the stack's actions.
 private struct SymbolCaption: View {
     let symbol: CodeSymbol
     /// The symbol's file's name, after its name.
@@ -387,6 +387,18 @@ private struct SymbolCaption: View {
     /// Space kept free under the text so its end isn't hidden behind the caption.
     static var reservedHeight: CGFloat { height + 16 }
 
+    /// Show Info (the file's info and history), and Show in Code Level.
+    private var ownItems: [FanItem] {
+        var items = [FanItem(id: "info", title: String(localized: "Show Info"), symbolImage: "info.circle",
+                             action: onInfo)]
+        if let show = stackActions?.showInCodeLevel {
+            let symbol = symbol
+            items.append(FanItem(id: "show", title: String(localized: "Show in Code Level"),
+                                 symbolImage: "list.bullet.indent", action: { show(symbol) }))
+        }
+        return items
+    }
+
     init(symbol: CodeSymbol, fileName: String, stackDepth: Int, stackActions: StackActions?,
          isMenuOpen: Binding<Bool>, onInfo: @escaping @MainActor () -> Void) {
         self.symbol = symbol
@@ -398,15 +410,9 @@ private struct SymbolCaption: View {
     }
 
     var body: some View {
-        let symbol = symbol
-        let show = stackActions?.showInCodeLevel
-        let own: [FanItem] = show == nil ? []
-            : [FanItem(id: "show", title: String(localized: "Show in Code Level"), symbolImage: "list.bullet.indent")]
         StackCaption(depth: stackDepth, showsDepth: stackDepth > 1, symbolImage: symbol.kind.systemImage,
-                     title: symbol.name, actions: stackActions, ownItems: own,
-                     onOwnItem: { _ in show?(symbol) },
-                     isMenuOpen: $isMenuOpen, onTap: onInfo,
-                     hint: Text("Shows the file’s info and history")) {
+                     title: symbol.name, actions: stackActions, ownItems: ownItems,
+                     isMenuOpen: $isMenuOpen) {
             // Its file's name (peek for the line numbers). A file's own page needs nothing more
             // than its name.
             if symbol.kind != .file {
