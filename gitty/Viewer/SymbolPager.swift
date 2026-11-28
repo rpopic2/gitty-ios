@@ -81,7 +81,7 @@ struct SymbolPager: View {
          firstLine: @escaping @MainActor (CodeSymbol) -> Int,
          albumMenu: (@MainActor (CodeSymbol, NSRange) -> UIMenu?)? = nil,
          stackDepth: Int = 1, stackActions: StackActions? = nil) {
-        self.symbols = symbols
+        self.symbols = Self.pages(of: symbols, around: initialID)
         self.initialID = initialID
         self.initialAnchor = initialAnchor
         _currentID = currentID
@@ -104,6 +104,20 @@ struct SymbolPager: View {
 
     private var visibleID: Int { scrolledID ?? initialID }
 
+    /// Pages either side of the tapped symbol, at most.
+    static let pageReach = 50
+
+    /// The pages: the tapped symbol's neighbours, not the whole list. Given a whole project
+    /// (tens of thousands of symbols), the pager made a page for each of them, each watching the
+    /// texts being loaded, and a text coming in froze the app for seconds (iOS 18).
+    private static func pages(of symbols: [CodeSymbol], around id: Int) -> [CodeSymbol] {
+        guard symbols.count > 2 * pageReach + 1 else { return symbols }
+        let index = symbols.firstIndex { $0.id == id } ?? 0
+        let start = max(0, index - pageReach)
+        let end = min(symbols.count, index + pageReach + 1)
+        return Array(symbols[start..<end])
+    }
+
     private var current: CodeSymbol? {
         symbols.first { $0.id == visibleID }
     }
@@ -120,6 +134,9 @@ struct SymbolPager: View {
                 bottom: safeArea.bottom + SymbolCaption.reservedHeight,
                 trailing: safeArea.trailing
             )
+            // Read once here, not by each page: each page watching it made a change run through
+            // every one of them.
+            let highlight = highlights?.current
             ZStack(alignment: .bottom) {
                 ScrollViewReader { reader in
                     ScrollView(.horizontal) {
@@ -144,7 +161,7 @@ struct SymbolPager: View {
                                     albumMenu: pageAlbumMenu(for: symbol),
                                     fileExtension: (symbol.fileURL ?? openFile).pathExtension,
                                     growsSelectionBySyntax: !isDiffPage,
-                                    highlight: highlights?.current,
+                                    highlight: highlight,
                                     onHighlight: { highlights?.current = $0 },
                                     positionURL: isFilePage && !isDiffPage ? symbol.fileURL ?? openFile : nil,
                                     onRefresh: refreshAction(for: symbol),
