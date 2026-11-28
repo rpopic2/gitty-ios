@@ -393,6 +393,19 @@ final class CollapsedCodeStore {
         collapsedScopes.contains(scope)
     }
 
+    /// Nothing's code shows in the scope: Collapse All (or every file folded), and nothing
+    /// opened since. Expand All is what's offered then, Collapse All otherwise.
+    func isEverythingCollapsed(scope: String) -> Bool {
+        (collapsedScopes.contains(scope) && !flipped.contains { $0.hasPrefix(scope) })
+            || (foldedScopes.contains(scope) && !files.contains { $0.hasPrefix("file#" + scope) })
+    }
+
+    /// Every folder is folded in the scope, none opened since: Unfold All Folders is what's
+    /// offered then, Fold All Folders otherwise.
+    func isEveryFolderFolded(scope: String) -> Bool {
+        foldedFolderScopes.contains(scope) && !folders.contains { $0.hasPrefix("folder#" + scope) }
+    }
+
     /// Every file is folded in the scope (unless tapped open since).
     func areAllFilesFolded(scope: String) -> Bool {
         foldedScopes.contains(scope)

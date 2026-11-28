@@ -66,6 +66,20 @@ struct CollapsedCodeStoreTests {
         #expect(store.isFileCollapsed(other, scope: scope))
     }
 
+    @Test func expandAllIsOfferedOnlyWithEverythingCollapsed() throws {
+        let (store, _) = try store()
+        let shown = symbol("send", in: other)
+        #expect(!store.isEverythingCollapsed(scope: scope))  // Collapse All, then
+        store.setAllCollapsed(true, scope: scope)
+        #expect(store.isEverythingCollapsed(scope: scope))  // Expand All
+        store.toggle(shown, openFile: open, scope: scope)
+        #expect(!store.isEverythingCollapsed(scope: scope))  // one open again: Collapse All
+        store.setAllFoldersFolded(true, scope: scope)
+        #expect(store.isEveryFolderFolded(scope: scope))
+        store.toggleFolder("src", scope: scope)
+        #expect(!store.isEveryFolderFolded(scope: scope))
+    }
+
     @Test func overloadsCollapseOnTheirOwn() throws {
         let (store, _) = try store()
         func overload(_ declaration: String, at line: Int) -> CodeSymbol {

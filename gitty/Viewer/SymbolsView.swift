@@ -498,8 +498,9 @@ struct SymbolsView: View, Equatable {
         let path: String, fileCount: Int
         switch header {
         case .group(let node, _, _):
+            // As a folder's: Collapse while open; Expand (its folders) while closed.
             let isOpen = collapsed.isGroupOpen(node.path, scope: scope)
-            items.append(action(isOpen ? "Fold Folder" : "Unfold Folder", isOpen ? "chevron.right" : "chevron.down",
+            items.append(action(isOpen ? "Collapse" : "Expand", isOpen ? "chevron.right" : "chevron.down",
                                 animated { collapsed.toggleGroup(node.path, scope: scope) }))
             if let comment { items.append(action("Comment", "text.bubble") { comment(node.path) }) }
             path = rootFolderName + "/" + node.path
@@ -521,9 +522,12 @@ struct SymbolsView: View, Equatable {
                 items += AlbumUIMenu.elements(for: group.files.map { AlbumItem.file($0) }, context: albumContext,
                                               naming: albumNaming)
             }
+            // The one that applies, as everywhere: Fold All Folders, or Unfold All Folders with
+            // every folder folded.
+            let allFolded = collapsed.isEveryFolderFolded(scope: scope)
             items.append(UIMenu(options: .displayInline, children: [
-                action("Fold All Folders", "chevron.right.2", animated { collapsed.setAllFoldersFolded(true, scope: scope) }),
-                action("Unfold All Folders", "chevron.down.2", animated { collapsed.setAllFoldersFolded(false, scope: scope) }),
+                action(allFolded ? "Unfold All Folders" : "Fold All Folders", allFolded ? "chevron.down.2" : "chevron.right.2",
+                       animated { collapsed.setAllFoldersFolded(!allFolded, scope: scope) }),
             ]))
             path = group.path.isEmpty ? rootFolderName : rootFolderName + "/" + group.path
             fileCount = group.fileCount

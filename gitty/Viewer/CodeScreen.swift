@@ -620,7 +620,7 @@ struct CodeScreen: View {
     private func resultsView(_ search: StackSearch, route: CardRoute) -> some View {
         let openFile = model.url
         let scope = model.collapseScope
-        return StackResultsView(search: search, stackDepth: stackNumber(of: route),
+        return StackResultsView(search: search, stackDepth: stackNumber(of: route), collapseScope: model.collapseScope,
                                 stackActions: stackActions,
                                 branchNamed: { branchNamed($0) },
                                 onCompareBranch: { compareBranch(named: $0) },
@@ -1128,7 +1128,7 @@ struct CodeScreen: View {
 
     private func occurrencesView(_ search: OccurrenceSearch, route: CardRoute) -> some View {
         // The same page as a search's: the word in the capsule, edited there to look again.
-        StackResultsView(search: search, stackDepth: stackNumber(of: route),
+        StackResultsView(search: search, stackDepth: stackNumber(of: route), collapseScope: model.collapseScope,
                          stackActions: stackActions,
                          shownCount: { _ in search.count }) { entries, query, bar in
             SymbolsView(
@@ -1323,8 +1323,7 @@ struct CodeScreen: View {
                 onPasteAndGo: onPasteAndGo,
                 onOpenInBrowser: openInBrowserAction,
                 searchQuery: "",  // tapping it searches
-                onCollapseAll: collapseAllAction(true),
-                onExpandAll: collapseAllAction(false),
+                foldAll: foldAll,
                 onShowCommits: showCommitsAction,
                 onDeleteAlbum: deleteAlbumAction,
                 // In an album: its icon before its name.
@@ -1598,10 +1597,12 @@ struct CodeScreen: View {
         model.listSymbols.first { $0.kind == .file && $0.fileURL == nil }?.id
     }
 
-    /// The bar menu's Collapse All and Expand All, at the Code level once the list shows.
-    private func collapseAllAction(_ collapses: Bool) -> (@MainActor () -> Void)? {
+    /// The bar menu's Collapse All (or Expand All), at the Code level once the list shows.
+    private var foldAll: FoldAll? {
         guard barSearchesSymbols, model.symbolIndex.isReady else { return nil }
-        return { collapseRequest = CollapseRequest(collapses: collapses) }
+        let store = CollapsedCodeStore.forAlbum(model.activeAlbum?.id), scope = model.collapseScope
+        return FoldAll(isCollapsed: { store.isEverythingCollapsed(scope: scope) },
+                       perform: { collapseRequest = CollapseRequest(collapses: $0) })
     }
 
     /// Hands the URL to the default browser.

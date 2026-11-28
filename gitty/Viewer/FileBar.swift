@@ -62,9 +62,8 @@ struct FileBar: View {
     /// non-empty search is shown instead of the title, with a clear button.
     let searchQuery: String?
     let onClearSearch: (@MainActor () -> Void)?
-    /// At the Code level: Collapse All and Expand All in the menu.
-    let onCollapseAll: (@MainActor () -> Void)?
-    let onExpandAll: (@MainActor () -> Void)?
+    /// At the Code level: Collapse All or Expand All in the menu.
+    let foldAll: FoldAll?
     /// A comparison's diff album: Show Commits in the menu.
     let onShowCommits: (@MainActor () -> Void)?
     /// In an album: Delete Album in the menu (`nil`: the whole project, which can't be).
@@ -86,7 +85,7 @@ struct FileBar: View {
          copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
-         onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
+         foldAll: FoldAll? = nil,
          onShowCommits: (@MainActor () -> Void)? = nil,
          onDeleteAlbum: (@MainActor () -> Void)? = nil,
          titleIcon: String? = nil, reactsToTouch: Bool = true,
@@ -107,8 +106,7 @@ struct FileBar: View {
         self.onOpenInBrowser = onOpenInBrowser
         self.searchQuery = searchQuery
         self.onClearSearch = onClearSearch
-        self.onCollapseAll = onCollapseAll
-        self.onExpandAll = onExpandAll
+        self.foldAll = foldAll
         self.onShowCommits = onShowCommits
         self.onDeleteAlbum = onDeleteAlbum
     }
@@ -139,7 +137,7 @@ struct FileBar: View {
 
     private var menu: BarMenu {
         BarMenu(copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
-                onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, onShowCommits: onShowCommits,
+                foldAll: foldAll, onShowCommits: onShowCommits,
                 onDeleteAlbum: onDeleteAlbum)
     }
 
@@ -201,15 +199,33 @@ extension EnvironmentValues {
     @Entry var barBackgroundHidden = false
 }
 
+/// Collapse All, or Expand All when everything's collapsed already: one item, whichever applies
+/// as the menu opens (the bar's, a results page's capsule's).
+struct FoldAll {
+    /// Everything's collapsed now (`CollapsedCodeStore.isEverythingCollapsed`).
+    let isCollapsed: @MainActor () -> Bool
+    let perform: @MainActor (_ collapses: Bool) -> Void
+
+    @MainActor var title: String {
+        isCollapsed() ? String(localized: "Expand All") : String(localized: "Collapse All")
+    }
+
+    @MainActor var systemImage: String {
+        isCollapsed() ? "chevron.down.2" : "chevron.right.2"
+    }
+
+    @MainActor func run() {
+        perform(!isCollapsed())
+    }
+}
+
 /// The bar's touch-and-hold menu: Copy (the address), Paste and Go, Open in Browser (a web
-/// page), Collapse All and Expand All, and Delete Album (an album's). The same on a results
-/// page's capsule, whose Collapse and Expand All are its own list's.
+/// page), Collapse All or Expand All, and Delete Album (an album's).
 struct BarMenu: View {
     var copyText: String?
     var onPasteAndGo: (@MainActor () -> Void)?
     var onOpenInBrowser: (@MainActor () -> Void)?
-    var onCollapseAll: (@MainActor () -> Void)?
-    var onExpandAll: (@MainActor () -> Void)?
+    var foldAll: FoldAll?
     /// A comparison's diff album: the commits it has.
     var onShowCommits: (@MainActor () -> Void)?
     var onDeleteAlbum: (@MainActor () -> Void)?
@@ -226,10 +242,9 @@ struct BarMenu: View {
         if let onOpenInBrowser {
             Button("Open in Browser", systemImage: "safari") { onOpenInBrowser() }
         }
-        if let onCollapseAll, let onExpandAll {
+        if let foldAll {
             Section {
-                Button("Collapse All", systemImage: "chevron.right.2") { onCollapseAll() }
-                Button("Expand All", systemImage: "chevron.down.2") { onExpandAll() }
+                Button(foldAll.title, systemImage: foldAll.systemImage) { foldAll.run() }
             }
         }
         if let onShowCommits {
@@ -260,14 +275,9 @@ extension BarMenu {
             items.append(UIAction(title: String(localized: "Open in Browser"),
                                   image: UIImage(systemName: "safari")) { _ in onOpenInBrowser() })
         }
-        if let onCollapseAll, let onExpandAll {
+        if let foldAll {
             items.append(UIMenu(options: .displayInline, children: [
-                UIAction(title: String(localized: "Collapse All"), image: UIImage(systemName: "chevron.right.2")) { _ in
-                    onCollapseAll()
-                },
-                UIAction(title: String(localized: "Expand All"), image: UIImage(systemName: "chevron.down.2")) { _ in
-                    onExpandAll()
-                },
+                UIAction(title: foldAll.title, image: UIImage(systemName: foldAll.systemImage)) { _ in foldAll.run() },
             ]))
         }
         if let onShowCommits {
@@ -577,8 +587,7 @@ struct BottomBarStack: View {
     let onOpenInBrowser: (@MainActor () -> Void)?
     let searchQuery: String?
     let onClearSearch: (@MainActor () -> Void)?
-    let onCollapseAll: (@MainActor () -> Void)?
-    let onExpandAll: (@MainActor () -> Void)?
+    let foldAll: FoldAll?
     /// A comparison's diff album: Show Commits in the menu.
     let onShowCommits: (@MainActor () -> Void)?
     /// In an album: Delete Album in the menu (`nil`: the whole project, which can't be).
@@ -628,7 +637,7 @@ struct BottomBarStack: View {
          copyText: String? = nil, onPasteAndGo: (@MainActor () -> Void)? = nil,
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
-         onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
+         foldAll: FoldAll? = nil,
          onShowCommits: (@MainActor () -> Void)? = nil,
          onDeleteAlbum: (@MainActor () -> Void)? = nil,
          titleIcon: String? = nil, swipe: BarSwipe? = nil) {
@@ -645,8 +654,7 @@ struct BottomBarStack: View {
         self.onOpenInBrowser = onOpenInBrowser
         self.searchQuery = searchQuery
         self.onClearSearch = onClearSearch
-        self.onCollapseAll = onCollapseAll
-        self.onExpandAll = onExpandAll
+        self.foldAll = foldAll
         self.onShowCommits = onShowCommits
         self.onDeleteAlbum = onDeleteAlbum
     }
@@ -658,7 +666,7 @@ struct BottomBarStack: View {
                               onExpand: { if isAtHome { onExpand() } }, onEdit: { if isAtHome { onEdit() } },
                               copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                               searchQuery: searchQuery, onClearSearch: onClearSearch,
-                              onCollapseAll: onCollapseAll, onExpandAll: onExpandAll,
+                              foldAll: foldAll,
                               onShowCommits: onShowCommits, onDeleteAlbum: onDeleteAlbum,
                               titleIcon: titleIcon, reactsToTouch: swipe == nil))
         }

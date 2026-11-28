@@ -34,6 +34,8 @@ struct StackedCard {
 @MainActor
 protocol ResultsPageSearch: AnyObject, Observable {
     var query: String { get set }
+    /// What's folded on its page (its own).
+    var collapsed: CollapsedCodeStore { get }
     var results: [CodeSymbol] { get }
     /// The text `results` are for.
     var resultsQuery: String { get }
@@ -203,6 +205,8 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     /// That row tapped, or Return on a branch's name: its comparison.
     var onCompareBranch: (@MainActor (String) -> Void)? = nil
 
+    /// Where its results' files are, for what's folded (`CollapsedCodeStore`).
+    let collapseScope: String
     @State private var isEditing: Bool
     /// Scrolling down hides the capsule; scrolling up shows it.
     @State private var isBarHidden = false
@@ -212,7 +216,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     @State private var isMenuOpen = false
     @Environment(\.dismiss) private var dismiss
 
-    init(search: Search, stackDepth: Int, stackActions: StackActions?,
+    init(search: Search, stackDepth: Int, collapseScope: String, stackActions: StackActions?,
          branchNamed: (@MainActor (String) -> String?)? = nil,
          onCompareBranch: (@MainActor (String) -> Void)? = nil,
          shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
@@ -220,6 +224,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                                        _ bar: ResultsBar) -> Results) {
         self.search = search
         self.stackDepth = stackDepth
+        self.collapseScope = collapseScope
         self.stackActions = stackActions
         self.branchNamed = branchNamed
         self.onCompareBranch = onCompareBranch
@@ -273,15 +278,16 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
         }
     }
 
-    /// Its capsule's own actions: change the search, and fold or unfold its results.
+    /// Its capsule's own actions: change the search, and Collapse All (or Expand All, with
+    /// everything collapsed), as the bar's menu has.
     private var ownItems: [FanItem] {
-        [
+        let store = search.collapsed, scope = collapseScope
+        let foldAll = FoldAll(isCollapsed: { store.isEverythingCollapsed(scope: scope) },
+                              perform: { collapseRequest = CollapseRequest(collapses: $0) })
+        return [
             FanItem(id: "edit", title: String(localized: "Edit Search"), symbolImage: search.symbolName,
                     action: { isEditing = true }),
-            FanItem(id: "collapse", title: String(localized: "Collapse All"), symbolImage: "chevron.right.2",
-                    action: { collapseRequest = CollapseRequest(collapses: true) }),
-            FanItem(id: "expand", title: String(localized: "Expand All"), symbolImage: "chevron.down.2",
-                    action: { collapseRequest = CollapseRequest(collapses: false) }),
+            FanItem(id: "fold", title: foldAll.title, symbolImage: foldAll.systemImage, action: foldAll.run),
         ]
     }
 
