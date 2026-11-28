@@ -94,8 +94,10 @@ struct SetAsideChips: View {
     private struct Touch {
         /// Fanned out when the finger came down.
         let wasOpen: Bool
-        /// It's moved: not a tap, nor a hold.
+        /// It's moved: not a tap.
         var hasMoved = false
+        /// Held long enough to fan them out: not a tap.
+        var isHeld = false
     }
 
     /// A chip's height.
@@ -131,6 +133,8 @@ struct SetAsideChips: View {
         .animation(.smooth(duration: 0.25), value: isOpen)
         .animation(.smooth(duration: 0.25), value: ids)
         .sensoryFeedback(.selection, trigger: highlighted) { _, new in new != nil }
+        // Slid out far enough to throw it away (and back).
+        .sensoryFeedback(.impact(weight: .medium), trigger: abs(sideways) > Self.dropDistance)
         // Coming out, as a menu does under a hold.
         .sensoryFeedback(.impact(weight: .heavy, intensity: 1), trigger: isOpen) { old, new in new && !old }
         .onChange(of: isEmpty) { _, empty in if empty { isOpen = false } }
@@ -178,8 +182,8 @@ struct SetAsideChips: View {
 
     /// One touch does it all. Held (or slid up): out they come. Moving: the chip under the finger
     /// is highlighted. Let go on one, it opens (or, slid out to the side, goes); let go anywhere
-    /// else after moving, they fold. A tap or a hold that didn't move leaves them out, or, a tap
-    /// while they're out, folds them.
+    /// else (the bottom chip too), they fold. A tap leaves them out, or, while they're out,
+    /// folds them.
     private var press: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
@@ -187,7 +191,9 @@ struct SetAsideChips: View {
                     touch = Touch(wasOpen: isOpen)
                     holdTask = Task {
                         try? await Task.sleep(for: .milliseconds(300))
-                        if !Task.isCancelled, touch?.hasMoved == false { isOpen = true }
+                        guard !Task.isCancelled, touch?.hasMoved == false else { return }
+                        touch?.isHeld = true
+                        isOpen = true
                     }
                 }
                 let t = value.translation
@@ -209,8 +215,9 @@ struct SetAsideChips: View {
                 if let found = stack(at: value.location) {
                     if abs(sideways) > Self.dropDistance { onDrop(found) } else { open(found) }
                 } else {
-                    // Out after a tap or a hold that didn't move; folded otherwise.
-                    isOpen = !ended.hasMoved && !ended.wasOpen
+                    // Out after a tap; folded after a hold or a slide (let go on the bottom chip,
+                    // or off them), or a tap while they were out.
+                    isOpen = !ended.hasMoved && !ended.isHeld && !ended.wasOpen
                 }
             }
     }
@@ -219,8 +226,10 @@ struct SetAsideChips: View {
     private func stack(at point: CGPoint) -> SetAsideStack? {
         guard isOpen else { return nil }
         // Chip `place` is centered `place + 1` steps above the bottom chip's middle.
+        // Each chip's band starts a little below its middle: the bottom chip keeps its whole
+        // height and a bit over it (a finger on its top half isn't on the chip above).
         let aboveMiddle: CGFloat = (height - Self.chipHeight / 2) - point.y
-        let place = Int((aboveMiddle / Self.step).rounded()) - 1
+        let place = Int(((aboveMiddle - Self.chipHeight) / Self.step).rounded(.down))
         return latestFirst.indices.contains(place) ? latestFirst[place] : nil
     }
 
