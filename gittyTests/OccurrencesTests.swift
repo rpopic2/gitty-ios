@@ -50,6 +50,20 @@ struct OccurrencesTests {
         #expect(found[1].line.line == 3 && found[1].page.name == "add")
         #expect(found[1].lineInPage == 1)  // the function's second line
     }
+
+    @Test @MainActor func inAnAlbumOnlyWhatItHas() {
+        let url = URL(string: "https://raw.githubusercontent.com/o/r/main/a.c")!
+        let text = "int total;\nvoid add(int n) {\n    total += n;\n}\n"
+        let function = CodeSymbol(id: 1, name: "add", kind: .function,
+                                  range: NSRange(location: 11, length: 35), line: 2, preview: "", fileURL: url)
+        let entry = CodeSymbol(id: 0, name: "a.c", kind: .file, range: NSRange(location: 0, length: (text as NSString).length),
+                               line: 1, preview: "", fileURL: url)
+        // The album has the function, not the line above it.
+        let file = OccurrenceFile(url: url, fileURL: url, entry: entry, symbols: [entry, function],
+                                  within: [function.range])
+        let found = OccurrenceSearch.find(OccurrenceTerm(text: "total", identifier: nil), in: text, file: file)
+        #expect(found.map(\.line.line) == [3])
+    }
 }
 
 struct SameKindOccurrencesTests {

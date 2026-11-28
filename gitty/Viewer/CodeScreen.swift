@@ -643,7 +643,8 @@ struct CodeScreen: View {
             onOpenURL: { onOpen($0) },
             collapsed: search.collapsed,
             onShowCommit: { showBlameCommit(projectID: $0, id: $1, focus: $2) },
-            textActions: codeTextActions(from: .results(search.id))
+            textActions: codeTextActions(from: .results(search.id)),
+            onShowInCodeLevel: { showInCodeLevel($0) }
         )
         .equatable()
     }
@@ -709,7 +710,8 @@ struct CodeScreen: View {
             },
             setAside: { setAsideStack() },
             // Every page closes, back to the Code level (nothing kept).
-            close: { cardPath = [] }
+            close: { cardPath = [] },
+            showInCodeLevel: { showInCodeLevel($0) }
         )
     }
 
@@ -868,6 +870,35 @@ struct CodeScreen: View {
         cardPath = []
     }
 
+    /// Show in Code Level (a result's hold menu, a card's caption): the stack set aside, and the
+    /// Code level scrolled to the symbol, with its folder, file and code unfolded (nothing else).
+    private func showInCodeLevel(_ symbol: CodeSymbol) {
+        let entry = codeLevelEntry(for: symbol)
+        setAsideStack()
+        mode = .code
+        guard let entry else { return }
+        let openFile = model.url, scope = model.collapseScope
+        CollapsedCodeStore.forAlbum(model.activeAlbum?.id).reveal(entry, openFile: openFile, scope: scope)
+        // In the same update: the list makes its new rows, then scrolls (`SymbolsView`).
+        listScrollRequest = SymbolScrollRequest(entry.id)
+    }
+
+    /// The Code level's entry for a page's or result's symbol: the same one (by its id, or for
+    /// an Occurrences page's, which has ids of its own, by its place in the file), else the
+    /// innermost one around it (an occurrence's lines), else its file's title.
+    private func codeLevelEntry(for symbol: CodeSymbol) -> CodeSymbol? {
+        let list = model.listSymbols
+        if let same = list.first(where: { $0.id == symbol.id && $0.fileURL == symbol.fileURL && $0.range == symbol.range }) {
+            return same
+        }
+        let inFile = list.filter { $0.fileURL == symbol.fileURL }
+        if let same = inFile.first(where: { $0.kind == symbol.kind && $0.range == symbol.range }) { return same }
+        let around = inFile
+            .filter { $0.kind != .file && NSLocationInRange(symbol.range.location, $0.range) }
+            .min { $0.range.length < $1.range.length }
+        return around ?? inFile.first { $0.kind == .file }
+    }
+
     /// Keeps the open stack, as it is and as what makes it again, with this place's stacks.
     private func keepStack() -> SetAsideStack? {
         guard !cardPath.isEmpty else { return nil }
@@ -985,7 +1016,7 @@ struct CodeScreen: View {
     // MARK: Occurrences
 
     /// Occurrences on a card: where the selection is used, as a whole word, in the project's
-    /// downloaded files that pass its filter, on a page over the card. The pages highlight it.
+    /// downloaded files that pass its filter (in the album shown, if any), on a page over the card. The pages highlight it.
     /// - Parameter card: `nil`: from the Code level (a symbol's hold menu), the first page.
     private func findOccurrences(of query: OccurrenceTerm, from card: CardRoute?) {
         pruneStack()
@@ -1001,8 +1032,22 @@ struct CodeScreen: View {
         cardPath.append(.occurrences(search.id))
     }
 
-    /// Occurrences of `query` in the project's downloaded files (see `findOccurrences`).
+    /// Occurrences of `query` in the project's downloaded files (see `findOccurrences`), or in
+    /// what the album shown has: its whole files, and in its other files only its symbols' and
+    /// lines' code (a diff album: the files it changes).
     private func occurrenceSearch(for query: OccurrenceTerm, source: AnyHashable) -> OccurrenceSearch {
+        var whole: Set<URL> = []
+        var parts: [URL: [NSRange]] = [:]
+        if model.activeAlbum != nil {
+            for entry in model.listSymbols {
+                let file = entry.fileURL ?? model.url
+                if entry.kind == .file || entry.diff != nil {
+                    whole.insert(file)
+                } else {
+                    parts[file, default: []].append(entry.range)
+                }
+            }
+        }
         var files: [OccurrenceFile] = []
         var skipped = 0
         let symbols = indexedSymbols
@@ -1011,10 +1056,21 @@ struct CodeScreen: View {
             var end = start + 1
             while end < symbols.count, symbols[end].kind != .file { end += 1 }
             let entry = symbols[start]
+            let url = entry.fileURL ?? model.url
+            // What's looked through (`nil`: all of it); a file out of the album, nothing.
+            let within: [NSRange]?
+            if model.activeAlbum == nil || whole.contains(url) {
+                within = nil
+            } else if let inAlbum = parts[url] {
+                within = inAlbum
+            } else {
+                start = end
+                continue
+            }
             if entry.kind == .file {
                 if entry.isDownloaded {
-                    files.append(OccurrenceFile(url: entry.fileURL ?? model.url, fileURL: entry.fileURL,
-                                                entry: entry, symbols: Array(symbols[start..<end])))
+                    files.append(OccurrenceFile(url: url, fileURL: entry.fileURL, entry: entry,
+                                                symbols: Array(symbols[start..<end]), within: within))
                 } else {
                     skipped += 1
                 }
@@ -1053,7 +1109,8 @@ struct CodeScreen: View {
                 downloadingFiles: model.downloadingFiles,
                 onNeedsSymbols: { model.needsSymbols(of: $0) },
                 collapsed: search.collapsed,
-                textActions: codeTextActions(from: route)
+                textActions: codeTextActions(from: route),
+                onShowInCodeLevel: { showInCodeLevel($0) }
             )
             .equatable()
             .environment(\.codeMark, query)  // what it found, marked

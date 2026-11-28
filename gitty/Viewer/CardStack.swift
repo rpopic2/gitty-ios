@@ -455,6 +455,9 @@ struct StackActions {
     var setAside: (@MainActor () -> Void)? = nil
     /// Close Stack in the caption's menu: every page closes at once.
     var close: (@MainActor () -> Void)? = nil
+    /// Show in Code Level in a card's caption menu (and a result's hold menu): the stack set
+    /// aside, and the Code level at the symbol, unfolded.
+    var showInCodeLevel: (@MainActor (CodeSymbol) -> Void)? = nil
 }
 
 /// A page's place in the stack, before what its caption names: "▣ 3 |". Tap it for the

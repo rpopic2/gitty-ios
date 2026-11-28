@@ -31,6 +31,27 @@ struct CollapsedCodeStoreTests {
         #expect(!reopened.areAllFoldersFolded(scope: scope))
     }
 
+    @Test func revealingASymbolUnfoldsItsPathOnly() throws {
+        let (store, _) = try store()
+        let deep = URL(string: "https://raw.githubusercontent.com/o/r/main/src/net/c.c")!
+        store.startFolded(scope: scope)
+        store.setAllCollapsed(true, scope: scope)
+        store.setAllFilesFolded(true, scope: scope)
+        store.setAllFoldersFolded(true, scope: scope)
+        let shown = symbol("send", in: deep)
+        let neighbour = symbol("receive", in: deep, at: 5)
+        store.reveal(shown, openFile: open, scope: scope)
+        #expect(store.isGroupOpen("src", scope: scope))
+        #expect(store.isGroupOpen("src/net", scope: scope))
+        #expect(!store.isFolderFolded("src/net", scope: scope))
+        #expect(!store.isFileCollapsed(deep, scope: scope))
+        #expect(!store.isCollapsed(shown, openFile: open, scope: scope))
+        // The rest stays as it was.
+        #expect(store.isCollapsed(neighbour, openFile: open, scope: scope))
+        #expect(store.isFolderFolded("src", scope: scope))
+        #expect(store.isFileCollapsed(other, scope: scope))
+    }
+
     @Test func overloadsCollapseOnTheirOwn() throws {
         let (store, _) = try store()
         func overload(_ declaration: String, at line: Int) -> CodeSymbol {

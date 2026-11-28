@@ -369,8 +369,11 @@ private struct SymbolCaption: View {
     var body: some View {
         capsule
             .onTapGesture { onInfo() }
-            // Touch and hold: Set Aside (as swiping it up does) or Close Stack.
+            // Touch and hold: Show in Code Level, Set Aside (as swiping it up does) or Close Stack.
             .contextMenu {
+                if let show = stackActions?.showInCodeLevel {
+                    Button("Show in Code Level", systemImage: "list.bullet.indent") { show(symbol) }
+                }
                 if let setAside = stackActions?.setAside {
                     Button("Set Aside", systemImage: "square.stack.3d.down.right", action: setAside)
                 }
@@ -378,7 +381,7 @@ private struct SymbolCaption: View {
                     Button("Close Stack", systemImage: "xmark", action: close)
                 }
             }
-            // Up or down: the stack set aside; sideways: on to the album beside.
+            // Up or down: the stack set aside.
             .stackCaptionSwipes(stackActions)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)

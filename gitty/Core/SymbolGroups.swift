@@ -448,13 +448,25 @@ final class CollapsedCodeStore {
         save()
     }
 
-    /// Shows a symbol and its code.
+    /// Shows a symbol and its code (Show in Code Level): the groups of folders it's in opened,
+    /// its folder and file unfolded, and its code expanded (a file's: just unfolded). Nothing
+    /// else changes.
     func reveal(_ symbol: CodeSymbol, openFile: URL, scope: String) {
         let file = symbol.fileURL ?? openFile
-        guard isCollapsed(symbol, openFile: openFile, scope: scope) || isFileCollapsed(file, scope: scope) else { return }
+        let folder = FolderGroup.path(of: file, scope: scope)
+        // Any folder down to it may be a group (`FolderTree`): open each one.
+        var path = ""
+        for part in folder.split(separator: "/") {
+            path = path.isEmpty ? String(part) : path + "/" + part
+            openGroups.insert("group#" + scope + path)
+        }
+        let folderKey = "folder#" + scope + folder
+        if foldedFolderScopes.contains(scope) { folders.insert(folderKey) } else { folders.remove(folderKey) }
         setFolded(false, file, scope: scope)
-        let key = Self.key(for: symbol, openFile: openFile)
-        if collapsedScopes.contains(scope) { flipped.insert(key) } else { flipped.remove(key) }
+        if symbol.kind != .file {
+            let key = Self.key(for: symbol, openFile: openFile)
+            if collapsedScopes.contains(scope) { flipped.insert(key) } else { flipped.remove(key) }
+        }
         save()
     }
 

@@ -75,6 +75,9 @@ struct SymbolsView: View, Equatable {
     let textActions: CodeTextActions?
     /// The list started or stopped scrolling (dragged, coasting, or moved to a symbol).
     let onScrollingChange: (@MainActor (Bool) -> Void)?
+    /// The hold menu's Show in Code Level (a results page's): the stack set aside, and the
+    /// Code level at the symbol. `nil`: not offered (the Code level itself).
+    let onShowInCodeLevel: (@MainActor (CodeSymbol) -> Void)?
 
     /// The prepared code, per symbol (this list's ids).
     @State private var codeBlocks = CodeBlockStore()
@@ -132,8 +135,10 @@ struct SymbolsView: View, Equatable {
          onShowCommit: (@MainActor (String, String, BlameFocus?) -> Void)? = nil,
          showsWholeFiles: Bool = false,
          textActions: CodeTextActions? = nil,
-         onScrollingChange: (@MainActor (Bool) -> Void)? = nil) {
+         onScrollingChange: (@MainActor (Bool) -> Void)? = nil,
+         onShowInCodeLevel: (@MainActor (CodeSymbol) -> Void)? = nil) {
         self.onScrollingChange = onScrollingChange
+        self.onShowInCodeLevel = onShowInCodeLevel
         self.showsWholeFiles = showsWholeFiles
         self.textActions = textActions
         self.collapsed = collapsed
@@ -178,6 +183,7 @@ struct SymbolsView: View, Equatable {
             && lhs.downloadingFiles == rhs.downloadingFiles && lhs.collapsed === rhs.collapsed
             && lhs.folders?.count == rhs.folders?.count
             && (lhs.onShowCommit == nil) == (rhs.onShowCommit == nil)
+            && (lhs.onShowInCodeLevel == nil) == (rhs.onShowInCodeLevel == nil)
             && lhs.showsWholeFiles == rhs.showsWholeFiles && (lhs.textActions == nil) == (rhs.textActions == nil)
     }
 
@@ -586,6 +592,7 @@ struct SymbolsView: View, Equatable {
         }
         return CodeMenu(symbol: symbol, part: part, openFile: openFile, albumContext: albumContext,
                         onOpen: open,
+                        onShowInCodeLevel: onShowInCodeLevel,
                         onShowHistory: onShowHistory,
                         textActions: textActions,
                         ownText: ownText,
@@ -1597,7 +1604,7 @@ struct CodeTextActions {
 }
 
 /// The long-press menu of a symbol's title and code: a small preview (tap it to open the
-/// card), then Show History; then the items selecting text on its page has (Comment, Definition,
+/// card), then Show in Code Level (on a results page) and Show History; then the items selecting text on its page has (Comment, Definition,
 /// Occurrences, Copy, Share), for what was held: a title's text (its declaration, or a file's
 /// name), or for the code, the title and its code together (all a block shows); then Add to
 /// Album. UIKit's menu, made only when it opens (the table asks for it): as SwiftUI's on every
@@ -1610,6 +1617,8 @@ private struct CodeMenu {
     let openFile: URL
     let albumContext: AlbumMenuContext?
     let onOpen: @MainActor (CodeSymbol) -> Void
+    /// A results page's: the Code level at it (see `SymbolsView.onShowInCodeLevel`).
+    let onShowInCodeLevel: (@MainActor (CodeSymbol) -> Void)?
     /// Show History: a file's, and the symbol it was asked from (`nil` for a file's title).
     let onShowHistory: (@MainActor (URL, CodeSymbol?) -> Void)?
     let textActions: CodeTextActions?
@@ -1624,6 +1633,9 @@ private struct CodeMenu {
         let file = symbol.fileURL ?? openFile
         // No Open: tapping the preview opens the card.
         var first: [UIMenuElement] = []
+        if let onShowInCodeLevel {
+            first.append(action("Show in Code Level", "list.bullet.indent") { onShowInCodeLevel(symbol) })
+        }
         if albumContext != nil, let onShowHistory {
             first.append(action("Show History", "clock.arrow.circlepath") {
                 onShowHistory(file, symbol.kind == .file ? nil : symbol)

@@ -7,10 +7,12 @@ nonisolated struct OccurrenceFile: Sendable {
     let fileURL: URL?
     let entry: CodeSymbol
     let symbols: [CodeSymbol]
+    /// Only these parts of it (an album's symbols and lines in it); `nil`: all of it.
+    var within: [NSRange]? = nil
 }
 
 /// Occurrences (a card's text menu): where a word is used in the project's downloaded files
-/// that pass its filter, as a whole word with its exact case. Each occurrence is its line (and
+/// that pass its filter (or in what the album shown has), as a whole word with its exact case. Each occurrence is its line (and
 /// the two after it) under its file; tap one for its card at that line, paging through the
 /// others. Files that aren't downloaded are left out (`skippedFiles`).
 @MainActor @Observable
@@ -180,7 +182,10 @@ final class OccurrenceSearch: ResultsPageSearch {
     }
 
     nonisolated static func find(_ query: OccurrenceTerm, in string: String, file: OccurrenceFile) -> [Found] {
-        let ranges = Occurrences.ranges(of: query, in: string, fileExtension: file.url.pathExtension)
+        var ranges = Occurrences.ranges(of: query, in: string, fileExtension: file.url.pathExtension)
+        if let within = file.within {
+            ranges = ranges.filter { range in within.contains { NSLocationInRange(range.location, $0) } }
+        }
         guard !ranges.isEmpty else { return [] }
         let text = string as NSString
         let starts = AlbumContents.lineStarts(of: text)
