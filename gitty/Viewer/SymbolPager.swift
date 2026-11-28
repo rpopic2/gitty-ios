@@ -104,18 +104,13 @@ struct SymbolPager: View {
 
     private var visibleID: Int { scrolledID ?? initialID }
 
-    /// Pages either side of the tapped symbol, at most.
-    static let pageReach = 50
-
-    /// The pages: the tapped symbol's neighbours, not the whole list. Given a whole project
-    /// (tens of thousands of symbols), the pager made a page for each of them, each watching the
-    /// texts being loaded, and a text coming in froze the app for seconds (iOS 18).
+    /// The pages: the symbols of the tapped symbol's file, not the whole list. Given a whole
+    /// project (tens of thousands of symbols), the pager made a page for each of them, each
+    /// watching the texts being loaded, and a text coming in froze the app for seconds (iOS 18).
+    /// A diff album's pages are its changed files, one each: all of them.
     private static func pages(of symbols: [CodeSymbol], around id: Int) -> [CodeSymbol] {
-        guard symbols.count > 2 * pageReach + 1 else { return symbols }
-        let index = symbols.firstIndex { $0.id == id } ?? 0
-        let start = max(0, index - pageReach)
-        let end = min(symbols.count, index + pageReach + 1)
-        return Array(symbols[start..<end])
+        guard let tapped = symbols.first(where: { $0.id == id }), tapped.diff == nil else { return symbols }
+        return symbols.filter { $0.fileURL == tapped.fileURL && $0.diff == nil }
     }
 
     private var current: CodeSymbol? {
