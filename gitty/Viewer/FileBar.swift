@@ -65,6 +65,8 @@ struct FileBar: View {
     /// At the Code level: Collapse All and Expand All in the menu.
     let onCollapseAll: (@MainActor () -> Void)?
     let onExpandAll: (@MainActor () -> Void)?
+    /// A comparison's diff album: Show Commits in the menu.
+    let onShowCommits: (@MainActor () -> Void)?
     /// In an album: Delete Album in the menu (`nil`: the whole project, which can't be).
     let onDeleteAlbum: (@MainActor () -> Void)?
     /// Before the title: an album's icon while one shows.
@@ -85,6 +87,7 @@ struct FileBar: View {
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
+         onShowCommits: (@MainActor () -> Void)? = nil,
          onDeleteAlbum: (@MainActor () -> Void)? = nil,
          titleIcon: String? = nil, reactsToTouch: Bool = true,
          onPan: (@MainActor (CGSize) -> Void)? = nil,
@@ -106,6 +109,7 @@ struct FileBar: View {
         self.onClearSearch = onClearSearch
         self.onCollapseAll = onCollapseAll
         self.onExpandAll = onExpandAll
+        self.onShowCommits = onShowCommits
         self.onDeleteAlbum = onDeleteAlbum
     }
 
@@ -135,7 +139,8 @@ struct FileBar: View {
 
     private var menu: BarMenu {
         BarMenu(copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
-                onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, onDeleteAlbum: onDeleteAlbum)
+                onCollapseAll: onCollapseAll, onExpandAll: onExpandAll, onShowCommits: onShowCommits,
+                onDeleteAlbum: onDeleteAlbum)
     }
 
     /// Where the capsule (iOS 26) or the field (iOS 18) is in the bar, for the menu's lifted
@@ -205,6 +210,8 @@ struct BarMenu: View {
     var onOpenInBrowser: (@MainActor () -> Void)?
     var onCollapseAll: (@MainActor () -> Void)?
     var onExpandAll: (@MainActor () -> Void)?
+    /// A comparison's diff album: the commits it has.
+    var onShowCommits: (@MainActor () -> Void)?
     var onDeleteAlbum: (@MainActor () -> Void)?
 
     var body: some View {
@@ -224,6 +231,9 @@ struct BarMenu: View {
                 Button("Collapse All", systemImage: "chevron.right.2") { onCollapseAll() }
                 Button("Expand All", systemImage: "chevron.down.2") { onExpandAll() }
             }
+        }
+        if let onShowCommits {
+            Button("Show Commits", systemImage: "list.bullet.rectangle") { onShowCommits() }
         }
         if let onDeleteAlbum {
             Section {
@@ -259,6 +269,10 @@ extension BarMenu {
                     onExpandAll()
                 },
             ]))
+        }
+        if let onShowCommits {
+            items.append(UIAction(title: String(localized: "Show Commits"),
+                                  image: UIImage(systemName: "list.bullet.rectangle")) { _ in onShowCommits() })
         }
         if let onDeleteAlbum {
             items.append(UIMenu(options: .displayInline, children: [
@@ -565,6 +579,8 @@ struct BottomBarStack: View {
     let onClearSearch: (@MainActor () -> Void)?
     let onCollapseAll: (@MainActor () -> Void)?
     let onExpandAll: (@MainActor () -> Void)?
+    /// A comparison's diff album: Show Commits in the menu.
+    let onShowCommits: (@MainActor () -> Void)?
     /// In an album: Delete Album in the menu (`nil`: the whole project, which can't be).
     let onDeleteAlbum: (@MainActor () -> Void)?
     /// Before the title: an album's icon while one shows.
@@ -613,6 +629,7 @@ struct BottomBarStack: View {
          onOpenInBrowser: (@MainActor () -> Void)? = nil,
          searchQuery: String? = nil, onClearSearch: (@MainActor () -> Void)? = nil,
          onCollapseAll: (@MainActor () -> Void)? = nil, onExpandAll: (@MainActor () -> Void)? = nil,
+         onShowCommits: (@MainActor () -> Void)? = nil,
          onDeleteAlbum: (@MainActor () -> Void)? = nil,
          titleIcon: String? = nil, swipe: BarSwipe? = nil) {
         self.title = title
@@ -630,6 +647,7 @@ struct BottomBarStack: View {
         self.onClearSearch = onClearSearch
         self.onCollapseAll = onCollapseAll
         self.onExpandAll = onExpandAll
+        self.onShowCommits = onShowCommits
         self.onDeleteAlbum = onDeleteAlbum
     }
 
@@ -641,7 +659,8 @@ struct BottomBarStack: View {
                               copyText: copyText, onPasteAndGo: onPasteAndGo, onOpenInBrowser: onOpenInBrowser,
                               searchQuery: searchQuery, onClearSearch: onClearSearch,
                               onCollapseAll: onCollapseAll, onExpandAll: onExpandAll,
-                              onDeleteAlbum: onDeleteAlbum, titleIcon: titleIcon, reactsToTouch: swipe == nil))
+                              onShowCommits: onShowCommits, onDeleteAlbum: onDeleteAlbum,
+                              titleIcon: titleIcon, reactsToTouch: swipe == nil))
         }
         // A review set aside floats above the bar, at either end (swipe it across): not part of it.
         .overlay(alignment: .top) {

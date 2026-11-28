@@ -66,6 +66,14 @@ struct CodeScreen: View {
 
     /// A branch's comparison with the checkout (its name typed in a search, then Return).
     @State private var branchComparison: BranchComparison?
+    /// A comparison's diff album's commits (the bar's Show Commits).
+    @State private var albumCommits: AlbumCommits?
+
+    private struct AlbumCommits: Identifiable {
+        let projectID: String
+        let comparison: GitComparison
+        var id: String { comparison.title }
+    }
 
     private struct BranchComparison: Identifiable {
         let projectID: String
@@ -248,6 +256,18 @@ struct CodeScreen: View {
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") { blameCommit = nil }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $albumCommits) { item in
+            NavigationStack {
+                ComparisonCommitsView(projectID: item.projectID, comparison: item.comparison)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { albumCommits = nil }
                         }
                     }
             }
@@ -1275,6 +1295,7 @@ struct CodeScreen: View {
                 searchQuery: "",  // tapping it searches
                 onCollapseAll: collapseAllAction(true),
                 onExpandAll: collapseAllAction(false),
+                onShowCommits: showCommitsAction,
                 onDeleteAlbum: deleteAlbumAction,
                 // In an album: its icon before its name.
                 titleIcon: model.activeAlbum != nil ? "rectangle.stack" : nil,
@@ -1303,7 +1324,16 @@ struct CodeScreen: View {
     /// A results page's capsule menu: the bar's (its Collapse and Expand All are the page's).
     private var resultsBarMenu: BarMenu {
         BarMenu(copyText: barAddress, onPasteAndGo: onPasteAndGo, onOpenInBrowser: openInBrowserAction,
-                onDeleteAlbum: deleteAlbumAction)
+                onShowCommits: showCommitsAction, onDeleteAlbum: deleteAlbumAction)
+    }
+
+    /// The bar's Show Commits: a comparison's diff album (a commit's is that one commit).
+    private var showCommitsAction: (@MainActor () -> Void)? {
+        guard let album = model.activeAlbum, case .comparison(let base, let head, let mode) = album.diff?.source
+        else { return nil }
+        let comparison = GitComparison(base: base, head: head, mode: mode)
+        let projectID = album.projectID
+        return { albumCommits = AlbumCommits(projectID: projectID, comparison: comparison) }
     }
 
     /// The bar's Delete Album: an album shown (the whole project can't be deleted).

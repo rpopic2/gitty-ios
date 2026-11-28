@@ -235,3 +235,53 @@ struct CompareView: View {
         }
     }
 }
+
+/// A comparison's commits (a diff album's Show Commits): `head`'s commits that `base` doesn't
+/// have, newest first, from the clone. Tap one for its own changes. Push it in a navigation stack.
+struct ComparisonCommitsView: View {
+    let projectID: String
+    let comparison: GitComparison
+
+    @State private var resolved: ResolvedComparison?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        List {
+            if let resolved {
+                Section {
+                    ForEach(resolved.commits) { commit in
+                        NavigationLink(value: CompareView.ComparedCommit(commit: commit)) {
+                            CommitRow(commit: commit)
+                        }
+                    }
+                    if resolved.commits.isEmpty {
+                        Text("No commits in between.").foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    if resolved.hasMoreCommits {
+                        Text("Only the latest \(resolved.commits.count) commits are listed.")
+                    }
+                }
+            } else if let errorMessage {
+                Text(errorMessage).foregroundStyle(.red)
+            } else {
+                HStack {
+                    ProgressView()
+                    Text("Comparing…").foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle(comparison.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(for: CompareView.ComparedCommit.self) { item in
+            CommitFilesView(projectID: projectID, commit: item.commit)
+        }
+        .task(id: comparison) {
+            do {
+                resolved = try await CloneStore.shared.compare(comparison, projectID: projectID)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
