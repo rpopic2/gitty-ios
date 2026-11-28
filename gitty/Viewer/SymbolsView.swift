@@ -480,8 +480,8 @@ struct SymbolsView: View, Equatable {
                             isFolded: isFolded, indent: indent, onToggle: toggle)
     }
 
-    /// A folder's or a group's touch-and-hold menu (UIKit's, made when it opens): fold or
-    /// unfold it, comment on it; a folder's also adds its files to an album, and folds or
+    /// A folder's or a group's touch-and-hold menu (UIKit's, made when it opens): a folder's
+    /// Collapse (open) or Expand All (folded), a group's fold or unfold; comment on it; a folder's also adds its files to an album, and folds or
     /// unfolds every folder. Its preview is its whole path from the project's top (the header
     /// cuts a long one short) and how many files it has.
     private func folderMenu(_ header: FolderRows.Header) -> CodeTableMenu {
@@ -505,9 +505,17 @@ struct SymbolsView: View, Equatable {
             path = rootFolderName + "/" + node.path
             fileCount = node.fileCount
         case .folder(let group, _, _):
-            let isFolded = collapsed.isFolderFolded(group.path, scope: scope)
-            items.append(action(isFolded ? "Unfold Folder" : "Fold Folder", isFolded ? "chevron.down" : "chevron.right",
-                                animated { collapsed.toggleFolder(group.path, scope: scope) }))
+            // Open: Collapse it. Folded: Expand All in it (its files, and their symbols' code).
+            if collapsed.isFolderFolded(group.path, scope: scope) {
+                let openFile = openFile
+                items.append(action("Expand All", "chevron.down.2", animated {
+                    collapsed.expandAll(inFolder: group.path, files: group.files, group.symbols,
+                                        openFile: openFile, scope: scope)
+                }))
+            } else {
+                items.append(action("Collapse", "chevron.right",
+                                    animated { collapsed.toggleFolder(group.path, scope: scope) }))
+            }
             if let comment { items.append(action("Comment", "text.bubble") { comment(group.path) }) }
             if let albumContext {
                 items += AlbumUIMenu.elements(for: group.files.map { AlbumItem.file($0) }, context: albumContext,
@@ -591,10 +599,17 @@ struct SymbolsView: View, Equatable {
         let onOpen = onOpen
         let onOpenURL = onOpenURL
         let blocks = codeBlocks
+        // A file's title: Collapse it while it's open, Expand All in it while it's folded.
         // Typed first: as an untyped closure in a ternary, it was too much for the type checker.
         var onExpandAll: (@MainActor () -> Void)?
-        if symbol.kind == .file, symbol.isDownloaded {
-            onExpandAll = { view.expandAll(inFile: symbol) }
+        var onCollapse: (@MainActor () -> Void)?
+        if symbol.kind == .file {
+            if !collapsed.isFileCollapsed(symbol.fileURL ?? openFile, scope: collapseScope) {
+                let collapsed = collapsed, openFile = openFile, scope = collapseScope
+                onCollapse = { withAnimation(.smooth(duration: 0.25)) { collapsed.toggle(symbol, openFile: openFile, scope: scope) } }
+            } else if symbol.isDownloaded {
+                onExpandAll = { view.expandAll(inFile: symbol) }
+            }
         }
         let codeRange: @MainActor () -> NSRange = { blocks.shownRange(of: symbol) }
         let open: @MainActor (CodeSymbol) -> Void = { symbol in
@@ -608,7 +623,8 @@ struct SymbolsView: View, Equatable {
                         textActions: textActions,
                         ownText: ownText,
                         codeRange: codeRange,
-                        onExpandAll: onExpandAll)
+                        onExpandAll: onExpandAll,
+                        onCollapse: onCollapse)
     }
 
     /// A file title's Expand All: the file unfolded, and all its symbols' code showing.
@@ -1637,8 +1653,9 @@ private struct CodeMenu {
     let ownText: NSString?
     /// The code's range in its file (what its block shows), worked out when an item is chosen.
     let codeRange: @MainActor () -> NSRange
-    /// A file's title: Expand All in it.
+    /// A file's title: Expand All in it (folded), or Collapse it (open).
     let onExpandAll: (@MainActor () -> Void)?
+    let onCollapse: (@MainActor () -> Void)?
 
     func menu(naming: AlbumNaming?) -> UIMenu {
         let file = symbol.fileURL ?? openFile
@@ -1654,6 +1671,9 @@ private struct CodeMenu {
         }
         if part == .title, let onExpandAll {
             first.append(action("Expand All", "chevron.down.2", onExpandAll))
+        }
+        if part == .title, let onCollapse {
+            first.append(action("Collapse", "chevron.right", onCollapse))
         }
         var sections: [UIMenuElement] = [
             UIMenu(options: .displayInline, children: first),

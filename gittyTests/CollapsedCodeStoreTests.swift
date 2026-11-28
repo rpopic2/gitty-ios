@@ -52,6 +52,20 @@ struct CollapsedCodeStoreTests {
         #expect(store.isFileCollapsed(other, scope: scope))
     }
 
+    @Test func expandAllInAFolderOpensItsFilesAndCode() throws {
+        let (store, _) = try store()
+        let file = URL(string: "https://raw.githubusercontent.com/o/r/main/src/c.c")!
+        store.setAllCollapsed(true, scope: scope)
+        store.setAllFilesFolded(true, scope: scope)
+        store.setAllFoldersFolded(true, scope: scope)
+        let inside = symbol("send", in: file)
+        store.expandAll(inFolder: "src", files: [file], [inside], openFile: open, scope: scope)
+        #expect(!store.isFolderFolded("src", scope: scope))
+        #expect(!store.isFileCollapsed(file, scope: scope))
+        #expect(!store.isCollapsed(inside, openFile: open, scope: scope))
+        #expect(store.isFileCollapsed(other, scope: scope))
+    }
+
     @Test func overloadsCollapseOnTheirOwn() throws {
         let (store, _) = try store()
         func overload(_ declaration: String, at line: Int) -> CodeSymbol {

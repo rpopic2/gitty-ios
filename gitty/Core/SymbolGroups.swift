@@ -429,6 +429,15 @@ final class CollapsedCodeStore {
         setCollapsed(false, symbols, openFile: openFile, scope: scope)  // saves
     }
 
+    /// Expand All in a folder (its header's menu, while it's folded): the folder unfolded, its
+    /// files unfolded, and every one of their symbols showing its code.
+    func expandAll(inFolder path: String, files: [URL], _ symbols: [CodeSymbol], openFile: URL, scope: String) {
+        let key = "folder#" + scope + path
+        if foldedFolderScopes.contains(scope) { folders.insert(key) } else { folders.remove(key) }
+        for file in files { setFolded(false, file, scope: scope) }
+        setCollapsed(false, symbols, openFile: openFile, scope: scope)  // saves
+    }
+
     /// Collapse All (or Expand All) in a scope: every symbol's code, and no file folded.
     func setAllCollapsed(_ isCollapsed: Bool, scope: String) {
         if isCollapsed { collapsedScopes.insert(scope) } else { collapsedScopes.remove(scope) }
