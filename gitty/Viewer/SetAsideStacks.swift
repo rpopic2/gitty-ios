@@ -71,135 +71,150 @@ final class SetAsideStore {
 // MARK: - The chip
 
 /// The stacks set aside in the album shown, in a chip over the bar: the latest's top page and
-/// how many cards it has (or how many stacks). Tap it to open the stack, or with several, to
-/// fan them out upwards, one chip each, the latest nearest; tap one to open it, or the chip
-/// under them to fold them again. Drag up on them to fan them out, following the finger, and
-/// down to fold them.
-/// Swipe a chip sideways to throw that stack away.
+/// how many cards it has (or how many stacks there are). Like a menu in iOS: finger down on it
+/// and the stacks fan out upwards, one chip each, the latest nearest; slide to one (it's
+/// highlighted) and let go to open it. A tap leaves them out, to tap one; letting go anywhere
+/// else folds them. Slide the highlighted one out to the side and let go to throw it away.
 struct SetAsideChips: View {
     let stacks: [SetAsideStack]
     let onOpen: @MainActor (SetAsideStack) -> Void
     let onDrop: @MainActor (SetAsideStack) -> Void
 
-    /// How far fanned out: 0 folded, 1 all out. Follows the finger while dragged up or down.
-    @State private var fan: CGFloat = 0
-    /// `fan` when the drag began.
-    @State private var fanAtDragStart: CGFloat?
+    /// Fanned out.
+    @State private var isOpen = false
+    /// Whether it was fanned out when the finger came down (`nil`: no finger down).
+    @State private var wasOpen: Bool?
+    /// The stack under the finger, and how far sideways the finger is from its chip.
+    @State private var highlighted: UUID?
+    @State private var sideways: CGFloat = 0
+
     /// A chip's height.
     static let chipHeight: CGFloat = 36
     /// From one chip to the next, fanned out.
     private static let step: CGFloat = chipHeight + 8
+    /// Let go this far to the side of a highlighted chip: it's thrown away.
+    private static let dropDistance: CGFloat = 90
 
-    // In parts: as one expression, it was too much for the type checker.
+    private var latestFirst: [SetAsideStack] { stacks.reversed() }
+
+    /// Tall enough, fanned out, for a tap on any chip to reach it.
+    private var height: CGFloat {
+        let fanned: CGFloat = isOpen ? CGFloat(stacks.count) * Self.step : 0
+        return Self.chipHeight + fanned
+    }
+
+    // In parts, with types spelled out: as one expression, it was too much for the type checker.
     var body: some View {
-        let stackCount: Int = stacks.count
         let ids: [UUID] = stacks.map(\.id)
+        let isEmpty: Bool = stacks.isEmpty
         return ZStack(alignment: .bottom) {
-            if fan > 0, stackCount > 1 {
-                fannedOut
+            ForEach(Array(latestFirst.enumerated()), id: \.element.id) { place, stack in
+                fannedChip(stack, place: place)
             }
             if let latest = stacks.last {
                 mainChip(latest)
             }
         }
+        .frame(height: height, alignment: .bottom)
+        .contentShape(Rectangle())
+        .gesture(press)
+        .animation(.smooth(duration: 0.25), value: isOpen)
         .animation(.smooth(duration: 0.25), value: ids)
-        // Down to one (or none): nothing to fan out.
-        .onChange(of: stackCount) { _, new in
-            if new < 2 { fan = 0 }
+        .sensoryFeedback(.selection, trigger: highlighted) { _, new in new != nil }
+        .onChange(of: isEmpty) { _, empty in if empty { isOpen = false } }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(accessibilityTitle))
+        .accessibilityActions {
+            ForEach(latestFirst) { stack in
+                Button(String(localized: "Open \(stack.title)")) { open(stack) }
+                Button(String(localized: "Remove \(stack.title)")) { onDrop(stack) }
+            }
         }
     }
 
-    /// The stacks, one chip each, coming out from behind the main chip as it fans out: the
-    /// latest just over it, the oldest at the top.
-    private var fannedOut: some View {
-        let latestFirst: [SetAsideStack] = stacks.reversed()
-        return ForEach(Array(latestFirst.enumerated()), id: \.element.id) { place, stack in
-            chip(for: stack)
-                .frame(maxWidth: 260)
-                .offset(y: -CGFloat(place + 1) * Self.step * fan)
-                .opacity(Double(min(1, fan * 1.5)))
-                .allowsHitTesting(fan > 0.9)
-        }
+    private var accessibilityTitle: String {
+        let total: Int = stacks.count
+        return total == 1 ? String(localized: "1 stack set aside") : String(localized: "\(total) stacks set aside")
     }
 
-    private func chip(for stack: SetAsideStack) -> SetAsideChip {
-        SetAsideChip(title: stack.title, symbolImage: stack.symbolImage, count: stack.cardCount,
-                     onTap: { open(stack) }, onDrop: { onDrop(stack) },
-                     onVerticalDrag: { dy in dragged(dy) }, onVerticalEnd: { dy, flung in released(dy, flung) })
+    /// A stack's chip, `place` steps above the bottom one when fanned out (behind it, folded).
+    private func fannedChip(_ stack: SetAsideStack, place: Int) -> some View {
+        let isHighlighted: Bool = stack.id == highlighted
+        let y: CGFloat = isOpen ? -CGFloat(place + 1) * Self.step : 0
+        let x: CGFloat = isHighlighted ? sideways : 0
+        let fade: Double = isHighlighted ? Double(min(0.7, abs(sideways) / (Self.dropDistance * 2))) : 0
+        return SetAsideChip(title: stack.title, symbolImage: stack.symbolImage, cards: stack.cardCount,
+                            isHighlighted: isHighlighted)
+            .frame(maxWidth: 260)
+            .offset(x: x, y: y)
+            .opacity(isOpen ? 1 - fade : 0)
     }
 
-    /// The latest stack's chip, or, with several, how many there are (tap, or drag it up, to fan
-    /// them out).
+    /// The bottom chip: the latest stack, or how many there are.
     private func mainChip(_ latest: SetAsideStack) -> some View {
         let several: Bool = stacks.count > 1
-        var chip = SetAsideChip(title: latest.title, symbolImage: latest.symbolImage, count: latest.cardCount,
-                                onTap: { open(latest) }, onDrop: { onDrop(latest) })
-        if several {
-            let all = stacks
-            let title = String(localized: "\(all.count) Stacks")
-            chip = SetAsideChip(title: title, symbolImage: fan > 0.5 ? "chevron.down" : "square.stack.3d.up",
-                                count: nil,
-                                onTap: { settle(fan > 0.5 ? 0 : 1) },
-                                // Swiping the folded chip away throws them all away.
-                                onDrop: { for stack in all { onDrop(stack) } },
-                                onVerticalDrag: { dy in dragged(dy) },
-                                onVerticalEnd: { dy, flung in released(dy, flung) })
-        }
-        return chip
+        let title: String = several ? String(localized: "\(stacks.count) Stacks") : latest.title
+        let image: String = isOpen ? "chevron.down" : (several ? "square.stack.3d.up" : latest.symbolImage)
+        let cards: Int? = several ? nil : latest.cardCount
+        return SetAsideChip(title: title, symbolImage: image, cards: cards, isHighlighted: false)
             .frame(maxWidth: 220)
             .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
-    /// The whole way up, fanned out.
-    private var span: CGFloat {
-        max(Self.step, CGFloat(stacks.count) * Self.step)
+    /// Down: out they come. Moving: the chip under the finger is highlighted. Up: on one, it
+    /// opens (or, slid out to the side, goes); a tap leaves them out; anywhere else folds them.
+    private var press: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if wasOpen == nil {
+                    wasOpen = isOpen
+                    isOpen = true
+                }
+                let found = stack(at: value.location)
+                if found?.id != highlighted {
+                    highlighted = found?.id
+                }
+                sideways = found == nil ? 0 : value.location.x - value.startLocation.x
+            }
+            .onEnded { value in
+                let found = stack(at: value.location)
+                let isTap = abs(value.translation.width) < 6 && abs(value.translation.height) < 6
+                if let found, abs(sideways) > Self.dropDistance {
+                    onDrop(found)
+                } else if let found {
+                    open(found)
+                } else if !(isTap && wasOpen == false) {
+                    isOpen = false
+                }
+                wasOpen = nil
+                highlighted = nil
+                withAnimation(.spring(duration: 0.3)) { sideways = 0 }
+            }
     }
 
-    /// Dragged up (`dy` < 0) or down: as far out as the finger.
-    private func dragged(_ dy: CGFloat) {
-        guard stacks.count > 1 else { return }
-        let start = fanAtDragStart ?? fan
-        fanAtDragStart = start
-        fan = min(1, max(0, start - dy / span))
-    }
-
-    /// Let go: all the way out or back in, whichever it was nearer (or flung toward).
-    private func released(_ dy: CGFloat, _ flung: CGFloat) {
-        guard stacks.count > 1 else { return }
-        let start = fanAtDragStart ?? fan
-        fanAtDragStart = nil
-        settle(start - flung / span > 0.5 ? 1 : 0)
-    }
-
-    private func settle(_ target: CGFloat) {
-        withAnimation(.smooth(duration: 0.25)) { fan = target }
+    /// The fanned-out chip at a point (in this view, the bottom chip at its bottom).
+    private func stack(at point: CGPoint) -> SetAsideStack? {
+        guard isOpen else { return nil }
+        // Chip `place` is centered `place + 1` steps above the bottom chip's middle.
+        let aboveMiddle: CGFloat = (height - Self.chipHeight / 2) - point.y
+        let place = Int((aboveMiddle / Self.step).rounded()) - 1
+        return latestFirst.indices.contains(place) ? latestFirst[place] : nil
     }
 
     private func open(_ stack: SetAsideStack) {
-        fan = 0
+        isOpen = false
         onOpen(stack)
     }
 }
 
-/// One chip: a stack's icon, its top page's name and its cards. Tap it; swipe it sideways to
-/// throw it away (it follows the finger, and goes once far enough).
+/// One chip: a stack's icon, its top page's name and its cards.
 private struct SetAsideChip: View {
     let title: String
     let symbolImage: String
     /// Its cards (`nil`: several stacks under one chip).
-    let count: Int?
-    let onTap: @MainActor () -> Void
-    let onDrop: @MainActor () -> Void
-    /// Dragged up or down (how far), for the chips to fan out or fold as the finger goes…
-    var onVerticalDrag: (@MainActor (CGFloat) -> Void)? = nil
-    /// …and let go (how far, and how far a fling would have gone).
-    var onVerticalEnd: (@MainActor (_ translation: CGFloat, _ predicted: CGFloat) -> Void)? = nil
-
-    @State private var dragX: CGFloat = 0
-    /// The way this drag went first: sideways (throwing it away) or up and down (fanning).
-    @State private var isVertical: Bool?
-    /// Far enough to throw away, with a tap of haptics as it gets there.
-    private static let dropDistance: CGFloat = 90
+    let cards: Int?
+    /// Under the finger: letting go opens it.
+    let isHighlighted: Bool
 
     var body: some View {
         let label = HStack(spacing: 6) {
@@ -208,10 +223,10 @@ private struct SetAsideChip: View {
             Text(title)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if let count {
+            if let cards {
                 HStack(spacing: 2) {
                     Image(systemName: "square.stack")
-                    Text(count, format: .number)
+                    Text(cards, format: .number)
                         .monospacedDigit()
                 }
                 .foregroundStyle(.secondary)
@@ -220,55 +235,17 @@ private struct SetAsideChip: View {
         .font(.subheadline)
         .padding(.horizontal, 14)
         .frame(height: SetAsideChips.chipHeight)
-        .contentShape(Capsule())
+        .background(isHighlighted ? Color.accentColor.opacity(0.18) : .clear, in: Capsule())
 
         Group {
             if #available(iOS 26.0, *) {
-                label.glassEffect(.regular.interactive(), in: Capsule())
+                label.glassEffect(.regular, in: Capsule())
             } else {
                 label.background(.bar, in: Capsule())
             }
         }
-        .onTapGesture { onTap() }
-        .offset(x: dragX)
-        .opacity(1 - min(1, abs(dragX) / (Self.dropDistance * 2)))
-        .sensoryFeedback(.impact(weight: .light), trigger: abs(dragX) > Self.dropDistance) { old, new in new && !old }
-        .gesture(
-            DragGesture(minimumDistance: 10)
-                .onChanged { value in
-                    // Sideways follows the finger (to throw it away); up and down fan the chips.
-                    let t = value.translation
-                    let vertical = isVertical ?? (abs(t.height) > abs(t.width))
-                    isVertical = vertical
-                    if vertical {
-                        onVerticalDrag?(t.height)
-                    } else {
-                        dragX = t.width
-                    }
-                }
-                .onEnded { value in
-                    let t = value.translation
-                    let vertical = isVertical ?? (abs(t.height) > abs(t.width))
-                    isVertical = nil
-                    if vertical {
-                        onVerticalEnd?(t.height, value.predictedEndTranslation.height)
-                        return
-                    }
-                    let dx = t.width, flung = value.predictedEndTranslation.width
-                    if abs(dx) > Self.dropDistance || abs(flung) > Self.dropDistance * 2.5 {
-                        withAnimation(.smooth(duration: 0.2)) { dragX = dx < 0 ? -500 : 500 } completion: {
-                            onDrop()
-                            dragX = 0
-                        }
-                    } else {
-                        withAnimation(.spring(duration: 0.3)) { dragX = 0 }
-                    }
-                }
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint(Text("Opens the stack set aside"))
-        .accessibilityAction(named: Text("Remove")) { onDrop() }
+        .scaleEffect(isHighlighted ? 1.06 : 1)
+        .animation(.smooth(duration: 0.15), value: isHighlighted)
     }
 }
 
