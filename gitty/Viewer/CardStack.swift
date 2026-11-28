@@ -200,9 +200,11 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     /// The bar's menu, for the capsule's touch and hold (its Collapse and Expand All are the
     /// page's own).
     let barMenu: BarMenu?
-    /// Return in the field, with what's typed: `true` if it did something with it (a branch's
-    /// name opens its comparison); otherwise the field just closes.
-    var onSubmit: (@MainActor (String) -> Bool)? = nil
+    /// The branch whose name is exactly what's typed (`nil`: none). A row on top of the results
+    /// compares the checkout with it, as Return does.
+    var branchNamed: (@MainActor (String) -> String?)? = nil
+    /// That row tapped, or Return on a branch's name: its comparison.
+    var onCompareBranch: (@MainActor (String) -> Void)? = nil
 
     @State private var isEditing: Bool
     /// Scrolling down hides the capsule; scrolling up shows it.
@@ -212,7 +214,8 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     @Environment(\.dismiss) private var dismiss
 
     init(search: Search, stackDepth: Int, stackActions: StackActions?, barMenu: BarMenu? = nil,
-         onSubmit: (@MainActor (String) -> Bool)? = nil,
+         branchNamed: (@MainActor (String) -> String?)? = nil,
+         onCompareBranch: (@MainActor (String) -> Void)? = nil,
          shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
          @ViewBuilder list: @escaping (_ symbols: [CodeSymbol], _ query: String,
                                        _ bar: ResultsBar) -> Results) {
@@ -220,7 +223,8 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
         self.stackDepth = stackDepth
         self.stackActions = stackActions
         self.barMenu = barMenu
-        self.onSubmit = onSubmit
+        self.branchNamed = branchNamed
+        self.onCompareBranch = onCompareBranch
         self.shownCount = shownCount
         self.list = list
         _isEditing = State(initialValue: search.startsEditing)
@@ -246,7 +250,9 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     SymbolSearchEditor(query: $search.query, isSearching: search.isPending,
                                        placeholder: search.placeholder,
                                        onClose: { isEditing = false },
-                                       onSubmit: { if onSubmit?(search.query) != true { isEditing = false } },
+                                       onSubmit: {
+                                           if let branch, let onCompareBranch { onCompareBranch(branch) } else { isEditing = false }
+                                       },
                                        // A search begun in the bar goes on being typed here.
                                        selectsAll: !search.startsEditing)
                 }
@@ -264,15 +270,30 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
         search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// What's typed is a branch's whole name (one the clone hasn't downloaded too: its
+    /// comparison offers the download).
+    private var branch: String? {
+        guard onCompareBranch != nil, !isQueryEmpty else { return nil }
+        return branchNamed?(search.query.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     @ViewBuilder
     private var content: some View {
         if isQueryEmpty {
             Color(uiColor: .systemGroupedBackground)  // waiting for the first letters
         } else {
-            SearchResultsContent(search: search) { symbols, query in
-                list(symbols, query, ResultsBar(isHidden: { isBarHidden }, setHidden: { isBarHidden = $0 },
-                                                collapseRequest: collapseRequest))
+            let branch = branch
+            VStack(spacing: 0) {
+                if let branch, let onCompareBranch {
+                    BranchResultRow(name: branch) { onCompareBranch(branch) }
+                }
+                // A branch found: no No Results under it.
+                SearchResultsContent(search: search, showsNoResults: branch == nil) { symbols, query in
+                    list(symbols, query, ResultsBar(isHidden: { isBarHidden }, setHidden: { isBarHidden = $0 },
+                                                    collapseRequest: collapseRequest))
+                }
             }
+            .background(Color(uiColor: .systemGroupedBackground))
         }
     }
 
@@ -324,7 +345,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     label.background(.bar, in: Capsule())
                 }
             }
-            // Up or down: the stack set aside; sideways: on to the album beside.
+            // Up or down: the stack set aside.
             .stackCaptionSwipes(stackActions)
             .padding(.horizontal, 24)
         }
@@ -395,6 +416,47 @@ final class KeyboardDockController<Content: View>: UIViewController {
     }
 }
 
+/// A branch named exactly as typed, on top of a search's results: tap it (or press Return) to
+/// compare the checkout with it.
+private struct BranchResultRow: View {
+    let name: String
+    let onCompare: @MainActor () -> Void
+
+    var body: some View {
+        Button(action: onCompare) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.left.arrow.right")
+                    .foregroundStyle(.tint)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Compare with Branch")
+                        .foregroundStyle(.primary)
+                    Text(verbatim: name)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(uiColor: .secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .accessibilityHint(Text("Compares the checked out code with this branch"))
+    }
+}
+
 /// The capsule under a results list, for the list's scrolling: scrolling down hides it, up shows
 /// it. The list asks whether it's hidden now, so it knows to show it again.
 struct ResultsBar {
@@ -412,13 +474,17 @@ struct ResultsBar {
 /// The results, the same list while matches come in (a fresh one for each query).
 struct SearchResultsContent<Search: ResultsPageSearch, Results: View>: View {
     let search: Search
+    /// `false`: nothing at all when nothing's found (a row above says what was).
+    var showsNoResults = true
     @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String) -> Results
 
     var body: some View {
         if search.results.isEmpty && search.isPending {
             placeholder { ProgressView() }
         } else if search.results.isEmpty {
-            placeholder { ContentUnavailableView.search(text: search.query) }
+            placeholder {
+                if showsNoResults { ContentUnavailableView.search(text: search.query) }
+            }
         } else {
             // A fresh list for each query, not for each batch of matches: rebuilt, every row's
             // code was laid out and colored again (it flashed) and its counts worked out again.

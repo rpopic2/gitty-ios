@@ -589,7 +589,8 @@ struct CodeScreen: View {
         let scope = model.collapseScope
         return StackResultsView(search: search, stackDepth: stackNumber(of: route),
                                 stackActions: stackActions, barMenu: resultsBarMenu,
-                                onSubmit: { compareBranch(named: $0) },
+                                branchNamed: { branchNamed($0) },
+                                onCompareBranch: { compareBranch(named: $0) },
                                 shownCount: { results in
                                     results.filter { !search.collapsed.isHidden($0, openFile: openFile, scope: scope) }.count
                                 }) { symbols, query, bar in
@@ -766,15 +767,20 @@ struct CodeScreen: View {
     /// Return on a branch's whole name (pasted, like a pull request's): what it changed since it
     /// split off the checkout, as Compare does. `false` for anything else (or a project that
     /// isn't cloned: comparing needs the clone).
-    private func compareBranch(named text: String) -> Bool {
-        let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, let projectID = model.symbolsProjectID,
+    /// The cloned project's branch named exactly `name` (any the remote has, downloaded or not).
+    private func branchNamed(_ name: String) -> String? {
+        guard let projectID = model.symbolsProjectID,
               let refs = CloneIndex.shared.record(forProject: projectID)?.remoteRefs,
               refs.branches.contains(name)
-        else { return false }
+        else { return nil }
+        return name
+    }
+
+    /// A results page's branch row, or Return on a branch's name: the checkout compared with it.
+    private func compareBranch(named name: String) {
+        guard let projectID = model.symbolsProjectID else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         branchComparison = BranchComparison(projectID: projectID, branch: name)
-        return true
     }
 
     /// A commit tapped in the blame: looked up in the clone, then shown.
