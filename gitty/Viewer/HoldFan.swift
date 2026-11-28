@@ -12,9 +12,10 @@ struct FanItem: Identifiable {
 
 /// A capsule (`base`) whose chips fan out upwards, like a menu in iOS: hold it (or slide up) and
 /// they come out over a blur (`isOpen`, which the screen shows), the nearest first; slide to one
-/// (it's highlighted) and let go to choose it. A tap does `onTap` (`nil`: leaves them out, to tap
-/// one); letting go anywhere else, or a tap on the capsule while they're out, folds them. The set-
-/// aside stacks' chip and a card's caption both work this way.
+/// (it's highlighted) and let go to choose it. Let go back on the capsule and they stay out, as a
+/// menu does; anywhere else, they fold, as a tap on the capsule while they're out does. A tap does
+/// `onTap` (`nil`: brings them out). The set-aside stacks' chip and a card's caption both work
+/// this way.
 struct HoldFan<Base: View>: View {
     /// Nearest the capsule first.
     let items: [FanItem]
@@ -31,6 +32,11 @@ struct HoldFan<Base: View>: View {
     /// The capsule's frame on screen: the finger's place is measured from it, so the chips
     /// coming out never move it.
     @State private var baseFrame: CGRect = .zero
+    /// While the finger is down with them out, they all lean a little its way, as a menu's
+    /// preview does.
+    @State private var lean: CGSize = .zero
+    /// How much of the finger's move they follow.
+    private static let leaning: CGFloat = 0.06
 
     private struct Touch {
         /// Fanned out when the finger came down.
@@ -64,6 +70,7 @@ struct HoldFan<Base: View>: View {
                 .allowsHitTesting(isOpen)
                 .accessibilityHidden(true)
             }
+            .offset(lean)
             .animation(.smooth(duration: 0.25), value: isOpen)
             .sensoryFeedback(.selection, trigger: highlighted) { _, new in new != nil }
             // Coming out, as a menu does under a hold. Rigid: sharper than the heaviest soft one.
@@ -91,8 +98,9 @@ struct HoldFan<Base: View>: View {
     }
 
     /// One touch does it all. Held (or slid up): out they come. Moving: the chip under the finger
-    /// is highlighted. Let go on one, it's chosen; anywhere else (the capsule too), they fold. A
-    /// tap: `onTap`, or they come out; while they're out, they fold.
+    /// is highlighted, and they lean a little its way. Let go on one, it's chosen; back on the
+    /// capsule, they stay out; anywhere else, they fold. A tap: `onTap`, or they come out; while
+    /// they're out, they fold.
     private var press: some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { value in
@@ -109,6 +117,7 @@ struct HoldFan<Base: View>: View {
                 if abs(t.width) > 6 || abs(t.height) > 6 { touch?.hasMoved = true }
                 if !isOpen, t.height < -12 { isOpen = true }  // slid up: no need to wait for the hold
                 guard isOpen else { return }
+                lean = CGSize(width: t.width * Self.leaning, height: t.height * Self.leaning)
                 let found = item(at: value.location)
                 if found?.id != highlighted { highlighted = found?.id }
             }
@@ -116,14 +125,19 @@ struct HoldFan<Base: View>: View {
                 holdTask?.cancel()
                 let ended = touch ?? Touch(wasOpen: isOpen)
                 touch = nil
-                defer { highlighted = nil }
+                defer {
+                    highlighted = nil
+                    withAnimation(.spring(duration: 0.3)) { lean = .zero }
+                }
+                let isTap = !ended.hasMoved && !ended.isHeld
                 if let found = item(at: value.location) {
                     choose(found)
-                } else if !ended.hasMoved, !ended.isHeld, !ended.wasOpen {
-                    if let onTap { onTap() } else { isOpen = true }  // a tap
-                } else {
-                    isOpen = false
+                } else if ended.wasOpen || !baseFrame.insetBy(dx: -8, dy: -8).contains(value.location) {
+                    isOpen = false  // let go off them, or a tap on the capsule while they're out
+                } else if isTap {
+                    if let onTap { onTap() } else { isOpen = true }
                 }
+                // Otherwise, let go back on the capsule after bringing them out: they stay out.
             }
     }
 
