@@ -506,9 +506,9 @@ struct StackActions {
 }
 
 /// A stack page's capsule at the bottom, a card's or a results page's: "▣ 3 | icon title detail".
-/// Tap or hold it for its actions, fanned out as the set-aside stacks' chip does (`HoldFan`): the
-/// page's own first (a card's Show Info, a results page's Edit Search…), then Show Stack (the
-/// stack's symbols, where they can go into an album), Set Aside and Close Stack.
+/// Tap or hold it for its actions, fanned out as the set-aside stacks' chip does (`HoldFan`), from
+/// the capsule up: Close Stack, the page's own (a card's Show Info, a results page's Edit
+/// Search…), Show Stack (the stack's symbols, where they can go into an album), Set Aside.
 struct StackCaption<Detail: View>: View {
     /// The page's place in the stack (0: none, the icon alone).
     let depth: Int
@@ -526,8 +526,14 @@ struct StackCaption<Detail: View>: View {
 
     static var height: CGFloat { 36 }
 
+    /// Nearest the capsule first: Close Stack at the bottom, Set Aside at the top.
     private var items: [FanItem] {
-        var items = ownItems
+        var items: [FanItem] = []
+        if let close = actions?.close {
+            items.append(FanItem(id: "close", title: String(localized: "Close Stack"), symbolImage: "xmark",
+                                 isDestructive: true, action: close))
+        }
+        items += ownItems
         if let actions {
             items.append(FanItem(id: "stack", title: String(localized: "Show Stack"), symbolImage: "square.stack",
                                  action: actions.show))
@@ -535,10 +541,6 @@ struct StackCaption<Detail: View>: View {
         if let setAside = actions?.setAside {
             items.append(FanItem(id: "aside", title: String(localized: "Set Aside"),
                                  symbolImage: "square.stack.3d.down.right", action: setAside))
-        }
-        if let close = actions?.close {
-            items.append(FanItem(id: "close", title: String(localized: "Close Stack"), symbolImage: "xmark",
-                                 isDestructive: true, action: close))
         }
         return items
     }
