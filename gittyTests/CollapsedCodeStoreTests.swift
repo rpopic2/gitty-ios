@@ -70,11 +70,12 @@ struct CollapsedCodeStoreTests {
         #expect(!store.isCollapsed(inside, openFile: open, scope: scope))
         store.setFileLevel(open: false, file, [inside], openFile: open, scope: scope)
         #expect(store.isCollapsed(inside, openFile: open, scope: scope))
-        #expect(!store.isFileCollapsed(file, scope: scope))  // still open, its titles showing
-        // Collapse All on the folder: its files fold; the folder stays open.
+        #expect(store.isFileCollapsed(file, scope: scope))  // the file itself too
+        // Collapse All on the folder: its files and the folder itself.
+        store.setFileLevel(open: true, file, [inside], openFile: open, scope: scope)
         store.setFolderLevel(open: false, "src", files: [file], scope: scope)
         #expect(store.isFileCollapsed(file, scope: scope))
-        #expect(!store.isFolderFolded("src", scope: scope))
+        #expect(store.isFolderFolded("src", scope: scope))
     }
 
     @Test func overloadsCollapseOnTheirOwn() throws {

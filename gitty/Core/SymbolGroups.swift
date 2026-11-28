@@ -422,13 +422,14 @@ final class CollapsedCodeStore {
         save()
     }
 
-    // MARK: One level under a title or a header (its Collapse All and Expand All)
+    // MARK: A title or a header and one level under it (its Collapse All and Expand All)
+    //
+    // Expand All opens it and what's one level under it; Collapse All closes both.
 
-    /// A file's: its symbols' code (a file without symbols: its text, by folding the file).
-    /// Opening unfolds the file too.
+    /// A file and its symbols' code.
     func setFileLevel(open: Bool, _ file: URL, _ symbols: [CodeSymbol], openFile: URL, scope: String) {
-        setFolded(symbols.isEmpty && !open, file, scope: scope)
         setCollapsed(!open, symbols, openFile: openFile, scope: scope)
+        setFolded(!open, file, scope: scope)  // after: setting the symbols unfolds their file
         save()
     }
 
@@ -437,9 +438,9 @@ final class CollapsedCodeStore {
             && (symbols.isEmpty || symbols.contains { !isCollapsed($0, openFile: openFile, scope: scope) })
     }
 
-    /// A folder's: its files, folded to their titles or not. Opening unfolds the folder too.
+    /// A folder and its files (folded to their titles, or not).
     func setFolderLevel(open: Bool, _ path: String, files: [URL], scope: String) {
-        if open { setFolderFolded(false, path, scope: scope) }
+        setFolderFolded(!open, path, scope: scope)
         for file in files { setFolded(!open, file, scope: scope) }
         save()
     }
@@ -448,9 +449,10 @@ final class CollapsedCodeStore {
         !isFolderFolded(path, scope: scope) && files.contains { !isFileCollapsed($0, scope: scope) }
     }
 
-    /// A group of folders': its folders, folded or not. Opening opens the group too.
+    /// A group of folders and its folders.
     func setGroupLevel(open: Bool, _ path: String, folders paths: [String], scope: String) {
-        if open { openGroups.insert("group#" + scope + path) }
+        let key = "group#" + scope + path
+        if open { openGroups.insert(key) } else { openGroups.remove(key) }
         for folder in paths { setFolderFolded(!open, folder, scope: scope) }
         save()
     }
