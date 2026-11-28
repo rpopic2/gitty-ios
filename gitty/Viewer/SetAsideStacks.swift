@@ -71,19 +71,19 @@ final class SetAsideStore {
 // MARK: - The chip
 
 /// The stacks set aside in the album shown, in a chip over the bar: the latest's top page and
-/// how many cards it has (or how many stacks there are). Like a menu in iOS: finger down on it
-/// and the stacks fan out upwards, one chip each, the latest nearest; slide to one (it's
-/// highlighted) and let go to open it. A tap leaves them out, to tap one; letting go anywhere
-/// else folds them. Slide the highlighted one out to the side and let go to throw it away.
+/// how many cards it has (or how many stacks there are). Like a menu in iOS: hold it and the
+/// stacks fan out upwards, one chip each, the latest nearest (the screen blurs behind them,
+/// `isOpen`); slide to one (it's highlighted) and let go to open it. Letting go without moving
+/// leaves them out, as a tap does, to tap one; letting go anywhere else folds them, as a tap on
+/// the bottom chip or the blur does. Slide the highlighted one out to the side and let go to
+/// throw it away.
 struct SetAsideChips: View {
     let stacks: [SetAsideStack]
+    /// Fanned out (the screen blurs behind it).
+    @Binding var isOpen: Bool
     let onOpen: @MainActor (SetAsideStack) -> Void
     let onDrop: @MainActor (SetAsideStack) -> Void
 
-    /// Fanned out.
-    @State private var isOpen = false
-    /// Whether it was fanned out when the finger came down (`nil`: no finger down).
-    @State private var wasOpen: Bool?
     /// The stack under the finger, and how far sideways the finger is from its chip.
     @State private var highlighted: UUID?
     @State private var sideways: CGFloat = 0
@@ -117,7 +117,7 @@ struct SetAsideChips: View {
         }
         .frame(height: height, alignment: .bottom)
         .contentShape(Rectangle())
-        .gesture(press)
+        .gesture(press.exclusively(before: SpatialTapGesture().onEnded { tapped(at: $0.location) }))
         .animation(.smooth(duration: 0.25), value: isOpen)
         .animation(.smooth(duration: 0.25), value: ids)
         .sensoryFeedback(.selection, trigger: highlighted) { _, new in new != nil }
@@ -161,35 +161,44 @@ struct SetAsideChips: View {
             .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
-    /// Down: out they come. Moving: the chip under the finger is highlighted. Up: on one, it
-    /// opens (or, slid out to the side, goes); a tap leaves them out; anywhere else folds them.
+    /// Held: out they come. Moving: the chip under the finger is highlighted. Let go on one, it
+    /// opens (or, slid out to the side, goes); without moving, they stay out; anywhere else,
+    /// they fold.
     private var press: some Gesture {
-        DragGesture(minimumDistance: 0)
+        LongPressGesture(minimumDuration: 0.3)
+            .sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
-                if wasOpen == nil {
-                    wasOpen = isOpen
+                switch value {
+                case .first(true):
                     isOpen = true
+                case .second(true, let drag?):
+                    isOpen = true
+                    let found = stack(at: drag.location)
+                    if found?.id != highlighted { highlighted = found?.id }
+                    sideways = found == nil ? 0 : drag.translation.width
+                default:
+                    break
                 }
-                let found = stack(at: value.location)
-                if found?.id != highlighted {
-                    highlighted = found?.id
-                }
-                sideways = found == nil ? 0 : value.location.x - value.startLocation.x
             }
             .onEnded { value in
-                let found = stack(at: value.location)
-                let isTap = abs(value.translation.width) < 6 && abs(value.translation.height) < 6
-                if let found, abs(sideways) > Self.dropDistance {
-                    onDrop(found)
-                } else if let found {
-                    open(found)
-                } else if !(isTap && wasOpen == false) {
+                defer {
+                    highlighted = nil
+                    withAnimation(.spring(duration: 0.3)) { sideways = 0 }
+                }
+                guard case .second(true, let drag?) = value,
+                      abs(drag.translation.width) > 6 || abs(drag.translation.height) > 6
+                else { return }  // held, not moved: they stay out
+                if let found = stack(at: drag.location) {
+                    if abs(sideways) > Self.dropDistance { onDrop(found) } else { open(found) }
+                } else {
                     isOpen = false
                 }
-                wasOpen = nil
-                highlighted = nil
-                withAnimation(.spring(duration: 0.3)) { sideways = 0 }
             }
+    }
+
+    /// A tap: on a chip fanned out, it opens; on the bottom chip, they fan out or fold.
+    private func tapped(at point: CGPoint) {
+        if let found = stack(at: point) { open(found) } else { isOpen.toggle() }
     }
 
     /// The fanned-out chip at a point (in this view, the bottom chip at its bottom).
