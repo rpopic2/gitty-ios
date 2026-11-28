@@ -121,6 +121,8 @@ struct SetAsideChips: View {
         .animation(.smooth(duration: 0.25), value: isOpen)
         .animation(.smooth(duration: 0.25), value: ids)
         .sensoryFeedback(.selection, trigger: highlighted) { _, new in new != nil }
+        // Coming out, as a menu does under a hold.
+        .sensoryFeedback(.impact(weight: .medium), trigger: isOpen) { old, new in new && !old }
         .onChange(of: isEmpty) { _, empty in if empty { isOpen = false } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityTitle))
