@@ -191,7 +191,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     /// (0: the stack's icon alone).
     let stackDepth: Int
     let stackActions: StackActions?
-    /// The results shown: the ones not folded away on the page (pinch in to fold files), so
+    /// The results shown: the ones not folded away on the page (a folded file hides its), so
     /// the count is what's there.
     let shownCount: @MainActor ([CodeSymbol]) -> Int
     /// The list, for the results so far and their query.

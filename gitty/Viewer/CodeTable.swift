@@ -49,8 +49,8 @@ struct CodeTableScroll {
 /// and row still a SwiftUI view (`UIHostingConfiguration`). Only the rows on screen are ever
 /// made, and a cell scrolled off is used again for the next one, so a new list (another album,
 /// the project after an album) is quick to show: SwiftUI's lazy stack set up and measured every
-/// row on screen at once, half a second for a new album. Everything around the list (the peek,
-/// the pinch, the bar) stays SwiftUI.
+/// row on screen at once, half a second for a new album. Everything around the list (the peek
+/// and the bar) stays SwiftUI.
 struct CodeTable: UIViewRepresentable {
     let sections: [CodeTableSection]
     /// A section's title and row, with what they need from the environment (a table's cells
