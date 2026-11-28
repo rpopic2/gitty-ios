@@ -102,8 +102,6 @@ struct CodeScreen: View {
     /// The stacks set aside while the app runs, as they were (`SetAsideStore` keeps what makes
     /// them again, for after a relaunch).
     @State private var liveStacks: [UUID: LiveStack] = [:]
-    /// The stacks set aside are fanned out over the bar (the screen blurs behind them).
-    @State private var areStacksFanned = false
     /// A stack to open again once the symbols are ready (chosen before they were).
     @State private var pendingReopen: SetAsideStack?
 
@@ -170,22 +168,12 @@ struct CodeScreen: View {
                 .modifier(AlbumSlide(state: albumSlide))
             // Under the bar: swiped up, the bar itself rises, the page hanging from it.
             albumsPage
-            // The stacks set aside fanned out over the bar: the rest blurs, as under a menu. A tap
-            // on it folds them.
-            if areStacksFanned {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .ignoresSafeArea()
-                    .onTapGesture { areStacksFanned = false }
-                    .transition(.opacity)
-            }
             // Only the bar (and the banner) animate when it collapses or expands: the list keeps
             // scrolling undisturbed.
             bottom
                 .animation(.smooth(duration: 0.3), value: model.isBarCollapsed)
                 .modifier(AlbumsBarLift(state: albumsPageState))
         }
-        .animation(.smooth(duration: 0.25), value: areStacksFanned)
         .overlay(alignment: .top) {
             webPageBanner
                 .animation(.smooth(duration: 0.3), value: model.isBarCollapsed)
@@ -1335,13 +1323,11 @@ struct CodeScreen: View {
             // capsule floats at an end).
             .overlay(alignment: .top) {
                 if !model.isBarCollapsed, mode.showsSymbols {
-                    // Hung from its bottom, level with the review's capsule (middle to middle):
-                    // fanned out, the others go up and the chip stays where it is.
+                    // Hung from its bottom, level with the review's capsule (middle to middle).
                     Color.clear
                         .frame(height: 0)
                         .overlay(alignment: .bottom) {
                             SetAsideChips(stacks: SetAsideStore.shared.stacks(at: setAsidePlace),
-                                          isOpen: $areStacksFanned,
                                           onOpen: { reopen($0) },
                                           onDrop: { drop($0) })
                         }
