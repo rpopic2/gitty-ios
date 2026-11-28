@@ -33,7 +33,8 @@ struct BranchPicker: View {
     /// A cloned project's downloaded branches and tags (`nil`: not cloned, all of them can be
     /// shown).
     let downloaded: Set<String>?
-    let onChoose: @MainActor (_ name: String, _ isTag: Bool) -> Void
+    /// A branch or tag other than the current one chosen.
+    var onChoose: @MainActor (GitRef) -> Void = { _ in }
     /// Choosing a comparison's side instead (`CompareView`): the checkout and commits (typed
     /// as hashes) can be chosen too.
     var onChooseSide: (@MainActor (GitSide) -> Void)? = nil
@@ -42,25 +43,19 @@ struct BranchPicker: View {
     /// Instead of "Branches and Tags" (or "Compare", choosing a side).
     var title: LocalizedStringKey? = nil
     /// Touch and hold a branch or tag: Compare with Checked Out (`nil`: not offered).
-    var onCompare: (@MainActor (_ name: String, _ isTag: Bool) -> Void)? = nil
+    var onCompare: (@MainActor (GitRef) -> Void)? = nil
     /// Choosing one the clone hasn't downloaded: asked right here (Pull downloads it and shows
     /// it), instead of once the picker has gone. `nil`: `onChoose` decides.
-    var onPull: (@MainActor (_ name: String, _ isTag: Bool) -> Void)? = nil
+    var onPull: (@MainActor (GitRef) -> Void)? = nil
     /// Fetch, top right: the remote's branches and tags listed again (the ones it doesn't have
     /// any more go). Returns why it failed, or `nil`.
     var onFetch: (@MainActor () async -> String?)? = nil
 
     @State private var query = ""
     /// A branch or tag that isn't downloaded, chosen: Pull it?
-    @State private var toPull: PendingPull?
+    @State private var toPull: GitRef?
     @State private var isFetching = false
     @State private var fetchError: String?
-
-    private struct PendingPull: Identifiable {
-        let name: String
-        let isTag: Bool
-        var id: String { name }
-    }
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -79,7 +74,7 @@ struct BranchPicker: View {
                                 titleVisibility: .visible, presenting: toPull) { ref in
                 Button("Pull \(ref.name)") {
                     dismiss()
-                    onPull?(ref.name, ref.isTag)
+                    onPull?(ref)
                 }
             } message: { _ in
                 Text("Pull downloads its latest commit into the clone and shows its files.")
@@ -139,18 +134,18 @@ struct BranchPicker: View {
             if !recentShown.isEmpty {
                 Section("Recent") {
                     ForEach(recentShown, id: \.self) { name in
-                        row(name, isTag: !refs.branches.contains(name))
+                        row(refs.branches.contains(name) ? .branch(name) : .tag(name))
                     }
                 }
             }
             if !branches.isEmpty {
                 Section("Branches") {
-                    ForEach(branches, id: \.self) { row($0, isTag: false) }
+                    ForEach(branches, id: \.self) { row(.branch($0)) }
                 }
             }
             if !tags.isEmpty {
                 Section("Tags") {
-                    ForEach(tags, id: \.self) { row($0, isTag: true) }
+                    ForEach(tags, id: \.self) { row(.tag($0)) }
                 }
             }
             if branches.isEmpty && tags.isEmpty && !query.isEmpty {
@@ -171,22 +166,24 @@ struct BranchPicker: View {
         }
     }
 
-    private func row(_ name: String, isTag: Bool) -> some View {
+    private func row(_ ref: GitRef) -> some View {
+        let name = ref.name
+        let isTag = if case .tag = ref { true } else { false }
         let isDownloaded = downloaded?.contains(name) ?? true
         return Button {
             if onChooseSide == nil, !isDownloaded, name != current, onPull != nil {
-                toPull = PendingPull(name: name, isTag: isTag)
+                toPull = ref
                 return
             }
             dismiss()
             if let onChooseSide {
-                onChooseSide(isTag ? .tag(name) : .branch(name))
+                onChooseSide(GitSide(ref))
             } else if name != current {
-                onChoose(name, isTag)
+                onChoose(ref)
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: isTag ? "tag" : "arrow.triangle.branch")
+                Image(systemName: GitSide(ref).systemImage)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -219,7 +216,7 @@ struct BranchPicker: View {
             if let onCompare, name != current {
                 Button("Compare with Checked Out", systemImage: "arrow.left.arrow.right") {
                     dismiss()
-                    onCompare(name, isTag)
+                    onCompare(ref)
                 }
             }
         }

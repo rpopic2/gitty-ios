@@ -58,7 +58,7 @@ struct ProjectFilesView: View {
         var id: GitSide { head }
     }
     /// A branch or tag chosen that the clone hasn't downloaded: asks to pull it.
-    @State private var refToPull: RefToPull?
+    @State private var refToPull: GitRef?
     /// Just switched: diff albums comparing with the checkout whose split isn't downloaded. Asks
     /// to load the history back to it.
     @State private var historyNeeded: HistoryNeeded?
@@ -69,12 +69,6 @@ struct ProjectFilesView: View {
         /// The comparisons, to tell when the split is in.
         let comparisons: [GitComparison]
         var id: String { others.joined(separator: ",") }
-    }
-
-    private struct RefToPull: Identifiable {
-        let name: String
-        let isTag: Bool
-        var id: String { name }
     }
 
     @State private var isSignedIn = false
@@ -655,14 +649,9 @@ struct ProjectFilesView: View {
 
     // MARK: Branch
 
-    /// The branch or tag the project shows. Choosing another lists its files (and switches the
-    /// clone, if there is one).
+    /// The branch or tag the project shows: tap it for the picker (searchable, recent first).
+    /// Choosing another lists its files (and switches the clone, if there is one).
     private func branchRow(project: ProjectInfo) -> some View {
-        branchMenu(project: project)
-    }
-
-    /// The branch row: tap it for the picker (searchable, recent first).
-    private func branchMenu(project: ProjectInfo) -> some View {
         Button {
             isPickingRef = true
             if refs == nil { Task { await loadRefs() } }
@@ -729,7 +718,7 @@ struct ProjectFilesView: View {
     /// branch, a tag, or a commit by its hash).
     private func comparisonPicker(current: String?) -> some View {
         BranchPicker(refs: refs, current: current, recent: RecentRefsStore.standard.names(for: projectID),
-                     downloaded: fetchedRefs, onChoose: { _, _ in },
+                     downloaded: fetchedRefs,
                      onChooseSide: { side in pendingComparison = Comparing(head: side) },
                      offersCheckedOut: false, title: "Compare Against",
                      onFetch: { await fetchRefs() })
@@ -740,20 +729,18 @@ struct ProjectFilesView: View {
     /// The branch row's picker. Comparing needs the clone.
     private func branchPicker(current: String?) -> some View {
         let downloaded: Set<String>? = clone == nil ? nil : fetchedRefs
-        var onCompare: (@MainActor (_ name: String, _ isTag: Bool) -> Void)?
+        var onCompare: (@MainActor (GitRef) -> Void)?
         if clone != nil {
-            onCompare = { name, isTag in
-                pendingComparison = Comparing(head: isTag ? .tag(name) : .branch(name))
-            }
+            onCompare = { ref in pendingComparison = Comparing(head: GitSide(ref)) }
         }
         return BranchPicker(refs: refs, current: current, recent: RecentRefsStore.standard.names(for: projectID),
                             downloaded: downloaded,
-                            onChoose: { name, isTag in switchRef(to: name, isTag: isTag) },
+                            onChoose: { switchRef(to: $0) },
                             onCompare: onCompare,
                             // Not downloaded: asked in the picker itself, then pulled.
-                            onPull: { name, isTag in
-                                RecentRefsStore.standard.add(name, for: projectID)
-                                pullRef(RefToPull(name: name, isTag: isTag))
+                            onPull: { ref in
+                                RecentRefsStore.standard.add(ref.name, for: projectID)
+                                pullRef(ref)
                             },
                             onFetch: { await fetchRefs() })
             .presentationDetents([.medium, .large])
@@ -793,11 +780,11 @@ struct ProjectFilesView: View {
     /// as it was fetched then: pull down for newer) and lists its files from the clone, with no
     /// network at all; one it hasn't downloaded asks to pull it (`refToPull`). A project that
     /// isn't cloned lists its files from GitHub.
-    private func switchRef(to name: String, isTag: Bool) {
-        guard case .loaded(let project, _) = state, name != project.ref else { return }
-        RecentRefsStore.standard.add(name, for: projectID)
-        if clone != nil, !fetchedRefs.contains(name) {
-            refToPull = RefToPull(name: name, isTag: isTag)
+    private func switchRef(to ref: GitRef) {
+        guard case .loaded(let project, _) = state, ref.name != project.ref else { return }
+        RecentRefsStore.standard.add(ref.name, for: projectID)
+        if clone != nil, !fetchedRefs.contains(ref.name) {
+            refToPull = ref
             return
         }
         isSwitchingRef = true
@@ -805,9 +792,9 @@ struct ProjectFilesView: View {
             defer { isSwitchingRef = false }
             do {
                 if clone != nil {
-                    try await switchClone(to: name, isTag: isTag, from: project, pulling: false)
+                    try await switchClone(to: ref, from: project, pulling: false)
                 } else {
-                    let (moved, tree) = try await ProjectStore.shared.setRef(name, for: projectID)
+                    let (moved, tree) = try await ProjectStore.shared.setRef(ref.name, for: projectID)
                     show(moved, tree)
                     announceSwitch(from: project, to: moved)
                 }
@@ -821,25 +808,25 @@ struct ProjectFilesView: View {
 
     /// Pull on a branch or tag the clone hasn't downloaded: its latest commit, checked out
     /// (asking first on a mobile network when it's big).
-    private func pullRef(_ ref: RefToPull) {
+    private func pullRef(_ ref: GitRef) {
         guard case .loaded(let project, _) = state else { return }
-        let gitRef: GitRef = ref.isTag ? .tag(ref.name) : .branch(ref.name)
         Task {
-            await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: gitRef, projectID: projectID) }) { estimate in
+            await downloads.run(estimate: { await CloneStore.shared.downloadEstimate(of: ref, projectID: projectID) }) { estimate in
                 startDownload(String(localized: "Pulling \(ref.name)…"), estimate: estimate) { progress in
-                    try await switchClone(to: ref.name, isTag: ref.isTag, from: project, pulling: true, progress: progress)
+                    try await switchClone(to: ref, from: project, pulling: true, progress: progress)
                     fetchedRefs.insert(ref.name)
                 }
             }
         }
     }
 
-    private func switchClone(to name: String, isTag: Bool, from project: ProjectInfo, pulling: Bool,
+    private func switchClone(to ref: GitRef, from project: ProjectInfo, pulling: Bool,
                              progress: @escaping @Sendable (FetchProgress) -> Void = { _ in }) async throws {
+        let name = ref.name
         var moved = project
         moved.ref = name
         guard let prefix = moved.rawURL(for: "")?.absoluteString else { return }
-        let tree = try await CloneStore.shared.switchTo(isTag ? .tag(name) : .branch(name), projectID: projectID,
+        let tree = try await CloneStore.shared.switchTo(ref, projectID: projectID,
                                                         rawPrefix: prefix, pulling: pulling, progress: progress)
         clone = await CloneStore.shared.record(forProject: projectID)
         // A local folder's checkout: the branch it's on now (`origin/x` checks out as `x`).

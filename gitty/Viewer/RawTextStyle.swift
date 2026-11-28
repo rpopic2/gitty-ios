@@ -18,7 +18,6 @@ nonisolated struct RenderedText: @unchecked Sendable {
 /// Adjust these after comparing screenshots with Safari on a device. The font and its size are
 /// the reader's choice (`CodeTextStyle`, in the sidebar); Safari's Courier 13 by default.
 nonisolated enum RawTextStyle {
-    static var fontName: String { CodeTextStyle.current.font.postScriptName }
     static var fontSize: CGFloat { CodeTextStyle.current.size }
     static let tabWidthInSpaces: CGFloat = 8
     static let insets = UIEdgeInsets(top: 13, left: 8, bottom: 13, right: 8)

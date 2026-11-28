@@ -84,7 +84,7 @@ struct CompareView: View {
         .task { await loadRefs() }
         .sheet(item: $choosing) { which in
             BranchPicker(refs: refs, current: nil, recent: RecentRefsStore.standard.names(for: projectID),
-                         downloaded: fetched, onChoose: { _, _ in },
+                         downloaded: fetched,
                          onChooseSide: { side in
                              if which == .base { comparison.base = side } else { comparison.head = side }
                          })

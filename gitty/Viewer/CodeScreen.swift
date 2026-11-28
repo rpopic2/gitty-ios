@@ -94,9 +94,7 @@ struct CodeScreen: View {
     /// The stacks set aside while the app runs, as they were (`SetAsideStore` keeps what makes
     /// them again, for after a relaunch).
     @State private var liveStacks: [UUID: LiveStack] = [:]
-    /// The top page sliding away sideways: its stack set aside for the album beside.
-    @State private var stackSlide: CGFloat = 0
-    /// A stack to open again once the symbols are ready (its album came back before they were).
+    /// A stack to open again once the symbols are ready (chosen before they were).
     @State private var pendingReopen: SetAsideStack?
 
     /// A stack set aside: its pages and what they show, as they were.
@@ -195,11 +193,8 @@ struct CodeScreen: View {
         .onChange(of: AlbumStore.shared.album(id: albumID), initial: true) { _, album in
             model.show(album: album)
         }
-        // Swiped to another album: its code slides in, and the stack it was left from opens again.
-        .onChange(of: model.activeAlbum?.id) {
-            albumSlide.albumChanged()
-            reopenLeftStack()
-        }
+        // Swiped to another album: its code slides in.
+        .onChange(of: model.activeAlbum?.id) { albumSlide.albumChanged() }
 
         .modifier(FollowsCloneChanges(model: model))
         .onChange(of: AlbumStore.shared.downloadCount) { model.refreshAlbumFiles() }
@@ -580,7 +575,6 @@ struct CodeScreen: View {
             stackDepth: stackNumber(of: route),
             stackActions: stackActions
         )
-        .offset(x: route == cardPath.last ? stackSlide : 0)
         // A results page stacked on it zooms out of it.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
         .navigationTransition(.zoom(sourceID: card.zoomSource, in: pagerNamespace))
@@ -601,7 +595,6 @@ struct CodeScreen: View {
                                 }) { symbols, query, bar in
             resultsList(search, symbols: symbols, query: query, bar: bar)
         }
-        .offset(x: route == cardPath.last ? stackSlide : 0)
         // Its cards zoom out of it; it zooms out of (and back into) its card.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
         .navigationTransition(.zoom(sourceID: search.source, in: pagerNamespace))
@@ -715,9 +708,6 @@ struct CodeScreen: View {
                 onOpenAlbum(id)
             },
             setAside: { setAsideStack() },
-            // Not for now: going to another album from a card (setting the stack aside) was
-            // confusing. The caption's sideways swipe does nothing.
-            switchAlbum: nil,
             // Every page closes, back to the Code level (nothing kept).
             close: { cardPath = [] }
         )
@@ -874,48 +864,12 @@ struct CodeScreen: View {
     /// Sets the open stack aside: it closes (back to the Code level), and the chip over the bar
     /// brings it back, each card on the symbol it was on.
     private func setAsideStack() {
-        guard keepStack(isLeftOpen: false) != nil else { return }
+        guard keepStack() != nil else { return }
         cardPath = []
     }
 
-    /// The caption swiped sideways: the top page slides away, the stack is set aside (to open
-    /// again on coming back), and the album beside shows. Not past the first or last album.
-    private func setAsideStack(goingTo forward: Bool) -> Bool {
-        guard let go = neighbourAlbum(forward: forward) else { return false }
-        let width = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 600
-        withAnimation(.smooth(duration: 0.22)) {
-            stackSlide = forward ? -width : width
-        } completion: {
-            guard keepStack(isLeftOpen: true) != nil else {
-                withAnimation(.smooth(duration: 0.22)) { stackSlide = 0 }
-                return
-            }
-            var instant = Transaction()
-            instant.disablesAnimations = true
-            withTransaction(instant) {
-                cardPath = []
-                stackSlide = 0
-            }
-            go()
-        }
-        return true
-    }
-
-    /// The album after (or before) the one shown, as the bar's swipe goes, the whole project
-    /// first: what shows it. `nil` past either end (no new album from here).
-    private func neighbourAlbum(forward: Bool) -> (@MainActor () -> Void)? {
-        guard let projectID = model.symbolsProjectID else { return nil }
-        let albums = AlbumStore.shared.albums(inProject: projectID)
-        let index = model.activeAlbum.flatMap { album in albums.firstIndex { $0.id == album.id } }.map { $0 + 1 } ?? 0
-        let place = forward ? index + 1 : index - 1
-        guard place >= 0, place <= albums.count else { return nil }
-        if place == 0 { return onShowProject }
-        let id = albums[place - 1].id, open = onOpenAlbum
-        return { open(id) }
-    }
-
     /// Keeps the open stack, as it is and as what makes it again, with this place's stacks.
-    private func keepStack(isLeftOpen: Bool) -> SetAsideStack? {
+    private func keepStack() -> SetAsideStack? {
         guard !cardPath.isEmpty else { return nil }
         var live = LiveStack(path: cardPath)
         var pages: [SetAsidePage] = []
@@ -949,7 +903,7 @@ struct CodeScreen: View {
         let stack = SetAsideStack(id: UUID(), pages: pages, title: top.title, symbolImage: top.image,
                                   cardCount: cardPath.filter { if case .card = $0 { true } else { false } }.count)
         liveStacks[stack.id] = live
-        SetAsideStore.shared.add(stack, at: setAsidePlace, isLeftOpen: isLeftOpen)
+        SetAsideStore.shared.add(stack, at: setAsidePlace)
         return stack
     }
 
@@ -970,12 +924,6 @@ struct CodeScreen: View {
         stackedOccurrences.merge(live.occurrences) { $1 }
         cardPlaces.current = [:]
         cardPath = live.path
-    }
-
-    /// Coming back to a place: the stack it was left from opens again.
-    private func reopenLeftStack() {
-        guard cardPath.isEmpty, let stack = SetAsideStore.shared.takeLeftOpen(at: setAsidePlace) else { return }
-        reopen(stack)
     }
 
     /// A stack set aside, thrown away (swiped off its chip).
@@ -1110,7 +1058,6 @@ struct CodeScreen: View {
             .equatable()
             .environment(\.codeMark, query)  // what it found, marked
         }
-        .offset(x: route == cardPath.last ? stackSlide : 0)
         // Its cards zoom out of it; it zooms out of (and back into) its card.
         .matchedTransitionSource(id: AnyHashable(route), in: pagerNamespace)
         .navigationTransition(.zoom(sourceID: search.source, in: pagerNamespace))
@@ -1459,15 +1406,7 @@ struct CodeScreen: View {
     /// and the change (`ReviewDiffSelection`), at the end of the project's review.
     private func comment(onDiff selection: ReviewDiffSelection?) {
         guard let selection, let projectID = model.symbolsProjectID else { return }
-        let format = reviewFormat
-        let review = review
-        Task {
-            let repository = await ProjectStore.shared.project(id: projectID).map { project in
-                ReviewRepository(name: project.repositoryName, ref: project.ref,
-                                 commit: CloneIndex.shared.record(forProject: projectID)?.commit)
-            }
-            review.add(selection, format: format, repository: repository, projectID: projectID, overSheet: false)
-        }
+        review.add(selection, format: reviewFormat, projectID: projectID, overSheet: false)
     }
 
     /// Comment on a whole file or folder: its path (as the review names files) at the end of the
@@ -1487,11 +1426,7 @@ struct CodeScreen: View {
                 if path.isEmpty { path = "/" }  // the repository's top
             }
             let project = ProjectSymbolIndex.project(containing: url, in: projects)
-            let commit = project.flatMap { CloneIndex.shared.record(forProject: $0.id)?.commit }
-            let repository = project.map { project in
-                ReviewRepository(name: project.repositoryName, ref: project.ref, commit: commit)
-            }
-            review.add(path: path, format: format, repository: repository, projectID: project?.id ?? "")
+            review.add(path: path, format: format, projectID: project?.id ?? "")
         }
     }
 
@@ -1521,11 +1456,8 @@ struct CodeScreen: View {
                 language: ReviewText.language(for: url), commit: commit
             )
             let project = ProjectSymbolIndex.project(containing: url, in: projects)
-            let repository = project.map { project in
-                ReviewRepository(name: project.repositoryName, ref: project.ref, commit: commit)
-            }
             // Each project has its review ("" for files outside projects).
-            review.add(selection, format: format, repository: repository, projectID: project?.id ?? "")
+            review.add(selection, format: format, projectID: project?.id ?? "")
         }
     }
 

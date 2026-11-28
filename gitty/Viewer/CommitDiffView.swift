@@ -365,15 +365,7 @@ extension DiffPage {
                                             summary: comparison?.title ?? commit.summary,
                                             oldLines: picked.old, newLines: picked.new,
                                             diff: picked.text)
-        let format = reviewFormat
-        let projectID = projectID
-        Task {
-            let repository = await ProjectStore.shared.project(id: projectID).map { project in
-                ReviewRepository(name: project.repositoryName, ref: project.ref,
-                                 commit: CloneIndex.shared.record(forProject: projectID)?.commit)
-            }
-            review.add(selection, format: format, repository: repository, projectID: projectID)
-        }
+        review.add(selection, format: reviewFormat, projectID: projectID)
     }
 }
 

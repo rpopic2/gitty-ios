@@ -453,9 +453,6 @@ struct StackActions {
     /// Sets the stack aside (the chip over the bar brings it back): the caption swiped up, or
     /// Set Aside in its menu.
     var setAside: (@MainActor () -> Void)? = nil
-    /// The caption swiped sideways: the stack is set aside, and the album after (`true`) or
-    /// before shows. `false`: there's none that way.
-    var switchAlbum: (@MainActor (_ forward: Bool) -> Bool)? = nil
     /// Close Stack in the caption's menu: every page closes at once.
     var close: (@MainActor () -> Void)? = nil
 }
@@ -472,7 +469,7 @@ struct StackDepthLabel: View {
                 if let context = actions.albumContext {
                     Menu {
                         // The albums right away, not under Add to Album.
-                        AlbumMenuItems(items: actions.albumItems(), context: context, isInline: true,
+                        AlbumMenuItems(items: actions.albumItems(), context: context,
                                        onAdd: actions.onAddedToAlbum)
                     } label: {
                         count
@@ -527,7 +524,7 @@ struct StackSheet<List: View>: View {
                     if let context = actions.albumContext {
                         ToolbarItem(placement: .topBarLeading) {
                             Menu {
-                                AlbumMenuItems(items: actions.albumItems(), context: context, isInline: true,
+                                AlbumMenuItems(items: actions.albumItems(), context: context,
                                        onAdd: actions.onAddedToAlbum)
                             } label: {
                                 Label("Add to Album", systemImage: "rectangle.stack.badge.plus")

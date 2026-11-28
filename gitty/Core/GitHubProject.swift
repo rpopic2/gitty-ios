@@ -129,14 +129,6 @@ nonisolated struct ProjectInfo: Hashable, Codable, Sendable, Identifiable {
         }
     }
 
-    /// How a review names the repository: `owner/repo`, or a local folder's name.
-    var repositoryName: String {
-        switch source {
-        case .github(let link): link.owner + "/" + link.repo
-        case .local(let folder): folder.name
-        }
-    }
-
     /// The project on github.com (`nil` for a local folder).
     var webURL: URL? { link?.webURL }
 

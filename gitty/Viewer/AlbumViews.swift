@@ -111,19 +111,12 @@ nonisolated struct AlbumMenuContext: Equatable, Sendable {
     let shownAlbumID: UUID?
 }
 
-/// "Add to Album" (with a checkmark at the albums that have it already: choosing one of those
-/// takes it out), and in an album, "Remove from Album". For a long-press menu.
+/// New Album and the project's albums (with a checkmark at the albums that have it already:
+/// choosing one of those takes it out), and in an album, "Remove from Album". For an Add to
+/// Album button's menu.
 struct AlbumMenuItems: View {
     let items: [AlbumItem]
     let context: AlbumMenuContext
-    /// A file to download first, so its symbols can be listed (from Project, where files may
-    /// not be saved yet).
-    var download: URL? = nil
-    /// After any choice (the selection ends).
-    var onDone: (@MainActor () -> Void)? = nil
-    /// The albums right in the menu, not under "Add to Album" (a menu of its own, such as an
-    /// Add to Album button's).
-    var isInline = false
     /// After adding to an album (or making one): which.
     var onAdd: (@MainActor (UUID) -> Void)? = nil
 
@@ -135,25 +128,8 @@ struct AlbumMenuItems: View {
         if let album = store.album(id: context.shownAlbumID) {
             removeButton(album)
         }
-        if isInline {
-            albumChoices
-        } else {
-            Menu {
-                albumChoices
-            } label: {
-                Label("Add to Album", systemImage: "rectangle.stack.badge.plus")
-            }
-            .disabled(items.isEmpty)
-        }
-    }
-
-    @ViewBuilder
-    private var albumChoices: some View {
         Button("New Album", systemImage: "plus") {
-            startDownload()
-            let album = naming?.begin(projectID: context.projectID, items: items)
-            onDone?()
-            if let album { onAdd?(album.id) }
+            if let album = naming?.begin(projectID: context.projectID, items: items) { onAdd?(album.id) }
         }
         .disabled(items.isEmpty)
         Section {
@@ -163,11 +139,9 @@ struct AlbumMenuItems: View {
                     if hasAll {
                         store.remove(items, from: album.id)
                     } else {
-                        startDownload()
                         store.add(items, to: album.id)
+                        onAdd?(album.id)
                     }
-                    onDone?()
-                    if !hasAll { onAdd?(album.id) }
                 } label: {
                     if hasAll { Label(album.name, systemImage: "checkmark") } else { Text(album.name) }
                 }
@@ -184,22 +158,10 @@ struct AlbumMenuItems: View {
         if !direct.isEmpty {
             Button("Remove from Album", systemImage: "minus.circle", role: .destructive) {
                 store.remove(direct, from: album.id)
-                onDone?()
             }
         } else if items.count == 1, let file = items.first?.file, album.containsFile(file) {
             Button("Remove \(file.displayFileName) from Album", systemImage: "minus.circle", role: .destructive) {
                 store.remove([.file(file)], from: album.id)
-                onDone?()
-            }
-        }
-    }
-
-    private func startDownload() {
-        guard let download else { return }
-        Task {
-            if await DocumentStore.shared.cached(download) == nil,
-               (try? await DocumentStore.shared.fetch(download)) != nil {
-                AlbumStore.shared.fileDownloaded()
             }
         }
     }
@@ -213,7 +175,7 @@ enum AlbumUIMenu {
     /// - Parameter download: a file to download first, so its symbols can be listed.
     @MainActor
     static func elements(for items: [AlbumItem], context: AlbumMenuContext, download: URL? = nil,
-                         naming: AlbumNaming?, onAdd: (@MainActor (UUID) -> Void)? = nil) -> [UIMenuElement] {
+                         naming: AlbumNaming?) -> [UIMenuElement] {
         guard !items.isEmpty else { return [] }
         let store = AlbumStore.shared
         var result: [UIMenuElement] = []
@@ -231,7 +193,7 @@ enum AlbumUIMenu {
         }
         let new = UIAction(title: String(localized: "New Album"), image: UIImage(systemName: "plus")) { _ in
             startDownload(download)
-            if let album = naming?.begin(projectID: context.projectID, items: items) { onAdd?(album.id) }
+            naming?.begin(projectID: context.projectID, items: items)
         }
         let albums = store.albums(inProject: context.projectID).map { album in
             let hasAll = items.allSatisfy { album.contains($0) }
@@ -241,7 +203,6 @@ enum AlbumUIMenu {
                 } else {
                     startDownload(download)
                     store.add(items, to: album.id)
-                    onAdd?(album.id)
                 }
             }
         }

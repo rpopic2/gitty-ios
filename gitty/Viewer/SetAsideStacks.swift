@@ -28,19 +28,16 @@ nonisolated struct SetAsideStack: Codable, Identifiable, Hashable, Sendable {
 }
 
 /// The stacks set aside, for each place (an album, or a project as a whole), oldest first, kept
-/// on this device. A place's stack left open (its album left from a card) opens again on coming
-/// back to it.
+/// on this device.
 @MainActor @Observable
 final class SetAsideStore {
     static let shared = SetAsideStore()
 
     private struct Saved: Codable {
         var stacks: [String: [SetAsideStack]] = [:]
-        var leftOpen: [String: UUID] = [:]
     }
 
     private(set) var stacks: [String: [SetAsideStack]]
-    private var leftOpen: [String: UUID]
     @ObservationIgnored private let defaults: UserDefaults
     private static let key = "setAsideStacks"
 
@@ -48,36 +45,25 @@ final class SetAsideStore {
         self.defaults = defaults
         let saved = defaults.data(forKey: Self.key).flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }
         stacks = saved?.stacks ?? [:]
-        leftOpen = saved?.leftOpen ?? [:]
     }
 
     func stacks(at place: String) -> [SetAsideStack] {
         stacks[place] ?? []
     }
 
-    /// - Parameter isLeftOpen: its place was left from it: it opens again on coming back.
-    func add(_ stack: SetAsideStack, at place: String, isLeftOpen: Bool) {
+    func add(_ stack: SetAsideStack, at place: String) {
         stacks[place, default: []].append(stack)
-        if isLeftOpen { leftOpen[place] = stack.id } else if leftOpen[place] != nil { leftOpen[place] = nil }
         save()
     }
 
     func remove(_ id: UUID, at place: String) {
         stacks[place]?.removeAll { $0.id == id }
         if stacks[place]?.isEmpty == true { stacks[place] = nil }
-        if leftOpen[place] == id { leftOpen[place] = nil }
         save()
-    }
-
-    /// The stack this place was left from, if it's still there (no longer marked as left open).
-    func takeLeftOpen(at place: String) -> SetAsideStack? {
-        guard let id = leftOpen.removeValue(forKey: place) else { return nil }
-        save()
-        return stacks[place]?.first { $0.id == id }
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(Saved(stacks: stacks, leftOpen: leftOpen)) else { return }
+        guard let data = try? JSONEncoder().encode(Saved(stacks: stacks)) else { return }
         defaults.set(data, forKey: Self.key)
     }
 }
@@ -289,46 +275,30 @@ private struct SetAsideChip: View {
 // MARK: - A caption's swipes
 
 /// A page's caption (a card's, or a results page's capsule): swipe it up or down to set the stack
-/// aside, or sideways to set it aside and go to the album beside, as the bar's swipe does. It
-/// follows the finger a little, with a tap of haptics once far enough.
+/// aside. It follows the finger a little, with a tap of haptics once far enough. Sideways is the
+/// card's (paging).
 struct StackCaptionSwipes: ViewModifier {
     let actions: StackActions?
 
-    @State private var drag: CGSize = .zero
+    @State private var drag: CGFloat = 0
     /// Up or down (down is where the stack goes, into the chip over the bar).
-    private static let upDistance: CGFloat = 50
-    private static let sideDistance: CGFloat = 80
+    private static let distance: CGFloat = 50
 
     func body(content: Content) -> some View {
-        if let actions, actions.setAside != nil || actions.switchAlbum != nil {
+        if let setAside = actions?.setAside {
             content
-                .offset(x: drag.width, y: drag.height)
+                .offset(y: drag)
                 .sensoryFeedback(.impact(weight: .light), trigger: isPastThreshold) { old, new in new && !old }
                 // UIKit's, so the card's own swipes (down to close it, sideways to page) wait for it
                 // when the swipe starts on the caption. As a SwiftUI gesture, the swipe down closed
                 // the card instead, and this one was cancelled.
                 .background {
                     CaptionPan(
-                        // Sideways only when it goes to the album beside: otherwise the drag is
-                        // left to the card (paging).
-                        allowsSideways: actions.switchAlbum != nil,
-                        onChange: { t in
-                            // One way at a time: the way it went first, dampened.
-                            if abs(t.width) > abs(t.height) {
-                                drag = CGSize(width: t.width / (1 + abs(t.width) / 160), height: 0)
-                            } else {
-                                drag = CGSize(width: 0, height: t.height / (1 + abs(t.height) / 120))
-                            }
-                        },
-                        onEnd: { t, flung in
-                            withAnimation(.spring(duration: 0.3)) { drag = .zero }
-                            if abs(t.width) > abs(t.height) {
-                                let goes = abs(t.width) > Self.sideDistance || abs(flung.width) > Self.sideDistance * 2.5
-                                // Finger to the left: the album after (as the bar's swipe).
-                                if goes { _ = actions.switchAlbum?(t.width < 0) }
-                            } else if abs(t.height) > Self.upDistance || abs(flung.height) > Self.upDistance * 3 {
-                                actions.setAside?()
-                            }
+                        // Dampened.
+                        onChange: { y in drag = y / (1 + abs(y) / 120) },
+                        onEnd: { y, flung in
+                            withAnimation(.spring(duration: 0.3)) { drag = 0 }
+                            if abs(y) > Self.distance || abs(flung) > Self.distance * 3 { setAside() }
                         }
                     )
                 }
@@ -338,21 +308,19 @@ struct StackCaptionSwipes: ViewModifier {
     }
 
     private var isPastThreshold: Bool {
-        // In the dampened offset, about where the finger's thresholds are.
-        abs(drag.height) > Self.upDistance * 0.7 || abs(drag.width) > Self.sideDistance * 0.65
+        // In the dampened offset, about where the finger's threshold is.
+        abs(drag) > Self.distance * 0.7
     }
 }
 
-/// A drag that starts on the view (the caption), recognised on the window: the other drags there
-/// (the card closing with a swipe down, the pager's paging, the sidebar's) wait for it to fail,
-/// so it wins whichever way it goes. Taps and holds aren't held up: they don't wait for it.
+/// An up or down drag that starts on the view (the caption), recognised on the window: the other
+/// drags there (the card closing with a swipe down, the pager's paging, the sidebar's) wait for it
+/// to fail, so it wins. Taps and holds aren't held up: they don't wait for it.
 private struct CaptionPan: UIViewRepresentable {
-    /// Sideways drags too (`false`: only up and down; sideways is the card's).
-    let allowsSideways: Bool
-    /// How far the finger has moved.
-    let onChange: @MainActor (CGSize) -> Void
+    /// How far down the finger has moved (up: below 0).
+    let onChange: @MainActor (CGFloat) -> Void
     /// Where it was let go, and where it was going (a fling).
-    let onEnd: @MainActor (_ translation: CGSize, _ predicted: CGSize) -> Void
+    let onEnd: @MainActor (_ translation: CGFloat, _ predicted: CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -365,7 +333,6 @@ private struct CaptionPan: UIViewRepresentable {
     }
 
     func updateUIView(_ view: InstallerView, context: Context) {
-        context.coordinator.allowsSideways = allowsSideways
         context.coordinator.onChange = onChange
         context.coordinator.onEnd = onEnd
     }
@@ -384,9 +351,8 @@ private struct CaptionPan: UIViewRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let pan = UIPanGestureRecognizer()
         weak var area: UIView?
-        var allowsSideways = true
-        var onChange: (@MainActor (CGSize) -> Void)?
-        var onEnd: (@MainActor (CGSize, CGSize) -> Void)?
+        var onChange: (@MainActor (CGFloat) -> Void)?
+        var onEnd: (@MainActor (CGFloat, CGFloat) -> Void)?
 
         override init() {
             super.init()
@@ -397,25 +363,22 @@ private struct CaptionPan: UIViewRepresentable {
 
         @objc private func panned(_ recognizer: UIPanGestureRecognizer) {
             guard let view = recognizer.view else { return }
-            let point = recognizer.translation(in: view)
-            let translation = CGSize(width: point.x, height: point.y)
+            let y = recognizer.translation(in: view).y
             switch recognizer.state {
             case .changed:
-                onChange?(translation)
+                onChange?(y)
             case .ended:
-                let velocity = recognizer.velocity(in: view)
                 // Roughly where a fling would have taken it.
-                onEnd?(translation, CGSize(width: point.x + velocity.x * 0.2, height: point.y + velocity.y * 0.2))
+                onEnd?(y, y + recognizer.velocity(in: view).y * 0.2)
             case .cancelled, .failed:
-                onEnd?(.zero, .zero)
+                onEnd?(0, 0)
             default:
                 break
             }
         }
 
-        /// Up or down; sideways only when allowed.
+        /// Up or down only: sideways is the card's.
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard !allowsSideways else { return true }
             let velocity = pan.velocity(in: pan.view)
             return abs(velocity.y) > abs(velocity.x)
         }

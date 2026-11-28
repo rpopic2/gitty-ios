@@ -148,14 +148,6 @@ struct ReviewContextTests {
         #expect(ReviewText.block(for: selection, format: .compact) == "a.c@abcdef0:3: ")
     }
 
-    @Test func thereIsNoRepositoryHeading() {
-        let repository = ReviewRepository(name: "o/r", ref: "main", commit: "3f2a9c1e0b")
-        let first = ReviewText.appending("a.c:1: ", to: "", format: .compact, repository: repository)
-        #expect(first == "a.c:1: ")
-        let markdown = ReviewText.appending("### a.c:1\n\n", to: "", format: .markdown, repository: repository)
-        #expect(markdown == "### a.c:1\n\n")
-    }
-
     @Test func aDiffSelectionGetsItsLinesBack() {
         let diff = UnifiedDiff("@@ -40,3 +40,4 @@\n int n;\n-int a;\n+long a;\n+long b;\n")
         let picked = diff.selection(1...4)

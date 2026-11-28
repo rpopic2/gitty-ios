@@ -26,6 +26,13 @@ nonisolated enum GitSide: Hashable, Codable, Sendable {
         }
     }
 
+    init(_ ref: GitRef) {
+        switch ref {
+        case .branch(let name): self = .branch(name)
+        case .tag(let name): self = .tag(name)
+        }
+    }
+
     /// The branch or tag to fetch for it (`nil`: a commit, or the checkout, which can't be).
     var ref: GitRef? {
         switch self {

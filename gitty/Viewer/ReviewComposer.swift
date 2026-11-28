@@ -97,33 +97,30 @@ final class ReviewDraft {
 
     /// Adds a comment on `selection` at the end of its project's review and opens the
     /// composer, cursor ready.
-    /// - Parameter repository: its first comment on the repository adds its heading.
-    func add(_ selection: ReviewSelection, format: ReviewFormat, repository: ReviewRepository? = nil,
-             projectID: String) {
-        add(block: ReviewText.block(for: selection, format: format), format: format, repository: repository,
+    func add(_ selection: ReviewSelection, format: ReviewFormat, projectID: String) {
+        add(block: ReviewText.block(for: selection, format: format), format: format,
             projectID: projectID, overSheet: false)
     }
 
     /// A comment on a whole file or folder: just its path.
-    func add(path: String, format: ReviewFormat, repository: ReviewRepository?, projectID: String) {
-        add(block: ReviewText.block(forPath: path, format: format), format: format, repository: repository,
+    func add(path: String, format: ReviewFormat, projectID: String) {
+        add(block: ReviewText.block(forPath: path, format: format), format: format,
             projectID: projectID, overSheet: false)
     }
 
     /// A comment on lines of a diff: from the file info sheet (`overSheet`), or a diff album's
     /// card or page (on the screen itself).
-    func add(_ selection: ReviewDiffSelection, format: ReviewFormat, repository: ReviewRepository?,
-             projectID: String, overSheet: Bool = true) {
-        add(block: ReviewText.block(for: selection, format: format), format: format, repository: repository,
+    func add(_ selection: ReviewDiffSelection, format: ReviewFormat, projectID: String,
+             overSheet: Bool = true) {
+        add(block: ReviewText.block(for: selection, format: format), format: format,
             projectID: projectID, overSheet: overSheet)
     }
 
-    private func add(block: String, format: ReviewFormat, repository: ReviewRepository?, projectID: String,
-                     overSheet: Bool) {
+    private func add(block: String, format: ReviewFormat, projectID: String, overSheet: Bool) {
         self.projectID = projectID
         var review = reviews[projectID] ?? ProjectReview()
         if !review.hasDraft { review.commentCount = 0 }
-        review.text = ReviewText.appending(block, to: review.text, format: format, repository: repository)
+        review.text = ReviewText.appending(block, to: review.text, format: format)
         review.commentCount += 1
         review.isPutAway = false
         reviews[projectID] = review

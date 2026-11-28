@@ -100,9 +100,6 @@ nonisolated struct GitFileHistory: Sendable {
     var hasMoreHere = false
     /// It reached the oldest commit a shallow clone has: older ones have to be fetched.
     var reachedDownloadedStart = false
-
-    /// More can be shown, here or by fetching.
-    var canLoadMore: Bool { hasMoreHere || reachedDownloadedStart }
 }
 
 nonisolated final class GitRepository {

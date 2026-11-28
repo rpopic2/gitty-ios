@@ -13,27 +13,6 @@ nonisolated enum ReviewFormat: String, CaseIterable, Identifiable, Sendable {
     var id: Self { self }
 }
 
-/// The repository a comment is about, named once at the top of the review (its first comment
-/// on it adds the heading), so each comment needs only what's its own.
-nonisolated struct ReviewRepository: Equatable, Sendable {
-    /// `owner/repo`.
-    let name: String
-    /// The branch or tag the project is on.
-    var ref: String?
-    /// The commit it's at, when it's cloned.
-    var commit: String?
-
-    /// `Review of owner/repo (branch main, at 3f2a9c1)`.
-    var heading: String {
-        let details = [ref.map { "branch \($0)" }, commit.map { "at \(ReviewText.shortHash($0))" }].compactMap { $0 }
-        return Self.headingPrefix(name) + (details.isEmpty ? "" : " (" + details.joined(separator: ", ") + ")")
-    }
-
-    static func headingPrefix(_ name: String) -> String {
-        "Review of \(name)"
-    }
-}
-
 /// What was selected for a comment.
 nonisolated struct ReviewSelection: Equatable, Sendable {
     /// The file, as the reader of the review knows it: the path in the repository for project
@@ -151,10 +130,9 @@ nonisolated enum ReviewText {
     }
 
     /// The review with a new comment added at the end: on its own line (compact) or after a
-    /// blank line (Markdown). Trailing blank lines of the draft are dropped first. There's no
-    /// heading for the repository: each comment names its file.
-    static func appending(_ block: String, to draft: String, format: ReviewFormat,
-                          repository: ReviewRepository? = nil) -> String {
+    /// blank line (Markdown). Trailing blank lines of the draft are dropped first. Each comment
+    /// names its file.
+    static func appending(_ block: String, to draft: String, format: ReviewFormat) -> String {
         var trimmed = draft
         while let last = trimmed.last, last.isWhitespace { trimmed.removeLast() }
         guard !trimmed.isEmpty else { return block }
