@@ -109,10 +109,11 @@ struct SetAsideChips: View {
 
     private var latestFirst: [SetAsideStack] { stacks.reversed() }
 
-    /// Tall enough, fanned out, for a tap on any chip to reach it.
+    /// Always as tall as the chips fanned out, so a finger's place in it doesn't move as they
+    /// come out (growing with them, it swept the finger through every chip). Folded, only the
+    /// bottom chip takes touches (`ChipsShape`).
     private var height: CGFloat {
-        let fanned: CGFloat = isOpen ? CGFloat(stacks.count) * Self.step : 0
-        return Self.chipHeight + fanned
+        Self.chipHeight + CGFloat(stacks.count) * Self.step
     }
 
     // In parts, with types spelled out: as one expression, it was too much for the type checker.
@@ -128,7 +129,7 @@ struct SetAsideChips: View {
             }
         }
         .frame(height: height, alignment: .bottom)
-        .contentShape(Rectangle())
+        .contentShape(ChipsShape(bottomHeight: isOpen ? nil : Self.chipHeight))
         .gesture(press)
         .animation(.smooth(duration: 0.25), value: isOpen)
         .animation(.smooth(duration: 0.25), value: ids)
@@ -236,6 +237,17 @@ struct SetAsideChips: View {
     private func open(_ stack: SetAsideStack) {
         isOpen = false
         onOpen(stack)
+    }
+}
+
+/// Where the chips take touches: all of their area fanned out, or the bottom chip alone.
+private struct ChipsShape: Shape {
+    /// `nil`: all of it.
+    let bottomHeight: CGFloat?
+
+    func path(in rect: CGRect) -> Path {
+        guard let bottomHeight else { return Path(rect) }
+        return Path(CGRect(x: rect.minX, y: rect.maxY - bottomHeight, width: rect.width, height: bottomHeight))
     }
 }
 
