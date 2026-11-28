@@ -519,7 +519,7 @@ struct SymbolsView: View, Equatable {
     }
 
     /// A title's or a header's Collapse All (something one level under it shows) or Expand All
-    /// (nothing does): `set` opens (`true`) or closes what's one level under it.
+    /// (nothing does): `set` opens (`true`) or closes it and what's one level under it.
     private static func levelAction(isOpen: Bool, _ set: @escaping @MainActor (_ opens: Bool) -> Void) -> UIAction {
         UIAction(title: isOpen ? String(localized: "Collapse All") : String(localized: "Expand All"),
                  image: UIImage(systemName: isOpen ? "chevron.right.2" : "chevron.down.2")) { _ in
