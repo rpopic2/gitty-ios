@@ -234,6 +234,9 @@ final class BranchHistoryModel {
 struct CommitFilesView: View {
     let projectID: String
     let commit: GitCommit
+    /// Opened from a line's blame: that file comes first (marked), and its diff opens at the
+    /// line's change.
+    var focus: BlameFocus? = nil
 
     @State private var changes: [GitChange]?
     @State private var errorMessage: String?
@@ -246,7 +249,17 @@ struct CommitFilesView: View {
 
     private struct DiffStart: Identifiable {
         let path: String
+        /// Where in the file the diff opens (the blamed line), if anywhere.
+        var line: Int? = nil
         var id: String { path }
+    }
+
+    /// The changes, the blamed file first.
+    private func ordered(_ changes: [GitChange]) -> [GitChange] {
+        guard let path = focus?.path, let index = changes.firstIndex(where: { $0.path == path }) else { return changes }
+        var ordered = changes
+        ordered.insert(ordered.remove(at: index), at: 0)
+        return ordered
     }
 
     var body: some View {
@@ -269,11 +282,20 @@ struct CommitFilesView: View {
             }
             Section {
                 if let changes {
-                    ForEach(changes) { change in
+                    ForEach(ordered(changes)) { change in
+                        let isFocus = change.path == focus?.path
                         Button {
-                            diffStart = DiffStart(path: change.path)
+                            diffStart = DiffStart(path: change.path, line: isFocus ? focus?.line : nil)
                         } label: {
-                            ChangeRow(change: change)
+                            HStack {
+                                ChangeRow(change: change)
+                                if isFocus {
+                                    // The file whose blame was tapped.
+                                    Image(systemName: "text.line.first.and.arrowtriangle.forward")
+                                        .foregroundStyle(.tint)
+                                        .accessibilityLabel("The line you tapped")
+                                }
+                            }
                         }
                         .foregroundStyle(.primary)
                         .matchedTransitionSource(id: change.path, in: diffNamespace)
@@ -329,7 +351,8 @@ struct CommitFilesView: View {
             }
         }
         .fullScreenCover(item: $diffStart) { start in
-            CommitDiffView(projectID: projectID, commit: commit, startPath: start.path, knownChanges: changes)
+            CommitDiffView(projectID: projectID, commit: commit, startPath: start.path, knownChanges: changes,
+                           startLine: start.line)
                 .navigationTransition(.zoom(sourceID: start.path, in: diffNamespace))
         }
     }

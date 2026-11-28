@@ -306,12 +306,22 @@ final class CodePieceUIView: UIView {
     }
 
     /// Who last changed the line at a height of the window, and the project.
-    func blameHunk(atWindowY y: CGFloat) -> (hunk: GitBlameHunk, projectID: String)? {
+    func blameHunk(atWindowY y: CGFloat) -> (hunk: GitBlameHunk, projectID: String, focus: BlameFocus)? {
         guard let blame, let found = layout?.line(atY: convert(CGPoint(x: 0, y: y), from: nil).y) else { return nil }
         let line = firstFileLine + found.line
         guard let hunk = blame.hunks.first(where: { $0.lines.contains(line) }) else { return nil }
-        return (hunk, blame.projectID)
+        // The line in the commit's version of the file (where its change is in the commit's diff).
+        let lineThere = (hunk.originalStartLine ?? hunk.startLine) + (line - hunk.startLine)
+        return (hunk, blame.projectID, BlameFocus(path: hunk.originalPath ?? blame.path, line: lineThere))
     }
+}
+
+/// The line a blame was tapped on, in the commit it names: its file (first in the commit's list)
+/// and its line there (where that file's diff opens).
+nonisolated struct BlameFocus: Hashable, Sendable {
+    let path: String
+    /// 1-based, in the commit's version of the file.
+    let line: Int
 }
 
 /// Where to open a page: its `line` (0-based, from the page's first) goes where it was on

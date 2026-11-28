@@ -83,6 +83,8 @@ final class BlameStore {
     struct FileBlame: Equatable {
         let projectID: String
         let hunks: [GitBlameHunk]
+        /// The file's path in the repository.
+        var path: String = ""
     }
 
     enum State: Equatable {
@@ -132,7 +134,7 @@ final class BlameStore {
         needsClone = false
         do {
             let hunks = try await CloneStore.shared.blame(projectID: projectID, path: location.path)
-            states[file] = .loaded(FileBlame(projectID: projectID, hunks: hunks))
+            states[file] = .loaded(FileBlame(projectID: projectID, hunks: hunks, path: location.path))
         } catch {
             states[file] = .unavailable
         }

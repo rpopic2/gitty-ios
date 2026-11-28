@@ -65,7 +65,7 @@ struct SymbolsView: View, Equatable {
     /// Open on a not-downloaded file's title: open the file (which downloads it).
     let onOpenURL: (@MainActor (URL) -> Void)?
     /// A blame's commit was tapped (its project and hash): show it.
-    let onShowCommit: (@MainActor (String, String) -> Void)?
+    let onShowCommit: (@MainActor (String, String, BlameFocus?) -> Void)?
     /// A file with no symbols shows its whole text while unfolded. Only where the list has
     /// every file's symbols (the Code level): a results page or the stack has a file's title
     /// without them.
@@ -129,7 +129,7 @@ struct SymbolsView: View, Equatable {
          onNeedsSymbols: (@MainActor (URL) -> Void)? = nil,
          onOpenURL: (@MainActor (URL) -> Void)? = nil,
          collapsed: CollapsedCodeStore = .shared,
-         onShowCommit: (@MainActor (String, String) -> Void)? = nil,
+         onShowCommit: (@MainActor (String, String, BlameFocus?) -> Void)? = nil,
          showsWholeFiles: Bool = false,
          textActions: CodeTextActions? = nil,
          onScrollingChange: (@MainActor (Bool) -> Void)? = nil) {
@@ -631,7 +631,7 @@ struct SymbolsView: View, Equatable {
               let found = CodePieceUIView.piece(atWindowY: point.y, in: window)?.blameHunk(atWindowY: point.y),
               !found.hunk.commitID.allSatisfy({ $0 == "0" })  // not committed
         else { return }
-        onShowCommit(found.projectID, found.hunk.commitID)
+        onShowCommit(found.projectID, found.hunk.commitID, found.focus)
     }
 
     /// Pinching in (fingers together) zooms out a step, one per pinch, when the fingers lift past

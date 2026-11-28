@@ -15,6 +15,8 @@ struct CommitDiffView: View {
     /// Not one commit but a comparison of two (`commit` is its newer side): its diffs, from one
     /// to the other.
     var comparison: ResolvedComparison? = nil
+    /// The line in `startPath`'s file to open at (1-based, after the change): its change shows.
+    var startLine: Int? = nil
 
     @State private var changes: [GitChange]?
     @State private var errorMessage: String?
@@ -128,6 +130,7 @@ struct CommitDiffView: View {
                     LazyHStack(spacing: 0) {
                         ForEach(changes) { change in
                             DiffPage(projectID: projectID, commit: commit, comparison: comparison, change: change,
+                                     startLine: change.path == startPath ? startLine : nil,
                                      isCurrent: change.path == currentPath, insets: insets,
                                      onScrollDown: { isCaptionHidden = $0 },
                                      onClose: { dismiss() })
@@ -254,6 +257,8 @@ private struct DiffPage: View {
     let commit: GitCommit
     let comparison: ResolvedComparison?
     let change: GitChange
+    /// The file's line (after the change) to open at, its change on screen.
+    let startLine: Int?
     let isCurrent: Bool
     /// The screen's safe area, plus room for the caption at the bottom.
     let insets: EdgeInsets
@@ -291,7 +296,8 @@ private struct DiffPage: View {
                     highlight: highlights?.current,
                     onHighlight: { highlights?.current = $0 },
                     lineNumbering: .marked,
-                    onScrollDown: onScrollDown
+                    onScrollDown: onScrollDown,
+                    startAnchor: startAnchor
                 )
             } else if let errorMessage {
                 ContentUnavailableView {
@@ -333,6 +339,14 @@ private struct DiffPage: View {
 }
 
 extension DiffPage {
+    /// Opening at `startLine`: the diff's line for it (or the first after it), a little way down.
+    private var startAnchor: PageAnchor? {
+        guard let startLine, let diff else { return nil }
+        let index = diff.lines.firstIndex { $0.newNumber == startLine }
+            ?? diff.lines.firstIndex { ($0.newNumber ?? 0) >= startLine }
+        return index.map { PageAnchor(line: $0, screenY: 200) }
+    }
+
     /// Comment in the text menu (when there's a review to add to).
     private var commentAction: (@MainActor (NSRange) -> Void)? {
         guard review != nil else { return nil }

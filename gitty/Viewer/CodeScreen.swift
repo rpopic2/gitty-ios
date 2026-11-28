@@ -59,6 +59,8 @@ struct CodeScreen: View {
     private struct BlameCommit: Identifiable {
         let projectID: String
         let commit: GitCommit
+        /// The file and line the blame was tapped on: first in the list, its diff opening there.
+        var focus: BlameFocus? = nil
         var id: String { commit.id }
     }
 
@@ -238,7 +240,7 @@ struct CodeScreen: View {
         }
         .sheet(item: $blameCommit) { item in
             NavigationStack {
-                CommitFilesView(projectID: item.projectID, commit: item.commit)
+                CommitFilesView(projectID: item.projectID, commit: item.commit, focus: item.focus)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") { blameCommit = nil }
@@ -413,7 +415,7 @@ struct CodeScreen: View {
                 onOpenURL: { onOpen($0) },
                 // Each album folds on its own (the whole project's are the shared ones).
                 collapsed: CollapsedCodeStore.forAlbum(model.activeAlbum?.id),
-                onShowCommit: { showBlameCommit(projectID: $0, id: $1) },
+                onShowCommit: { showBlameCommit(projectID: $0, id: $1, focus: $2) },
                 showsWholeFiles: true,
                 textActions: codeTextActions(from: nil),
                 // New lists (the project's symbols being read) wait until it stops.
@@ -627,7 +629,7 @@ struct CodeScreen: View {
             onNeedsSymbols: { model.needsSymbols(of: $0) },
             onOpenURL: { onOpen($0) },
             collapsed: search.collapsed,
-            onShowCommit: { showBlameCommit(projectID: $0, id: $1) },
+            onShowCommit: { showBlameCommit(projectID: $0, id: $1, focus: $2) },
             textActions: codeTextActions(from: .results(search.id))
         )
         .equatable()
@@ -750,10 +752,10 @@ struct CodeScreen: View {
     }
 
     /// A commit tapped in the blame: looked up in the clone, then shown.
-    private func showBlameCommit(projectID: String, id: String) {
+    private func showBlameCommit(projectID: String, id: String, focus: BlameFocus?) {
         Task {
             guard let commit = try? await CloneStore.shared.commit(projectID: projectID, id: id) else { return }
-            blameCommit = BlameCommit(projectID: projectID, commit: commit)
+            blameCommit = BlameCommit(projectID: projectID, commit: commit, focus: focus)
         }
     }
 

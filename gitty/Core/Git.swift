@@ -85,6 +85,10 @@ nonisolated struct GitBlameHunk: Equatable, Sendable {
     let date: Date
     /// Traced back to the oldest commit downloaded (a shallow clone's start): it may be older.
     let isBoundary: Bool
+    /// Where the run's first line was in that commit's version of the file, and the file's path
+    /// there (renamed since, it differs): where its change is in the commit's diff.
+    var originalStartLine: Int? = nil
+    var originalPath: String? = nil
 
     var lines: ClosedRange<Int> { startLine...(startLine + max(lineCount, 1) - 1) }
 }
@@ -598,7 +602,9 @@ nonisolated final class GitRepository {
                 commitID: Git.string(&id),
                 author: signature?.name.map { String(cString: $0) } ?? "",
                 date: Date(timeIntervalSince1970: TimeInterval(signature?.when.time ?? 0)),
-                isBoundary: hunk.boundary != 0
+                isBoundary: hunk.boundary != 0,
+                originalStartLine: Int(hunk.orig_start_line_number),
+                originalPath: hunk.orig_path.map { String(cString: $0) }
             )
         }
     }
