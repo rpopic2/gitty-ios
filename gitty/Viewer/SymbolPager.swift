@@ -370,22 +370,22 @@ private struct WillDisappearObserver: UIViewControllerRepresentable {
     }
 }
 
-/// "name · file" in a small capsule at the bottom, in place of the bar and selector. Tap it
-/// for the file's info; hold it for its actions, fanned out as the set-aside stacks' chip does
-/// (`HoldFan`): Show in Code Level, Set Aside, Close Stack.
+/// "name · file" in a small capsule at the bottom, in place of the bar and selector
+/// (`StackCaption`). Tap it for the file's info; hold it for Show in Code Level and the stack's
+/// actions.
 private struct SymbolCaption: View {
     let symbol: CodeSymbol
     /// The symbol's file's name, after its name.
     let fileName: String
-    /// The card's place in the stack (`StackDepthLabel`): shown before the symbol from 2 up.
+    /// The card's place in the stack: shown before the symbol from 2 up.
     let stackDepth: Int
     let stackActions: StackActions?
     @Binding var isMenuOpen: Bool
     let onInfo: @MainActor () -> Void
 
-    static let height: CGFloat = 36
+    static var height: CGFloat { StackCaption<EmptyView>.height }
     /// Space kept free under the text so its end isn't hidden behind the caption.
-    static let reservedHeight: CGFloat = height + 16
+    static var reservedHeight: CGFloat { height + 16 }
 
     init(symbol: CodeSymbol, fileName: String, stackDepth: Int, stackActions: StackActions?,
          isMenuOpen: Binding<Bool>, onInfo: @escaping @MainActor () -> Void) {
@@ -397,51 +397,16 @@ private struct SymbolCaption: View {
         self.onInfo = onInfo
     }
 
-    /// The actions, nearest the caption first.
-    private var actions: [FanItem] {
-        var items: [FanItem] = []
-        if stackActions?.showInCodeLevel != nil {
-            items.append(FanItem(id: "show", title: String(localized: "Show in Code Level"), symbolImage: "list.bullet.indent"))
-        }
-        if stackActions?.setAside != nil {
-            items.append(FanItem(id: "aside", title: String(localized: "Set Aside"), symbolImage: "square.stack.3d.down.right"))
-        }
-        if stackActions?.close != nil {
-            items.append(FanItem(id: "close", title: String(localized: "Close Stack"), symbolImage: "xmark",
-                                 isDestructive: true))
-        }
-        return items
-    }
-
     var body: some View {
         let symbol = symbol
-        let actions = stackActions
-        HoldFan(items: self.actions, isOpen: $isMenuOpen, onTap: onInfo, onChoose: { item in
-            switch item.id {
-            case "show": actions?.showInCodeLevel?(symbol)
-            case "aside": actions?.setAside?()
-            default: actions?.close?()
-            }
-        }) {
-            capsule
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityHint(Text("Shows the file’s info and history"))
-                .accessibilityAction { onInfo() }
-        }
-    }
-
-    @ViewBuilder
-    private var capsule: some View {
-        let label = HStack(spacing: 6) {
-            if stackDepth > 1 {
-                StackDepthLabel(depth: stackDepth, actions: stackActions)
-            }
-            Image(systemName: symbol.kind.systemImage)
-                .foregroundStyle(.tint)
-            Text(symbol.name)
-                .lineLimit(1)
-                .truncationMode(.middle)
+        let show = stackActions?.showInCodeLevel
+        let own: [FanItem] = show == nil ? []
+            : [FanItem(id: "show", title: String(localized: "Show in Code Level"), symbolImage: "list.bullet.indent")]
+        StackCaption(depth: stackDepth, showsDepth: stackDepth > 1, symbolImage: symbol.kind.systemImage,
+                     title: symbol.name, actions: stackActions, ownItems: own,
+                     onOwnItem: { _ in show?(symbol) },
+                     isMenuOpen: $isMenuOpen, onTap: onInfo,
+                     hint: Text("Shows the file’s info and history")) {
             // Its file's name (peek for the line numbers). A file's own page needs nothing more
             // than its name.
             if symbol.kind != .file {
@@ -451,18 +416,7 @@ private struct SymbolCaption: View {
                     .lineLimit(1)
             }
         }
-        .font(.subheadline)
-        .padding(.horizontal, 16)
-        .frame(height: Self.height)
-        .contentShape(Capsule())
-
-        if #available(iOS 26.0, *) {
-            label.glassEffect(.regular.interactive(), in: Capsule())
-                .padding(.horizontal, 24)
-        } else {
-            label.background(.bar, in: Capsule())
-                .padding(.horizontal, 24)
-        }
+        .padding(.horizontal, 24)
     }
 }
 

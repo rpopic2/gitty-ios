@@ -197,9 +197,6 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     /// The list, for the results so far and their query.
     @ViewBuilder let list: (_ symbols: [CodeSymbol], _ query: String, _ bar: ResultsBar) -> Results
 
-    /// The bar's menu, for the capsule's touch and hold (its Collapse and Expand All are the
-    /// page's own).
-    let barMenu: BarMenu?
     /// The branch whose name is exactly what's typed (`nil`: none). A row on top of the results
     /// compares the checkout with it, as Return does.
     var branchNamed: (@MainActor (String) -> String?)? = nil
@@ -211,9 +208,11 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     @State private var isBarHidden = false
     /// Collapse All or Expand All in the capsule's menu, for the page's list.
     @State private var collapseRequest: CollapseRequest?
+    /// The capsule's actions are fanned out (the page blurs behind them).
+    @State private var isMenuOpen = false
     @Environment(\.dismiss) private var dismiss
 
-    init(search: Search, stackDepth: Int, stackActions: StackActions?, barMenu: BarMenu? = nil,
+    init(search: Search, stackDepth: Int, stackActions: StackActions?,
          branchNamed: (@MainActor (String) -> String?)? = nil,
          onCompareBranch: (@MainActor (String) -> Void)? = nil,
          shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
@@ -222,7 +221,6 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
         self.search = search
         self.stackDepth = stackDepth
         self.stackActions = stackActions
-        self.barMenu = barMenu
         self.branchNamed = branchNamed
         self.onCompareBranch = onCompareBranch
         self.shownCount = shownCount
@@ -233,6 +231,14 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             content
+            // The capsule's actions fanned out: the page blurs, as under a menu. A tap folds them.
+            if isMenuOpen {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .ignoresSafeArea()
+                    .onTapGesture { isMenuOpen = false }
+                    .transition(.opacity)
+            }
             if !isEditing {
                 capsule
                     .padding(.bottom, 8)
@@ -242,6 +248,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     .animation(.smooth(duration: 0.25), value: isBarHidden)
             }
         }
+        .animation(.smooth(duration: 0.25), value: isMenuOpen)
         // The field sits right on the keyboard: UIKit's keyboard guide places it (SwiftUI's own
         // keyboard room, on a pushed page, left it floating above it or under it).
         .overlay {
@@ -304,15 +311,17 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            let label = HStack(spacing: 6) {
-                // The stack's symbols (its results among them), and Add to Album. Searches don't
-                // count: with no card under it, just the icon.
-                StackDepthLabel(depth: stackDepth, actions: stackActions)
-                Image(systemName: search.symbolName)
-                    .foregroundStyle(.tint)
-                Text(search.query)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            // The stack's place (searches don't count: with no card under it, just the icon).
+            StackCaption(depth: stackDepth, showsDepth: true, symbolImage: search.symbolName, title: search.query,
+                         actions: stackActions,
+                         ownItems: [
+                            FanItem(id: "collapse", title: String(localized: "Collapse All"), symbolImage: "chevron.right.2"),
+                            FanItem(id: "expand", title: String(localized: "Expand All"), symbolImage: "chevron.down.2"),
+                         ],
+                         onOwnItem: { id in collapseRequest = CollapseRequest(collapses: id == "collapse") },
+                         isMenuOpen: $isMenuOpen,
+                         onTap: { isEditing = true },
+                         hint: Text("Changes the search")) {
                 if search.isPending {
                     ProgressView().controlSize(.small)
                 } else {
@@ -321,42 +330,8 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .font(.subheadline)
-            .padding(.horizontal, 16)
-            .frame(height: 36)
-            .contentShape(Capsule())
-            .onTapGesture { isEditing = true }
-            .contextMenu {
-                if let setAside = stackActions?.setAside {
-                    Button("Set Aside", systemImage: "square.stack.3d.down.right", action: setAside)
-                }
-                if let close = stackActions?.close {
-                    Button("Close Stack", systemImage: "xmark", action: close)
-                }
-                if let barMenu { pageMenu(barMenu) }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityHint(Text("Changes the search"))
-            Group {
-                if #available(iOS 26.0, *) {
-                    label.glassEffect(.regular.interactive(), in: Capsule())
-                } else {
-                    label.background(.bar, in: Capsule())
-                }
-            }
             .padding(.horizontal, 24)
         }
-    }
-}
-
-extension StackResultsView {
-    /// The bar's menu, folding this page's list.
-    fileprivate func pageMenu(_ menu: BarMenu) -> BarMenu {
-        var menu = menu
-        menu.onCollapseAll = { collapseRequest = CollapseRequest(collapses: true) }
-        menu.onExpandAll = { collapseRequest = CollapseRequest(collapses: false) }
-        return menu
     }
 }
 
@@ -505,9 +480,9 @@ final class CardPlaces {
     var current: [UUID: Int] = [:]
 }
 
-/// What a page's stack icon does: tap it for the stack's symbols, touch and hold it to add them
-/// to an album.
+/// What a stack page's capsule offers (`StackCaption`), and its stack's sheet.
 struct StackActions {
+    /// Show Stack: the stack's symbols, in a sheet (where they can go into an album).
     let show: @MainActor () -> Void
     /// The stack's symbols, as album items (read when the menu shows).
     let albumItems: @MainActor () -> [AlbumItem]
@@ -524,52 +499,98 @@ struct StackActions {
     var showInCodeLevel: (@MainActor (CodeSymbol) -> Void)? = nil
 }
 
-/// A page's place in the stack, before what its caption names: "▣ 3 |". Tap it for the
-/// stack's symbols; touch and hold it to add them to an album. Swipe down to go back one.
-struct StackDepthLabel: View {
+/// A stack page's capsule at the bottom, a card's or a results page's: "▣ 3 | icon title detail".
+/// Tap it for `onTap` (a card's file info, a results page's search field); hold it for its
+/// actions, fanned out (`HoldFan`): the page's own first, then Show Stack (the stack's symbols,
+/// where they can go into an album), Set Aside and Close Stack.
+struct StackCaption<Detail: View>: View {
+    /// The page's place in the stack (0: none, the icon alone).
     let depth: Int
+    /// The place before the title (a card's from 2 up; a results page's always).
+    let showsDepth: Bool
+    let symbolImage: String
+    let title: String
     let actions: StackActions?
+    /// The page's own actions, first (a card's Show in Code Level, a results page's folding).
+    var ownItems: [FanItem] = []
+    var onOwnItem: @MainActor (String) -> Void = { _ in }
+    /// Its actions are fanned out (the page blurs behind them).
+    @Binding var isMenuOpen: Bool
+    let onTap: @MainActor () -> Void
+    let hint: Text
+    /// After the title (a card's file, a results page's count).
+    @ViewBuilder let detail: () -> Detail
+
+    static var height: CGFloat { 36 }
+
+    private var items: [FanItem] {
+        var items = ownItems
+        if actions != nil {
+            items.append(FanItem(id: "stack", title: String(localized: "Show Stack"), symbolImage: "square.stack"))
+        }
+        if actions?.setAside != nil {
+            items.append(FanItem(id: "aside", title: String(localized: "Set Aside"), symbolImage: "square.stack.3d.down.right"))
+        }
+        if actions?.close != nil {
+            items.append(FanItem(id: "close", title: String(localized: "Close Stack"), symbolImage: "xmark",
+                                 isDestructive: true))
+        }
+        return items
+    }
 
     var body: some View {
-        HStack(spacing: 6) {
-            if let actions {
-                if let context = actions.albumContext {
-                    Menu {
-                        // The albums right away, not under Add to Album.
-                        AlbumMenuItems(items: actions.albumItems(), context: context,
-                                       onAdd: actions.onAddedToAlbum)
-                    } label: {
-                        count
-                    } primaryAction: {
-                        actions.show()
-                    }
-                    .menuIndicator(.hidden)
-                    .accessibilityHint(Text("Shows the stack’s symbols. Touch and hold to add them to an album."))
-                } else {
-                    Button(action: actions.show) { count }
-                        .buttonStyle(.plain)
-                        .accessibilityHint(Text("Shows the stack’s symbols"))
-                }
-            } else {
-                count
+        let actions = actions
+        let own = onOwnItem
+        HoldFan(items: items, isOpen: $isMenuOpen, onTap: onTap, onChoose: { item in
+            switch item.id {
+            case "stack": actions?.show()
+            case "aside": actions?.setAside?()
+            case "close": actions?.close?()
+            default: own(item.id)
             }
-            Divider().frame(height: 14)
+        }) {
+            capsule
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint(hint)
+                .accessibilityAction { onTap() }
         }
     }
 
-    private var count: some View {
-        HStack(spacing: 2) {
-            Image(systemName: "square.stack")
-            // No number with no card in the stack (a search page at the bottom).
-            if depth > 0 {
-                Text(depth, format: .number)
-                    .monospacedDigit()
+    @ViewBuilder
+    private var capsule: some View {
+        let label = HStack(spacing: 6) {
+            if showsDepth {
+                HStack(spacing: 2) {
+                    Image(systemName: "square.stack")
+                    // No number with no card in the stack (a search page at the bottom).
+                    if depth > 0 {
+                        Text(depth, format: .number)
+                            .monospacedDigit()
+                    }
+                }
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(depth > 0 ? Text("Page \(depth) in the stack") : Text("The stack"))
+                Divider().frame(height: 14)
             }
+            Image(systemName: symbolImage)
+                .foregroundStyle(.tint)
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            detail()
         }
-        .foregroundStyle(.secondary)
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(depth > 0 ? Text("Page \(depth) in the stack") : Text("The stack"))
+        .font(.subheadline)
+        .padding(.horizontal, 16)
+        .frame(height: Self.height)
+        .contentShape(Capsule())
+
+        if #available(iOS 26.0, *) {
+            label.glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            label.background(.bar, in: Capsule())
+        }
     }
 }
 

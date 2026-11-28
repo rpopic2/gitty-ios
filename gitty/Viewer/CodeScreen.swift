@@ -621,7 +621,7 @@ struct CodeScreen: View {
         let openFile = model.url
         let scope = model.collapseScope
         return StackResultsView(search: search, stackDepth: stackNumber(of: route),
-                                stackActions: stackActions, barMenu: resultsBarMenu,
+                                stackActions: stackActions,
                                 branchNamed: { branchNamed($0) },
                                 onCompareBranch: { compareBranch(named: $0) },
                                 shownCount: { results in
@@ -1129,7 +1129,7 @@ struct CodeScreen: View {
     private func occurrencesView(_ search: OccurrenceSearch, route: CardRoute) -> some View {
         // The same page as a search's: the word in the capsule, edited there to look again.
         StackResultsView(search: search, stackDepth: stackNumber(of: route),
-                         stackActions: stackActions, barMenu: resultsBarMenu,
+                         stackActions: stackActions,
                          shownCount: { _ in search.count }) { entries, query, bar in
             SymbolsView(
                 symbols: entries,
@@ -1355,12 +1355,6 @@ struct CodeScreen: View {
                 }
             }
         }
-    }
-
-    /// A results page's capsule menu: the bar's (its Collapse and Expand All are the page's).
-    private var resultsBarMenu: BarMenu {
-        BarMenu(copyText: barAddress, onPasteAndGo: onPasteAndGo, onOpenInBrowser: openInBrowserAction,
-                onShowCommits: showCommitsAction, onDeleteAlbum: deleteAlbumAction)
     }
 
     /// The bar's Show Commits: a comparison's diff album (a commit's is that one commit).
