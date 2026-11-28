@@ -274,6 +274,8 @@ final class PageTextView: UIView {
     let gutter = LineNumberGutter()
     /// The line-number peek: a drag in from the left edge.
     weak var peek: UIGestureRecognizer?
+    /// The same, with two fingers on a trackpad.
+    weak var trackpadPeek: UIGestureRecognizer?
 
     init(textView: UITextView) {
         self.textView = textView
@@ -299,6 +301,7 @@ final class PageTextView: UIView {
             if current is UIScrollView {
                 for other in current.gestureRecognizers ?? [] where other is UIPanGestureRecognizer && other !== peek {
                     other.require(toFail: peek)
+                    if let trackpadPeek { other.require(toFail: trackpadPeek) }
                 }
             }
             view = current.superview
@@ -499,6 +502,15 @@ struct ReadOnlyTextView: UIViewRepresentable {
         page.addGestureRecognizer(peek)
         page.peek = peek
         context.coordinator.peek = peek
+        // On a Mac: two fingers to the right, near the window's left side (no edge to swipe from).
+        let trackpadPeek = UIPanGestureRecognizer(target: context.coordinator,
+                                                  action: #selector(Coordinator.handlePeek(_:)))
+        trackpadPeek.allowedScrollTypesMask = .continuous
+        trackpadPeek.allowedTouchTypes = []
+        trackpadPeek.delegate = context.coordinator
+        page.addGestureRecognizer(trackpadPeek)
+        page.trackpadPeek = trackpadPeek
+        context.coordinator.trackpadPeek = trackpadPeek
         // Hold an identifier to highlight it (or remove its highlight). Holding never selects:
         // a double tap does.
         let highlightPress = UILongPressGestureRecognizer(target: context.coordinator,
@@ -697,6 +709,8 @@ struct ReadOnlyTextView: UIViewRepresentable {
         static let peekEdgeWidth: CGFloat = 28
 
         weak var peek: UIPanGestureRecognizer?
+        /// The same on a trackpad: two fingers to the right, near the window's left side.
+        weak var trackpadPeek: UIPanGestureRecognizer?
 
         @objc func handlePeek(_ gesture: UIPanGestureRecognizer) {
             guard let page = gesture.view as? PageTextView, let lineNumbering else { return }
@@ -1026,7 +1040,7 @@ struct ReadOnlyTextView: UIViewRepresentable {
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            if gestureRecognizer === peek {
+            if gestureRecognizer === peek || gestureRecognizer === trackpadPeek {
                 // Going back, alongside: not the page's or the pager's scrolling.
                 return !(otherGestureRecognizer.view is UIScrollView)
             }
@@ -1057,6 +1071,10 @@ struct ReadOnlyTextView: UIViewRepresentable {
                 let velocity = pan.velocity(in: pan.view)
                 return velocity.x > abs(velocity.y)  // rightwards
             }
+            if gestureRecognizer === trackpadPeek, let pan = trackpadPeek, let view = pan.view {
+                return lineNumbering != nil && TrackpadPan.isRightward(pan.velocity(in: view))
+                    && TrackpadPan.isNearLeftSide(pan.location(in: view), of: view)
+            }
             if gestureRecognizer === highlightPress {
                 // Pages that highlight take every hold, so holding never selects there.
                 return onHighlight != nil
@@ -1070,7 +1088,9 @@ struct ReadOnlyTextView: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
             // Scrolling (the page's, the pager's paging) waits for the peek; going back doesn't.
-            if gestureRecognizer === peek { return otherGestureRecognizer.view is UIScrollView }
+            if gestureRecognizer === peek || gestureRecognizer === trackpadPeek {
+                return otherGestureRecognizer.view is UIScrollView
+            }
             return false
         }
 

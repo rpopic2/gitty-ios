@@ -397,7 +397,18 @@ struct SymbolsView: View, Equatable {
                 _ = collapsed.flipped
                 _ = collapsed.collapsedScopes
                 _ = collapsed.files
-            }
+            },
+            // On a Mac, two fingers to the right near the window's left side peek, as a drag
+            // from the left edge does; to the left, the blame that stays open closes.
+            trackpadPeek: CodeTable.TrackpadPeek(
+                shouldBegin: { [peek] location, velocity, view in
+                    guard isActive else { return false }
+                    if peek.isLocked { return abs(velocity.x) > abs(velocity.y) }
+                    return TrackpadPan.isRightward(velocity) && TrackpadPan.isNearLeftSide(location, of: view)
+                },
+                onChange: { [peek] in peek.follow($0) },
+                onEnd: { [peek] in peek.end() }
+            )
         )
     }
 
@@ -2003,13 +2014,8 @@ private struct BlameStrip: View {
                     .controlSize(.small)
                 } else if blames.isLoading {
                     // Until the blame comes, the strip isn't just empty.
-                    VStack(spacing: 6) {
-                        ProgressView()
-                        Text("Loading Blame…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .allowsHitTesting(false)
+                    ProgressView()
+                        .allowsHitTesting(false)
                     .transition(.opacity)
                 }
             }

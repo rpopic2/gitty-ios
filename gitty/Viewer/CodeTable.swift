@@ -84,6 +84,15 @@ struct CodeTable: UIViewRepresentable {
     /// screen take their new heights, animated (a collapsed row has none, so it isn't drawn to
     /// tell the table itself).
     let observeHeights: @MainActor () -> Void
+    /// A two-finger swipe on a trackpad (the line-number peek, on a Mac): `nil`, none.
+    var trackpadPeek: TrackpadPeek? = nil
+
+    /// What a trackpad's two-finger swipe does on the list (see `TrackpadPan`).
+    struct TrackpadPeek {
+        let shouldBegin: @MainActor (_ location: CGPoint, _ velocity: CGPoint, _ view: UIView) -> Bool
+        let onChange: @MainActor (CGSize) -> Void
+        let onEnd: @MainActor () -> Void
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -109,6 +118,15 @@ struct CodeTable: UIViewRepresentable {
         table.delegate = context.coordinator
         context.coordinator.table = table
         context.coordinator.trackHeights()
+        // The current handlers, through the coordinator's parent (updated with each update).
+        let trackpad = context.coordinator.trackpad
+        let coordinator = context.coordinator
+        trackpad.shouldBegin = { [weak coordinator] location, velocity, view in
+            coordinator?.parent.trackpadPeek?.shouldBegin(location, velocity, view) ?? false
+        }
+        trackpad.onChange = { [weak coordinator] in coordinator?.parent.trackpadPeek?.onChange($0) }
+        trackpad.onEnd = { [weak coordinator] in coordinator?.parent.trackpadPeek?.onEnd() }
+        table.addGestureRecognizer(trackpad.recognizer)
         return table
     }
 
@@ -136,6 +154,7 @@ struct CodeTable: UIViewRepresentable {
 
         var parent: CodeTable
         weak var table: UITableView?
+        let trackpad = TrackpadPan()
         private var sections: [CodeTableSection] = []
         private var indexByID: [Int: Int] = [:]
         var lastScrollRequest: CodeTableScrollRequest?

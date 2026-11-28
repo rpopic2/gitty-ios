@@ -395,7 +395,8 @@ private struct CaptionPan: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
             guard other !== pan else { return false }
-            if other is UIPanGestureRecognizer { return true }
+            // Not a trackpad's two-finger swipes (no touches): this never sees those.
+            if other is UIPanGestureRecognizer { return !other.allowedTouchTypes.isEmpty }
             let name = String(describing: type(of: other))
             return ["Zoom", "Transition", "Dismiss"].contains { name.contains($0) }
         }
