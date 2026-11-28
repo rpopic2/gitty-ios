@@ -694,6 +694,32 @@ actor CloneStore {
         }
     }
 
+    /// Everything a comparison needs that the clone doesn't have, in one go: each side's branch
+    /// or tag (its latest commit), then older history a step at a time until where they split is
+    /// in (or the whole history is). Cancelled with its task.
+    func download(for comparison: GitComparison, projectID: String) async throws {
+        let refs = [comparison.base, comparison.head].compactMap(\.ref)
+        let fetched = await fetchedRefs(projectID: projectID)
+        for ref in refs where !fetched.contains(ref.name) {
+            try await fetchRef(ref, projectID: projectID)
+        }
+        var depth = index.record(forProject: projectID)?.depth
+        while true {
+            do {
+                _ = try await compare(comparison, projectID: projectID)
+                return
+            } catch CloneError.historyTooShort, CloneError.notFetched {
+                // Older history: where they split, or a commit side, is further back.
+            }
+            guard depth != nil else { return }  // the whole history is in: nothing more to fetch
+            try await loadMoreHistory(for: refs, projectID: projectID)
+            let deeper = index.record(forProject: projectID)?.depth
+            guard deeper != depth else { return }
+            depth = deeper
+            try Task.checkCancellation()
+        }
+    }
+
     /// More history for a comparison's branches and tags (and the checked-out one), so where
     /// they split can be found.
     func loadMoreHistory(for refs: [GitRef], projectID: String) async throws {

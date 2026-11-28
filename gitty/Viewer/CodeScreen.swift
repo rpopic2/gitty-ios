@@ -64,6 +64,15 @@ struct CodeScreen: View {
         var id: String { commit.id }
     }
 
+    /// A branch's comparison with the checkout (its name typed in a search, then Return).
+    @State private var branchComparison: BranchComparison?
+
+    private struct BranchComparison: Identifiable {
+        let projectID: String
+        let branch: String
+        var id: String { branch }
+    }
+
     /// What's folded in that sheet: its own, not the Code level's.
     @State private var stackSheetFolds = CollapsedCodeStore.temporary()
     /// Brings a symbol into view in the Code list (the open file's entry, chosen in Project).
@@ -249,6 +258,16 @@ struct CodeScreen: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $branchComparison) { item in
+            NavigationStack {
+                CompareView(projectID: item.projectID, base: .checkedOut, head: .branch(item.branch))
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { branchComparison = nil }
+                        }
+                    }
+            }
         }
         .sheet(item: $historyFile) { file in
             // All the way up, for the history: it can be pulled down to half.
@@ -576,6 +595,7 @@ struct CodeScreen: View {
         let scope = model.collapseScope
         return StackResultsView(search: search, stackDepth: stackNumber(of: route),
                                 stackActions: stackActions, barMenu: resultsBarMenu,
+                                onSubmit: { compareBranch(named: $0) },
                                 shownCount: { results in
                                     results.filter { !search.collapsed.isHidden($0, openFile: openFile, scope: scope) }.count
                                 }) { symbols, query, bar in
@@ -749,6 +769,20 @@ struct CodeScreen: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    /// Return on a branch's whole name (pasted, like a pull request's): what it changed since it
+    /// split off the checkout, as Compare does. `false` for anything else (or a project that
+    /// isn't cloned: comparing needs the clone).
+    private func compareBranch(named text: String) -> Bool {
+        let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let projectID = model.symbolsProjectID,
+              let refs = CloneIndex.shared.record(forProject: projectID)?.remoteRefs,
+              refs.branches.contains(name)
+        else { return false }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        branchComparison = BranchComparison(projectID: projectID, branch: name)
+        return true
     }
 
     /// A commit tapped in the blame: looked up in the clone, then shown.

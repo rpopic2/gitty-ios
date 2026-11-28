@@ -200,6 +200,9 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     /// The bar's menu, for the capsule's touch and hold (its Collapse and Expand All are the
     /// page's own).
     let barMenu: BarMenu?
+    /// Return in the field, with what's typed: `true` if it did something with it (a branch's
+    /// name opens its comparison); otherwise the field just closes.
+    var onSubmit: (@MainActor (String) -> Bool)? = nil
 
     @State private var isEditing: Bool
     /// Scrolling down hides the capsule; scrolling up shows it.
@@ -209,6 +212,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
     @Environment(\.dismiss) private var dismiss
 
     init(search: Search, stackDepth: Int, stackActions: StackActions?, barMenu: BarMenu? = nil,
+         onSubmit: (@MainActor (String) -> Bool)? = nil,
          shownCount: @escaping @MainActor ([CodeSymbol]) -> Int,
          @ViewBuilder list: @escaping (_ symbols: [CodeSymbol], _ query: String,
                                        _ bar: ResultsBar) -> Results) {
@@ -216,6 +220,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
         self.stackDepth = stackDepth
         self.stackActions = stackActions
         self.barMenu = barMenu
+        self.onSubmit = onSubmit
         self.shownCount = shownCount
         self.list = list
         _isEditing = State(initialValue: search.startsEditing)
@@ -241,6 +246,7 @@ struct StackResultsView<Search: ResultsPageSearch, Results: View>: View {
                     SymbolSearchEditor(query: $search.query, isSearching: search.isPending,
                                        placeholder: search.placeholder,
                                        onClose: { isEditing = false },
+                                       onSubmit: { if onSubmit?(search.query) != true { isEditing = false } },
                                        // A search begun in the bar goes on being typed here.
                                        selectsAll: !search.startsEditing)
                 }

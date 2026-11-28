@@ -146,15 +146,13 @@ struct CompareView: View {
         Section {
             Text(problem.localizedDescription)
             switch problem {
-            case .notFetched(let name):
-                if let ref = [comparison.base, comparison.head].first(where: { $0.label == name })?.ref {
-                    Button("Pull \(name)", systemImage: "arrow.down.circle") { pull(ref) }
-                } else {
-                    // A commit that isn't in the downloaded history.
-                    Button("Load More History", systemImage: "clock.arrow.circlepath") { loadMoreHistory() }
-                }
-            case .historyTooShort:
-                Button("Load More History", systemImage: "clock.arrow.circlepath") { loadMoreHistory() }
+            case .notFetched, .historyTooShort:
+                // One offer for all of it: a side that isn't downloaded, and the history back to
+                // where they split.
+                Button("Download", systemImage: "arrow.down.circle") { downloadMissing() }
+                Text("Downloads what’s missing: the branches’ latest commits, and older history until where they split is found.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             default:
                 EmptyView()
             }
@@ -222,29 +220,17 @@ struct CompareView: View {
         fetched = await CloneStore.shared.fetchedRefs(projectID: projectID)
     }
 
-    /// Pull for a side that isn't downloaded: it's fetched (not checked out), then compared.
-    private func pull(_ ref: GitRef) {
+    /// Download: a side that isn't downloaded is fetched (not checked out), and older history
+    /// until where they split, then they're compared.
+    private func downloadMissing() {
         Task {
             isWorking = true
             do {
-                try await CloneStore.shared.fetchRef(ref, projectID: projectID)
-                fetched.insert(ref.name)
+                try await CloneStore.shared.download(for: comparison, projectID: projectID)
             } catch {
                 errorMessage = error.localizedDescription
             }
-            await load()
-        }
-    }
-
-    private func loadMoreHistory() {
-        let refs = [comparison.base, comparison.head].compactMap(\.ref)
-        Task {
-            isWorking = true
-            do {
-                try await CloneStore.shared.loadMoreHistory(for: refs, projectID: projectID)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+            await loadRefs()
             await load()
         }
     }

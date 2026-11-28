@@ -66,8 +66,6 @@ struct ProjectFilesView: View {
     private struct HistoryNeeded: Identifiable {
         /// What they compare the checkout with ("main"), for the question.
         let others: [String]
-        /// Their branches and tags, deepened together.
-        let refs: [GitRef]
         /// The comparisons, to tell when the split is in.
         let comparisons: [GitComparison]
         var id: String { others.joined(separator: ",") }
@@ -855,7 +853,7 @@ struct ProjectFilesView: View {
     /// The diff albums that compare with the checkout (since they split): those whose split
     /// isn't in the clone now ask to load it.
     private func checkComparisons() async {
-        var others: [String] = [], refs: [GitRef] = [], comparisons: [GitComparison] = []
+        var others: [String] = [], comparisons: [GitComparison] = []
         for album in AlbumStore.shared.albums(inProject: projectID) {
             guard case .comparison(let base, let head, let mode) = album.diff?.source, mode == .sinceSplit,
                   base == .checkedOut || head == .checkedOut
@@ -864,13 +862,8 @@ struct ProjectFilesView: View {
             do {
                 _ = try await CloneStore.shared.compare(comparison, projectID: projectID)
             } catch CloneError.historyTooShort {
-                for side in [base, head] {
-                    switch side {
-                    case .branch(let name): refs.append(.branch(name))
-                    case .tag(let name): refs.append(.tag(name))
-                    default: break
-                    }
-                    if side != .checkedOut, !others.contains(side.label) { others.append(side.label) }
+                for side in [base, head] where side != .checkedOut && !others.contains(side.label) {
+                    others.append(side.label)
                 }
                 comparisons.append(comparison)
             } catch {
@@ -878,29 +871,15 @@ struct ProjectFilesView: View {
             }
         }
         guard !comparisons.isEmpty else { return }
-        historyNeeded = HistoryNeeded(others: others, refs: Array(Set(refs)), comparisons: comparisons)
+        historyNeeded = HistoryNeeded(others: others, comparisons: comparisons)
     }
 
     /// Fetches older commits, a step at a time, until every comparison's split is in (or the
-    /// whole history is: a step that changes nothing). Shown in the Pull row, with Cancel.
+    /// whole history is). Shown in the Pull row, with Cancel.
     private func loadHistory(to needed: HistoryNeeded) {
-        startDownload(String(localized: "Loading history…")) { progress in
-            var previousDepth = await CloneStore.shared.record(forProject: projectID)?.depth
-            while true {
-                try await CloneStore.shared.loadMoreHistory(for: needed.refs, projectID: projectID)
-                var allFound = true
-                for comparison in needed.comparisons {
-                    do {
-                        _ = try await CloneStore.shared.compare(comparison, projectID: projectID)
-                    } catch CloneError.historyTooShort {
-                        allFound = false
-                    }
-                }
-                let depth = await CloneStore.shared.record(forProject: projectID)?.depth
-                // Found, or nothing more to fetch (the whole history: no depth, or no deeper).
-                if allFound || depth == nil || depth == previousDepth { break }
-                previousDepth = depth
-                try Task.checkCancellation()
+        startDownload(String(localized: "Loading history…")) { _ in
+            for comparison in needed.comparisons {
+                try await CloneStore.shared.download(for: comparison, projectID: projectID)
             }
             CloneChanges.shared.didFetch(projectID)  // the albums show their changes
         }
