@@ -59,9 +59,14 @@ final class SideBarState {
         }
     }
 
-    /// Puts the sidebar where `reveal` says: off to the right by what doesn't show.
+    /// Puts the sidebar where `reveal` says: off to the right by what doesn't show. Closed, it's
+    /// past the window's right edge, not just the content's: in landscape the content stops at
+    /// the safe area, and the sidebar's edge showed in the strip beside it.
     func placeSideBar() {
-        sideBarView?.transform = CGAffineTransform(translationX: width - reveal, y: 0)
+        guard let view = sideBarView else { return }
+        let away = width + (view.window?.safeAreaInsets.right ?? 0)
+        let shown = width > 0 ? min(max(reveal / width, 0), 1) : 0
+        view.transform = CGAffineTransform(translationX: away * (1 - shown), y: 0)
     }
 
     /// Ends a drag: open or close, whichever the finger was heading for.
@@ -157,6 +162,8 @@ private struct SideBarHost<Content: View>: UIViewControllerRepresentable {
         let controller = SideBarHostController(rootView: root)
         state.sideBarView = controller.host.view
         state.placeSideBar()
+        let state = state
+        controller.onSafeAreaChange = { [weak state] in state?.placeSideBar() }
         return controller
     }
 
@@ -203,6 +210,15 @@ final class SideBarHostController: UIViewController {
         host.view.bounds = view.bounds
         host.view.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
     }
+
+    /// Turned (the safe area beside it changed) or first in a window: placed again, so it's
+    /// clear of the screen's edge.
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        onSafeAreaChange?()
+    }
+
+    var onSafeAreaChange: (() -> Void)?
 
     /// Touches where the sidebar isn't (it's off screen, or still sliding in) go to the content
     /// under it.
