@@ -52,32 +52,29 @@ struct CollapsedCodeStoreTests {
         #expect(store.isFileCollapsed(other, scope: scope))
     }
 
-    @Test func expandAllInAFolderOpensItsFilesAndCode() throws {
+    @Test func expandAllOpensOneLevelOnly() throws {
         let (store, _) = try store()
         let file = URL(string: "https://raw.githubusercontent.com/o/r/main/src/c.c")!
+        let inside = symbol("send", in: file)
         store.setAllCollapsed(true, scope: scope)
         store.setAllFilesFolded(true, scope: scope)
         store.setAllFoldersFolded(true, scope: scope)
-        let inside = symbol("send", in: file)
-        store.expandAll(inFolder: "src", files: [file], [inside], openFile: open, scope: scope)
+        #expect(!store.isFolderLevelOpen("src", files: [file], scope: scope))  // Expand All
+        store.setFolderLevel(open: true, "src", files: [file], scope: scope)
         #expect(!store.isFolderFolded("src", scope: scope))
         #expect(!store.isFileCollapsed(file, scope: scope))
+        #expect(store.isCollapsed(inside, openFile: open, scope: scope))  // not its code: a level further
+        #expect(store.isFolderLevelOpen("src", files: [file], scope: scope))  // Collapse All
+        // The file's own level: its symbols' code.
+        store.setFileLevel(open: true, file, [inside], openFile: open, scope: scope)
         #expect(!store.isCollapsed(inside, openFile: open, scope: scope))
-        #expect(store.isFileCollapsed(other, scope: scope))
-    }
-
-    @Test func expandAllIsOfferedOnlyWithEverythingCollapsed() throws {
-        let (store, _) = try store()
-        let shown = symbol("send", in: other)
-        #expect(!store.isEverythingCollapsed(scope: scope))  // Collapse All, then
-        store.setAllCollapsed(true, scope: scope)
-        #expect(store.isEverythingCollapsed(scope: scope))  // Expand All
-        store.toggle(shown, openFile: open, scope: scope)
-        #expect(!store.isEverythingCollapsed(scope: scope))  // one open again: Collapse All
-        store.setAllFoldersFolded(true, scope: scope)
-        #expect(store.isEveryFolderFolded(scope: scope))
-        store.toggleFolder("src", scope: scope)
-        #expect(!store.isEveryFolderFolded(scope: scope))
+        store.setFileLevel(open: false, file, [inside], openFile: open, scope: scope)
+        #expect(store.isCollapsed(inside, openFile: open, scope: scope))
+        #expect(!store.isFileCollapsed(file, scope: scope))  // still open, its titles showing
+        // Collapse All on the folder: its files fold; the folder stays open.
+        store.setFolderLevel(open: false, "src", files: [file], scope: scope)
+        #expect(store.isFileCollapsed(file, scope: scope))
+        #expect(!store.isFolderFolded("src", scope: scope))
     }
 
     @Test func overloadsCollapseOnTheirOwn() throws {
@@ -208,14 +205,17 @@ struct CollapsedCodeStoreTests {
         store.setAllCollapsed(true, scope: scope)
         store.setAllFilesFolded(true, scope: scope)
         let symbols = [symbol("b1", in: other), symbol("b2", in: other)]
-        store.expandAll(in: other, symbols, openFile: open, scope: scope)
+        store.setFileLevel(open: true, other, symbols, openFile: open, scope: scope)
         #expect(!store.isFileCollapsed(other, scope: scope))
         #expect(symbols.allSatisfy { !store.isCollapsed($0, openFile: open, scope: scope) })
         #expect(store.isFileCollapsed(open, scope: scope))  // the other files stay folded
         // A file without symbols just unfolds (its text shows).
         let readme = URL(string: "https://raw.githubusercontent.com/o/r/main/README.md")!
-        store.expandAll(in: readme, [], openFile: open, scope: scope)
+        store.setFileLevel(open: true, readme, [], openFile: open, scope: scope)
         #expect(!store.isFileCollapsed(readme, scope: scope))
+        // …and its Collapse All folds it again.
+        store.setFileLevel(open: false, readme, [], openFile: open, scope: scope)
+        #expect(store.isFileCollapsed(readme, scope: scope))
     }
 
     @Test func pinchingInOnTheOutlineFoldsEveryFile() throws {
