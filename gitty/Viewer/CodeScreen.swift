@@ -895,6 +895,9 @@ struct CodeScreen: View {
     private func setAsideStack() {
         guard keepStack() != nil else { return }
         cardPath = []
+        // The chip shows with the bar: brought back if it was scrolled away, so you see where
+        // the stack went.
+        model.setBarCollapsed(false)
     }
 
     /// Show in Code Level (a result's hold menu, a card's caption): the stack set aside, and the
