@@ -1061,14 +1061,18 @@ struct CodeScreen: View {
 
     /// Occurrences of `query` in the project's downloaded files (see `findOccurrences`), or in
     /// what the album shown has: its whole files, and in its other files only its symbols' and
-    /// lines' code (a diff album: the files it changes).
+    /// lines' code (a diff album: its changes' own lines).
     private func occurrenceSearch(for query: OccurrenceTerm, source: AnyHashable) -> OccurrenceSearch {
+        // A diff album: in its changes themselves (both sides), not the checkout's files.
+        if model.activeAlbum?.diff != nil {
+            return OccurrenceSearch(query: query, source: source, diffCards: model.listSymbols)
+        }
         var whole: Set<URL> = []
         var parts: [URL: [NSRange]] = [:]
         if model.activeAlbum != nil {
             for entry in model.listSymbols {
                 let file = entry.fileURL ?? model.url
-                if entry.kind == .file || entry.diff != nil {
+                if entry.kind == .file {
                     whole.insert(file)
                 } else {
                     parts[file, default: []].append(entry.range)
@@ -1154,6 +1158,17 @@ struct CodeScreen: View {
         pruneStack()
         let id = UUID()
         let depth = cardPath.count + 1
+        // A diff album's hunk: its file's whole diff, at the first line with it.
+        if let diff = symbol.diff {
+            let files = model.listSymbols.filter { $0.kind == .file && $0.diff != nil }
+            guard let entry = files.first(where: { $0.diff?.path == diff.path }) else { return }
+            let line = symbol.kind == .hunk ? diff.wholeDiffLine(of: search.diffLines[symbol.id] ?? diff.firstChange) : 0
+            stackedCards[id] = StackedCard(symbols: files, initialID: entry.id,
+                                           anchor: PageAnchor(line: line, screenY: 220),
+                                           zoomSource: AnyHashable(route), depth: depth)
+            cardPath.append(.card(id))
+            return
+        }
         guard let place = search.places[symbol.id] else {
             guard symbol.kind == .file else { return }
             stackedCards[id] = StackedCard(symbols: [symbol], initialID: symbol.id, anchor: nil,

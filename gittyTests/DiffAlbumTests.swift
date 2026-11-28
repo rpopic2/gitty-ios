@@ -37,4 +37,18 @@ struct DiffAlbumTests {
         let second = DiffPart(change: .modified, path: "x.c", lines: hunks[1].lines, addedBefore: 1, removedBefore: 1)
         #expect(second.wholeDiffLine(of: 1) == 12)  // +k, new line 11: 10 lines before it, -b, and the header
     }
+
+    @Test func occurrencesInADiffAlbumAreInItsOwnLines() {
+        let hunks = DiffAlbumContents.hunks(of: UnifiedDiff("@@ -1,2 +1,2 @@\n-int total;\n+long total;\n done();\n"))
+        let url = URL(string: "https://raw.githubusercontent.com/o/r/main/x.c")!
+        let file = CodeSymbol(id: 1, name: "x.c", kind: .file, range: NSRange(location: 0, length: 0), line: 1,
+                              preview: "", fileURL: url, diff: DiffPart(change: .modified, path: "x.c"))
+        let hunk = CodeSymbol(id: 2, name: "x", kind: .hunk, range: NSRange(location: 0, length: 0), line: 1,
+                              preview: "", fileURL: url,
+                              diff: DiffPart(change: .modified, path: "x.c", lines: hunks[0].lines))
+        let found = OccurrenceSearch.find(OccurrenceTerm(text: "total", identifier: nil), inDiff: [file, hunk])
+        #expect(found.entries.map(\.id) == [1, 2])  // the file, then its hunk
+        #expect(found.count == 2)  // the removed line and the added one
+        #expect(OccurrenceSearch.find(OccurrenceTerm(text: "nowhere", identifier: nil), inDiff: [file, hunk]).entries.isEmpty)
+    }
 }

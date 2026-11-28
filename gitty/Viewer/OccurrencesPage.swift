@@ -45,6 +45,12 @@ final class OccurrenceSearch: ResultsPageSearch {
     let skippedFiles: Int
     @ObservationIgnored let collapsed = CollapsedCodeStore.temporary()
     @ObservationIgnored private let files: [OccurrenceFile]
+    /// A diff album's cards, looked through instead of files: its hunks' own lines (both
+    /// sides), not the checkout's files.
+    @ObservationIgnored private let diffCards: [CodeSymbol]
+    /// A diff hunk found (by its id, kept in `entries`): its first line with it (0-based, in
+    /// the hunk), for its page.
+    @ObservationIgnored private(set) var diffLines: [Int: Int] = [:]
 
     // As a results page (`ResultsPageSearch`).
     var results: [CodeSymbol] { entries }
@@ -77,6 +83,17 @@ final class OccurrenceSearch: ResultsPageSearch {
         self.source = source
         self.files = files
         self.skippedFiles = skippedFiles
+        diffCards = []
+        restart()
+    }
+
+    /// In a diff album: its cards' lines (each file's entry, then its hunks that have it).
+    init(query: OccurrenceTerm, source: AnyHashable, diffCards: [CodeSymbol]) {
+        lookup = query
+        self.source = source
+        files = []
+        skippedFiles = 0
+        self.diffCards = diffCards
         restart()
     }
 
@@ -87,6 +104,7 @@ final class OccurrenceSearch: ResultsPageSearch {
         places = [:]
         pages = []
         pageLines = [:]
+        diffLines = [:]
         count = 0
         version += 1
         let text = lookup.text
@@ -96,8 +114,51 @@ final class OccurrenceSearch: ResultsPageSearch {
             return
         }
         isSearching = true
+        if !diffCards.isEmpty {
+            let cards = diffCards, query = lookup
+            task = Task { [weak self] in
+                let found = await Task.detached(priority: .userInitiated) { Self.find(query, inDiff: cards) }.value
+                guard !Task.isCancelled, let self else { return }
+                entries = found.entries
+                diffLines = found.lines
+                count = found.count
+                resultsQuery = query.text
+                isSearching = false
+                version += 1
+            }
+            return
+        }
         let files = files
         task = Task { [weak self] in await self?.search(files) }
+    }
+
+    /// The hunks with it, each under its file's entry (the cards themselves), the first line
+    /// with it in each, and how many lines have it.
+    nonisolated static func find(_ query: OccurrenceTerm, inDiff cards: [CodeSymbol])
+        -> (entries: [CodeSymbol], lines: [Int: Int], count: Int) {
+        var entries: [CodeSymbol] = [], lines: [Int: Int] = [:], count = 0
+        var file: CodeSymbol?
+        var isFileListed = false
+        for card in cards {
+            guard let diff = card.diff else { continue }
+            if card.kind == .file {
+                file = card
+                isFileListed = false
+                continue
+            }
+            let text = diff.lines.map(\.text).joined(separator: "\n")
+            let ranges = Occurrences.ranges(of: query, in: text, fileExtension: (diff.path as NSString).pathExtension)
+            guard let first = ranges.first else { continue }
+            let starts = AlbumContents.lineStarts(of: text as NSString)
+            if !isFileListed, let file {
+                entries.append(file)
+                isFileListed = true
+            }
+            entries.append(card)
+            lines[card.id] = Occurrences.line(of: first.location, lineStarts: starts)
+            count += Set(ranges.map { Occurrences.line(of: $0.location, lineStarts: starts) }).count
+        }
+        return (entries, lines, count)
     }
 
     /// Its page is gone: stop looking.
