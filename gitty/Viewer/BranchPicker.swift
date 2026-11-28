@@ -94,6 +94,9 @@ struct BranchPicker: View {
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: onChooseSide == nil ? Text("Search Branches and Tags")
                                                     : Text("Branch, Tag or Commit Hash"))
+            // Searching, the bar stays (its title and Fetch): hidden, the field moved up to the
+            // top of the sheet, under its handle.
+            .searchPresentationToolbarBehavior(.avoidHidingContent)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .toolbar {
