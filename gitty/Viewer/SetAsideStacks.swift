@@ -87,6 +87,16 @@ struct SetAsideChips: View {
     /// The stack under the finger, and how far sideways the finger is from its chip.
     @State private var highlighted: UUID?
     @State private var sideways: CGFloat = 0
+    /// The finger on it now (`nil`: none).
+    @State private var touch: Touch?
+    @State private var holdTask: Task<Void, Never>?
+
+    private struct Touch {
+        /// Fanned out when the finger came down.
+        let wasOpen: Bool
+        /// It's moved: not a tap, nor a hold.
+        var hasMoved = false
+    }
 
     /// A chip's height.
     static let chipHeight: CGFloat = 36
@@ -117,12 +127,12 @@ struct SetAsideChips: View {
         }
         .frame(height: height, alignment: .bottom)
         .contentShape(Rectangle())
-        .gesture(press.exclusively(before: SpatialTapGesture().onEnded { tapped(at: $0.location) }))
+        .gesture(press)
         .animation(.smooth(duration: 0.25), value: isOpen)
         .animation(.smooth(duration: 0.25), value: ids)
         .sensoryFeedback(.selection, trigger: highlighted) { _, new in new != nil }
         // Coming out, as a menu does under a hold.
-        .sensoryFeedback(.impact(weight: .medium), trigger: isOpen) { old, new in new && !old }
+        .sensoryFeedback(.impact(weight: .heavy, intensity: 1), trigger: isOpen) { old, new in new && !old }
         .onChange(of: isEmpty) { _, empty in if empty { isOpen = false } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityTitle))
@@ -166,44 +176,43 @@ struct SetAsideChips: View {
             .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
-    /// Held: out they come. Moving: the chip under the finger is highlighted. Let go on one, it
-    /// opens (or, slid out to the side, goes); without moving, they stay out; anywhere else,
-    /// they fold.
+    /// One touch does it all. Held (or slid up): out they come. Moving: the chip under the finger
+    /// is highlighted. Let go on one, it opens (or, slid out to the side, goes); let go anywhere
+    /// else after moving, they fold. A tap or a hold that didn't move leaves them out, or, a tap
+    /// while they're out, folds them.
     private var press: some Gesture {
-        LongPressGesture(minimumDuration: 0.3)
-            .sequenced(before: DragGesture(minimumDistance: 0))
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
-                switch value {
-                case .first(true):
-                    isOpen = true
-                case .second(true, let drag?):
-                    isOpen = true
-                    let found = stack(at: drag.location)
-                    if found?.id != highlighted { highlighted = found?.id }
-                    sideways = found == nil ? 0 : drag.translation.width
-                default:
-                    break
+                if touch == nil {
+                    touch = Touch(wasOpen: isOpen)
+                    holdTask = Task {
+                        try? await Task.sleep(for: .milliseconds(300))
+                        if !Task.isCancelled, touch?.hasMoved == false { isOpen = true }
+                    }
                 }
+                let t = value.translation
+                if abs(t.width) > 6 || abs(t.height) > 6 { touch?.hasMoved = true }
+                if !isOpen, t.height < -12 { isOpen = true }  // slid up: no need to wait for the hold
+                guard isOpen else { return }
+                let found = stack(at: value.location)
+                if found?.id != highlighted { highlighted = found?.id }
+                sideways = found == nil ? 0 : t.width
             }
             .onEnded { value in
+                holdTask?.cancel()
+                let ended = touch ?? Touch(wasOpen: isOpen)
+                touch = nil
                 defer {
                     highlighted = nil
                     withAnimation(.spring(duration: 0.3)) { sideways = 0 }
                 }
-                guard case .second(true, let drag?) = value,
-                      abs(drag.translation.width) > 6 || abs(drag.translation.height) > 6
-                else { return }  // held, not moved: they stay out
-                if let found = stack(at: drag.location) {
+                if let found = stack(at: value.location) {
                     if abs(sideways) > Self.dropDistance { onDrop(found) } else { open(found) }
                 } else {
-                    isOpen = false
+                    // Out after a tap or a hold that didn't move; folded otherwise.
+                    isOpen = !ended.hasMoved && !ended.wasOpen
                 }
             }
-    }
-
-    /// A tap: on a chip fanned out, it opens; on the bottom chip, they fan out or fold.
-    private func tapped(at point: CGPoint) {
-        if let found = stack(at: point) { open(found) } else { isOpen.toggle() }
     }
 
     /// The fanned-out chip at a point (in this view, the bottom chip at its bottom).
